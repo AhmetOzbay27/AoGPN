@@ -1,0 +1,32 @@
+name: build and release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    name: build Windows (x64 arm64)
+    uses: ./.github/workflows/build.yml
+    with:
+      target: windows
+      project: ./AoGPN/AoGPN.csproj
+
+  package-and-release:
+    name: package and publish Windows release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    uses: ./.github/workflows/package-zip.yml
+    with:
+      target: windows
+      release_tag: ${{ github.ref_name }}
+    secrets: inherit
