@@ -1,0 +1,373 @@
+/* ============================================================================
+   AoGPN INFRA skin — infrastructure terminal
+   ----------------------------------------------------------------------------
+   State is class-based (body.skin-infra.is-on / .is-connecting), never inline.
+   IMPORTANT: every (base, override) pair below keeps the override AFTER its
+   base — jsdom's naive cascade is source-order only, and the rule-order guard
+   (skin-pairs.js) enforces it automatically for every registered skin.
+   ============================================================================ */
+
+:root {
+  --if-font: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+}
+
+.skin-infra {
+  --if-state: #f59e0b;      /* amber: idle */
+  --if-accent: #34d399;     /* emerald: connected */
+  --if-connecting: #fbbf24;
+  --if-bg: #0a0f0d;
+  --if-panel: #101713;
+  --if-line: #1d2a23;
+  --if-text: #d7e0da;
+  --if-muted: #6b7f72;
+  font-family: var(--if-font);
+  background: var(--if-bg);
+  color: var(--if-text);
+  height: 100vh;
+  overflow: hidden;
+  margin: 0;
+}
+
+/* connected: the whole shell re-tints to emerald */
+.skin-infra.is-on {
+  --if-state: var(--if-accent);
+}
+
+/* connecting: amber — must come after .is-on so a race never sticks green */
+.skin-infra.is-connecting {
+  --if-state: var(--if-connecting);
+}
+
+* { box-sizing: border-box; }
+
+.if-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 280px 1fr 280px;
+  grid-template-rows: 52px 1fr 1fr 140px;
+  gap: 10px;
+  padding: 10px;
+  background: var(--if-panel);
+  border: 1px solid var(--if-line);
+}
+
+.if-header {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  border-bottom: 2px solid var(--if-state);
+  transition: border-color 0.3s;
+}
+
+.if-header-left { display: flex; align-items: center; gap: 16px; cursor: grab; }
+.if-logo { font-weight: 700; letter-spacing: 1px; color: var(--if-state); transition: color 0.3s; }
+.if-node { font-size: 11px; color: var(--if-muted); }
+
+.if-header-right { display: flex; align-items: center; gap: 8px; }
+
+.if-lang {
+  background: var(--if-bg);
+  border: 1px solid var(--if-line);
+  color: var(--if-text);
+  font-family: var(--if-font);
+  font-size: 11px;
+  padding: 3px 6px;
+  cursor: pointer;
+  max-width: 110px;
+}
+.if-lang:focus { border-color: var(--if-state); outline: none; }
+
+.if-window { display: flex; gap: 4px; }
+.if-btn {
+  background: transparent;
+  border: 1px solid var(--if-line);
+  color: var(--if-muted);
+  font-family: var(--if-font);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.if-btn:hover { border-color: var(--if-state); color: var(--if-text); }
+
+.if-panel {
+  background: var(--if-bg);
+  border: 1px solid var(--if-line);
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.if-apps { grid-column: 1; grid-row: 2; }
+.if-nodes { grid-column: 1; grid-row: 3; }
+.if-telemetry { grid-column: 3; grid-row: 2; }
+.if-proxy { grid-column: 3; grid-row: 3; }
+
+.if-panel-title {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--if-state);
+  border-bottom: 1px solid var(--if-line);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  transition: color 0.3s;
+}
+
+/* app rows */
+.if-app-list { display: flex; flex-direction: column; gap: 6px; }
+
+.if-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--if-muted);
+  border-left: 2px solid var(--if-line);
+  transition: border-color 0.3s, color 0.3s;
+}
+
+/* live (tunneled) app rows light up */
+.if-row.live {
+  border-left-color: var(--if-state);
+  color: var(--if-text);
+}
+
+.if-row i { flex: 1; height: 4px; background: var(--if-line); display: block; }
+.if-row em { display: block; height: 100%; width: 0%; background: var(--if-state); transition: width 0.3s, background 0.3s; }
+.if-row b { font-weight: 600; }
+
+/* ---- route node list ---- */
+.if-node-list { display: flex; flex-direction: column; gap: 4px; }
+
+.if-node-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--if-muted);
+  border-left: 2px solid var(--if-line);
+  border-bottom: 1px solid var(--if-line);
+  cursor: pointer;
+  transition: border-color 0.3s, color 0.3s, background 0.3s;
+}
+.if-node-row:hover { color: var(--if-text); }
+.if-node-row code { font-style: normal; color: var(--if-muted); font-size: 11px; width: 24px; }
+.if-node-row b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.if-node-row em { margin-left: auto; font-style: normal; font-size: 11px; }
+
+/* active node — must come after the base .if-node-row */
+.if-node-row.active {
+  border-left-color: var(--if-state);
+  background: rgba(52, 211, 153, 0.06);
+  color: var(--if-text);
+}
+.if-node-row.active code { color: var(--if-state); }
+
+.if-center {
+  grid-column: 2;
+  grid-row: 2 / 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.if-status { display: flex; align-items: center; gap: 8px; }
+
+.if-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--if-state);
+  box-shadow: 0 0 10px var(--if-state);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.skin-infra.is-on .if-dot {
+  background: var(--if-accent);
+  box-shadow: 0 0 12px var(--if-accent);
+}
+
+.skin-infra.is-connecting .if-dot {
+  background: var(--if-connecting);
+  box-shadow: 0 0 12px var(--if-connecting);
+}
+
+.if-status-text { font-size: 13px; letter-spacing: 2px; color: var(--if-state); transition: color 0.3s; }
+
+.if-connect {
+  min-width: 260px;
+  padding: 16px 24px;
+  background: var(--if-state);
+  color: var(--if-bg);
+  border: 2px solid var(--if-bg);
+  outline: 2px solid var(--if-state);
+  font-family: var(--if-font);
+  cursor: pointer;
+  transition: background 0.3s, outline-color 0.3s, filter 0.2s;
+}
+.if-connect:hover { filter: brightness(1.08); }
+.if-connect:active { transform: scale(0.98); }
+
+.skin-infra.is-on .if-connect {
+  background: var(--if-accent);
+  outline-color: var(--if-accent);
+}
+
+.if-connect-main { display: block; font-size: 22px; font-weight: 700; letter-spacing: 2px; }
+.if-connect-sub { display: block; font-size: 11px; opacity: 0.85; margin-top: 2px; }
+
+.if-meta { display: flex; gap: 24px; }
+
+.if-metric-label { display: block; font-size: 10px; color: var(--if-muted); letter-spacing: 1px; }
+
+.if-metric {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--if-state);
+  transition: color 0.3s;
+}
+
+/* compact telemetry values (exit IP) — must stay after the base .if-metric */
+.if-metric.sm {
+  font-size: 13px;
+}
+
+.if-telemetry .if-row { margin-bottom: 6px; }
+
+/* ---- connection controls (center column) ---- */
+.if-ctl {
+  width: 100%;
+  max-width: 420px;
+  margin-top: 6px;
+  border: 1px solid var(--if-line);
+  background: var(--if-bg);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.if-ctl-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.if-ctl-label { font-size: 10px; letter-spacing: 1px; color: var(--if-muted); white-space: nowrap; }
+
+.if-pills { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+
+.if-pill {
+  background: transparent;
+  border: 1px solid var(--if-line);
+  color: var(--if-muted);
+  font-family: var(--if-font);
+  font-size: 10px;
+  letter-spacing: 1px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+.if-pill:hover { color: var(--if-text); }
+
+/* the active pill — after the base so the naive cascade keeps it winning */
+.if-pill.active {
+  border-color: var(--if-state);
+  color: var(--if-state);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.if-switch {
+  width: 34px;
+  height: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--if-line);
+  background: var(--if-bg);
+  position: relative;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.2s, border-color 0.2s;
+}
+.if-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--if-muted);
+  transition: left 0.2s, background 0.2s;
+}
+.if-switch:focus-visible { outline: 2px solid var(--if-state); outline-offset: 2px; }
+
+/* switch on — after the base + thumb */
+.if-switch.on {
+  background: var(--if-accent);
+  border-color: var(--if-accent);
+}
+.if-switch.on::after {
+  left: 20px;
+  background: var(--if-bg);
+}
+
+/* ---- proxy / protocol settings (right bottom) ---- */
+.if-proxy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.if-proxy-btn {
+  background: transparent;
+  border: 1px solid var(--if-line);
+  color: var(--if-muted);
+  font-family: var(--if-font);
+  font-size: 10px;
+  letter-spacing: 1px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+.if-proxy-btn:hover { color: var(--if-text); }
+
+.if-proxy-btn.on {
+  border-color: var(--if-state);
+  color: var(--if-state);
+  background: rgba(52, 211, 153, 0.08);
+}
+
+.if-select {
+  background: var(--if-bg);
+  border: 1px solid var(--if-line);
+  color: var(--if-text);
+  font-family: var(--if-font);
+  font-size: 11px;
+  padding: 3px 6px;
+  cursor: pointer;
+  max-width: 130px;
+}
+.if-select:focus { border-color: var(--if-state); outline: none; }
+
+.if-console {
+  grid-column: 1 / -1;
+  grid-row: 4;
+  background: var(--if-bg);
+  border: 1px solid var(--if-line);
+  padding: 10px 14px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.if-console-line { color: var(--if-muted); line-height: 1.6; }
+.if-console-line.sys { color: var(--if-state); }
+.if-console-line.ok { color: var(--if-accent); }
+.if-console-line.err { color: #f87171; }
+
+@media (max-width: 900px) {
+  .if-shell { grid-template-columns: 1fr; grid-template-rows: 52px auto 1fr 140px; }
+  .if-apps, .if-telemetry, .if-proxy, .if-nodes { display: none; }
+  .if-center { grid-row: 2; }
+}

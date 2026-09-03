@@ -1,0 +1,64 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: cyberpunk
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+
+
+  body[data-theme="cyberpunk"] {
+    --bg: #09090C;
+    --violet: #EAB308;
+    --cyan: #E11D48;
+    --emerald: #059669;
+    --glass: rgba(234, 179, 8, 0.03);
+    --glass-border: rgba(234, 179, 8, 0.12);
+  }
+
+  /* --- Cyberpunk: neon haze plus a restrained tactical scan layer --- */
+  body[data-theme="cyberpunk"]::after {
+    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(800px 500px at 70% 10%, rgba(234,179,8,.09), transparent 60%),
+      radial-gradient(600px 400px at 20% 90%, rgba(225,29,72,.08), transparent 55%);
+    animation: cyber-breathe 8s ease-in-out infinite alternate;
+  }
+  @keyframes cyber-breathe { from { opacity: .6; } to { opacity: 1; } }
+
+  /* --- Cyberpunk accent: subtle warm glow --- */
+  body[data-theme="cyberpunk"] .glass {
+    border-color: rgba(234, 179, 8, 0.08);
+    box-shadow: 0 1px 12px rgba(234, 179, 8, 0.03);
+  }
+  body[data-theme="cyberpunk"] .glass:hover {
+    box-shadow: 0 2px 20px rgba(234, 179, 8, 0.06);
+  }
+  body[data-theme="cyberpunk"] .font-display {
+    text-shadow: 2px 0 rgba(225,29,72,.3), -2px 0 rgba(34,211,238,.24), 0 0 12px rgba(234,179,8,.25);
+  }
+
+  body[data-theme="cyberpunk"] .ring-wrap .ring-svg { filter: drop-shadow(0 0 8px #FFE600); }
+
+  /* Cyberpunk: glitchy box spinner */
+  body[data-theme="cyberpunk"] .theme-spinner {
+    border: none;
+    background: linear-gradient(135deg, #FFE600, #FF2D7B);
+    clip-path: polygon(15% 0%, 100% 0%, 85% 100%, 0% 100%);
+    animation: cyber-box .4s steps(2) infinite;
+  }
+  @keyframes cyber-box {
+    0% { transform: rotate(0deg) skewX(0deg); }
+    50% { transform: rotate(180deg) skewX(5deg); }
+    100% { transform: rotate(360deg) skewX(0deg); }
+  }
+  /* Cyberpunk: glitch border tooltip */
+  body[data-theme="cyberpunk"] [title]:hover::after {
+    border-color: rgba(255,230,0,.4);
+    box-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 15px rgba(255,230,0,.15), 2px 0 0 rgba(255,45,123,.3);
+  }
+  /* Cyberpunk: neon yellow toast */
+  body[data-theme="cyberpunk"] #nodeToast {
+    border-color: rgba(255,230,0,.35);
+    box-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px rgba(255,230,0,.12), inset 0 0 30px rgba(255,45,123,.04);
+  }
+  body[data-theme="cyberpunk"] .status-badge { border-color: rgba(255,230,0,.3); color: #FFE600; }
+  body[data-theme="cyberpunk"] #cyberCursor { display: block; }
+  body[data-theme="cyberpunk"] #cyberOverlay { display: block; }

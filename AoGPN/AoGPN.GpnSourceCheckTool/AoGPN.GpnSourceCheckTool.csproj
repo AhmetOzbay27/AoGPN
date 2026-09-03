@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<AssemblyName>AoGPN.GpnSourceCheckTool</AssemblyName>
+		<!-- Platform-neutral (net10.0, no WPF) so it runs on Windows/Linux/macOS:
+		     FreeNodeSources cataloğundaki (veya verilen) abonelik/node kaynaklarının
+		     HTTP canlılığını tarar — node havuzunu çekmeden önce hangi adreslerin
+		     canlı olduğunu doğrulamak için kullanılır. -->
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
+	</ItemGroup>
+
+</Project>

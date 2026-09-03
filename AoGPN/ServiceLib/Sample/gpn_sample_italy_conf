@@ -1,0 +1,19 @@
+# AoGPN örnek WireGuard şablonu — İtalya (Oracle Linux 9)
+# Gerçek sunucuyla birebir eşleşir (92.4.220.236:51820): uç nokta, sunucu genel
+# anahtarı, adres/MTU/DNS — yalnızca İSTEMCİ ÖZEL ANAHTARI bilinçli olarak YOKTUR.
+# Özel anahtar sürüm kontrolüne yazılmaz; tohumlama sırasında dışarıdan gelir:
+#   - env:  GPN_ITALY_PRIVATE_KEY (yalnızca anahtar, base64)
+#           GPN_ITALY_CONF_B64    (tam .conf, base64 — CI secret biçimi)
+#   - ayar: Ayarlar > GPN > GpnSeedItalyPrivateKey
+# Anahtar sağlanmazsa bu şablon tohumlanmaz (anahtarsız profil yararsızdır);
+# anahtar Sunucu Yönetimi ekranından da içe aktarılabilir.
+[Interface]
+Address = 10.66.66.2/24
+MTU = 1360
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = 5AXLx91KgGJb9sou5who+rpukDGtMk8sT421xPQQsys=
+Endpoint = 92.4.220.236:51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25

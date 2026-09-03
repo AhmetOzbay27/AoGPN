@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<AssemblyName>AoGPN.GpnSessionTool</AssemblyName>
+		<!-- Platform-neutral (net10.0, no WPF): oturum günlüğünü okumak için GUI
+		     veya yönetici gerektirmez. Modlar: path, last, steps, sessions. -->
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
+	</ItemGroup>
+
+</Project>

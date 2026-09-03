@@ -1,0 +1,59 @@
+/* ==========================================================================
+   AoGPN dashboard — "reduce effects" (motion budget)
+   --------------------------------------------------------------------------
+   Kill switch for the heavy theme animations: aurora drift, matrix rain,
+   cursor trails, CONNECT ring spin/breathe/orbit and every per-theme loop.
+   Loaded LAST (after the themes) so these rules always win the cascade.
+   Active when either
+     - the user enables "Reduce effects" in Settings  -> body.reduce-effects
+     - Windows is configured to reduce motion        -> prefers-reduced-motion
+   The JS mirrors both conditions (window.setReduceEffects + matchMedia) and
+   also stops the canvas loops; this layer neutralises the CSS motion.
+   ========================================================================== */
+body.reduce-effects::before,
+body.reduce-effects::after,
+body.reduce-effects *,
+body.reduce-effects *::before,
+body.reduce-effects *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+/* Static glow instead of a per-frame filtered compositor layer on the ring. */
+body.reduce-effects .ring-wrap .ring-svg,
+body.reduce-effects .ring-halo,
+body.reduce-effects .ring-orbit {
+  filter: none !important;
+}
+
+/* Balanced tier: freeze the perpetual full-screen loops (aurora drift, theme
+   signature scans/breaths, matrix rain) so the compositor can go idle between
+   user interactions, while the reactive effects (cursor trails, confetti,
+   CONNECT ring spin while connecting, spinners, toasts, hover transitions)
+   keep working. The ambient look stays — it just stops moving on its own. */
+body.effects-balanced::before,
+body.effects-balanced::after {
+  animation: none !important;
+  will-change: auto !important;
+}
+body.effects-balanced #matrixRainCanvas {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after,
+  body *,
+  body *::before,
+  body *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+  /* NOTE: no `filter: none` here on .ring-wrap .ring-svg etc. — redeclaring the
+     base selector would place the ring base after its theme overrides and break
+     the cascade-order contract (and a static glow costs nothing once motion is
+     disabled above). The user-facing body.reduce-effects rule above does remove
+     the glow on purpose. */
+}

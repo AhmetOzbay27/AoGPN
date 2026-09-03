@@ -1,0 +1,20 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: cryo
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+
+
+  body[data-theme="cryo"] {
+    --bg: #060E18;
+    --violet: #2563EB;
+    --cyan: #6366F1;
+    --emerald: #0D9488;
+    --glass: rgba(37, 99, 235, 0.035);
+    --glass-border: rgba(37, 99, 235, 0.10);
+  }
+  body[data-theme="cryo"]::after {
+    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background: radial-gradient(120% 90% at 50% 0%, transparent 52%, var(--cyan-20) 100%);
+    animation: frost-shimmer 7s ease-in-out infinite alternate;
+  }
+  @keyframes frost-shimmer { from { opacity: .45; } to { opacity: 1; } }

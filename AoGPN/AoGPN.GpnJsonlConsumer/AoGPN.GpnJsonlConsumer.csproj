@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<AssemblyName>AoGPN.GpnJsonlConsumer</AssemblyName>
+		<!-- Platform-neutral (net10.0, no WPF) so it runs on Windows/Linux/macOS:
+		     consumes the GpnProbeTool NDJSON output, logs timestamped JSONL and
+		     optionally exposes Prometheus metrics (textfile or HTTP). -->
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
+	</ItemGroup>
+
+</Project>

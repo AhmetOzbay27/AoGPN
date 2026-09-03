@@ -1,0 +1,659 @@
+/* ==========================================================================
+   AoGPN dashboard — component styles
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+
+
+
+  /* ---------- Navigation ---------- */
+  .nav-item {
+    position: relative;
+    transition: all .18s ease;
+  }
+  .nav-item::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 50%;
+    translate: 0 -50%;
+    width: 3px; height: 0;
+    border-radius: 99px;
+    background: linear-gradient(var(--violet), var(--cyan));
+    box-shadow: 0 0 10px var(--violet);
+    transition: height .2s ease;
+  }
+  .nav-item.active {
+    background: linear-gradient(90deg, color-mix(in srgb, var(--violet) 16%, transparent), color-mix(in srgb, var(--cyan) 5%, transparent));
+    border-color: color-mix(in srgb, var(--violet) 35%, transparent);
+  }
+  .nav-item.active::before { height: 60%; }
+  .nav-item.active .nav-ico { color: var(--cyan); filter: drop-shadow(0 0 6px color-mix(in srgb, var(--cyan) 80%, transparent)); }
+  .nav-item:not(.active):hover { background: rgba(255,255,255,.04); }
+
+  /* Narrow-screen (icon-only) nav: same active affordance as the sidebar. */  /* Quick connect/disconnect in the icon nav (mirrors the CONNECT ring). */
+  .mobile-connect {
+    transition: all .18s ease;
+  }
+  .mobile-connect:hover { background: rgba(255,255,255,.08); }
+  .mobile-connect.connected {
+    color: var(--emerald);
+    border-color: color-mix(in srgb, var(--emerald) 45%, transparent);
+    background: color-mix(in srgb, var(--emerald) 14%, transparent);
+    filter: drop-shadow(0 0 6px color-mix(in srgb, var(--emerald) 70%, transparent));
+  }
+  .mobile-connect:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+  }
+  .mobile-nav-link { transition: all .18s ease; }
+  .mobile-nav-link.active { background: rgba(255,255,255,.08); }
+  .mobile-nav-link.active .nav-ico { color: var(--cyan); filter: drop-shadow(0 0 6px color-mix(in srgb, var(--cyan) 80%, transparent)); }
+  .mobile-nav-link:not(.active):hover { background: rgba(255,255,255,.05); }
+
+  /* ---------- CONNECT RING (SVG arc ring + inner button) ---------- */
+  .ring-wrap {
+    width: 220px; height: 220px;
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* SVG ring — rotates, contains the cyan arc. The rotation runs ONLY while a
+     connection is being established (body.connecting below); a permanent spin
+     forces the compositor to re-render a filtered layer every vsync, which
+     keeps the WebView2 GPU process pegged even when the dashboard is idle. */
+  .ring-wrap .ring-svg {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    animation: none;
+    filter: drop-shadow(0 0 8px var(--cyan));
+  }
+  body.connecting .ring-wrap .ring-svg {
+    animation: ring-spin 4.5s linear infinite;
+  }
+  .ring-core {
+    position: relative; z-index: 1;
+    width: 184px; height: 184px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 36% 32%, rgba(var(--violet-rgb),.14), transparent 52%),
+                radial-gradient(circle at 64% 68%, rgba(var(--cyan-rgb),.07), transparent 52%),
+                rgba(10,13,24,.95);
+    border: 1px solid rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column;
+    cursor: pointer;
+    outline: none;
+    transition: transform .18s ease, box-shadow .35s ease, border-color .35s ease;
+    box-shadow: 0 0 22px rgba(var(--cyan-rgb),.16), inset 0 0 16px rgba(var(--cyan-rgb),.04);
+  }
+  .ring-core:hover {
+    transform: scale(1.04);
+    box-shadow: 0 0 38px rgba(var(--cyan-rgb),.32), inset 0 0 24px rgba(var(--cyan-rgb),.08);
+  }
+  .ring-core:active { transform: scale(.96); transition-duration: .06s; }
+
+  @keyframes ring-spin { to { transform: rotate(360deg); } }
+
+  body.connected .ring-wrap .ring-svg { filter: drop-shadow(0 0 8px var(--emerald)); }
+  body.connected .ring-core {
+    border-color: rgba(var(--emerald-rgb),.20);
+    box-shadow: 0 0 28px rgba(var(--emerald-rgb),.22), inset 0 0 20px rgba(var(--emerald-rgb),.06);
+  }
+  body.connected .ring-core:hover {
+    box-shadow: 0 0 44px rgba(var(--emerald-rgb),.38), inset 0 0 28px rgba(var(--emerald-rgb),.12);
+  }
+
+  /* ---------- CONNECT ring effects: breathing halo + orbiting dots ---------- */
+  .ring-halo {
+    position: absolute; inset: -16px; border-radius: 50%; pointer-events: none;
+    background: radial-gradient(circle, color-mix(in srgb, var(--cyan) 16%, transparent), transparent 62%);
+    animation: none;
+  }
+  .ring-orbit { position: absolute; inset: 0; pointer-events: none; animation: none; }
+  .ring-orbit i {
+    position: absolute; top: -3px; left: 50%; width: 7px; height: 7px; margin-left: -3.5px;
+    border-radius: 50%; background: var(--cyan);
+    box-shadow: 0 0 10px var(--cyan), 0 0 20px color-mix(in srgb, var(--cyan) 55%, transparent);
+  }
+  .ring-orbit.r2 i { width: 5px; height: 5px; margin-left: -2.5px; top: -1.5px; background: var(--violet); box-shadow: 0 0 8px var(--violet); opacity: .85; }
+  @keyframes ring-breathe { 0%,100% { opacity: .5; transform: scale(.97); } 50% { opacity: 1; transform: scale(1.03); } }
+
+  /* Halo + orbiting dots join the spin only while connecting (see .ring-svg). */
+  body.connecting .ring-halo { animation: ring-breathe 3.6s ease-in-out infinite; }
+  body.connecting .ring-orbit { animation: ring-spin 7s linear infinite; }
+  body.connecting .ring-orbit.r2 { animation: ring-spin 11s linear infinite reverse; }
+
+  body.connected .ring-halo { background: radial-gradient(circle, color-mix(in srgb, var(--emerald) 20%, transparent), transparent 62%); }
+  body.connected .ring-orbit i { background: var(--emerald); box-shadow: 0 0 10px var(--emerald), 0 0 22px color-mix(in srgb, var(--emerald) 55%, transparent); }
+  body.connected .ring-orbit.r2 i { background: #A7F3D0; box-shadow: 0 0 8px #A7F3D0; }
+
+  /* ---------- Connection mode selector under the CONNECT button ---------- */
+  .ring-mode { display: flex; flex-direction: column; align-items: center; gap: .35rem; }
+  .ring-mode-label { font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: #8A94A6; font-weight: 600; }
+  .seg {
+    display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 999px;
+    /* no backdrop-filter: blur() — it re-blurs the live backdrop every frame
+       while anything behind animates; a slightly stronger fill reads the same */
+    background: rgba(255, 255, 255, .07); border: 1px solid rgba(255, 255, 255, .09);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+  }
+  .seg .seg-opt {
+    border: none; background: transparent; padding: .3rem .9rem; border-radius: 999px;
+    font-size: 11px; font-weight: 700; letter-spacing: .05em; color: #A7B0BF;
+    transition: color .25s ease, background .25s ease, box-shadow .25s ease, transform .2s ease;
+    cursor: pointer; white-space: nowrap;
+  }
+  .seg .seg-opt:hover { color: #E2E8F0; }
+  .seg .seg-opt.active {
+    color: #fff;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--violet) 55%, transparent), color-mix(in srgb, var(--cyan) 42%, transparent));
+    box-shadow: 0 0 12px color-mix(in srgb, var(--cyan) 32%, transparent), inset 0 0 6px rgba(255, 255, 255, .07);
+    transform: scale(1.03);
+  }
+
+  /* General-purpose themed loading spinner */
+  .theme-spinner {
+    width: 32px; height: 32px;
+    border: 3px solid transparent;
+    border-top-color: var(--violet);
+    border-right-color: var(--cyan);
+    border-radius: 50%;
+    animation: theme-spin .8s linear infinite;
+  }
+  @keyframes theme-spin { to { transform: rotate(360deg); } }
+  .theme-spinner-sm { width: 18px; height: 18px; border-width: 2px; }
+  .theme-spinner-lg { width: 48px; height: 48px; border-width: 4px; }
+
+  /* ---------- Theme-aware tooltips ---------- */
+  [title] {
+    position: relative;
+  }
+  [title]:hover::after {
+    content: attr(title);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    z-index: 100;
+    pointer-events: none;
+    max-width: 280px;
+    white-space: normal;
+    line-height: 1.4;
+    background: color-mix(in srgb, var(--bg) 95%, var(--violet) 5%);
+    border: 1px solid color-mix(in srgb, var(--violet) 25%, transparent);
+    color: #e2e8f0;
+    box-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 12px color-mix(in srgb, var(--violet) 15%, transparent);
+    animation: tooltip-appear .15s ease-out;
+  }
+  @keyframes tooltip-appear {
+    from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
+  /* ---------- Theme-aware toast / notification ---------- */
+  #nodeToast {
+    background: color-mix(in srgb, var(--bg) 95%, var(--violet) 5%);
+    border-color: color-mix(in srgb, var(--violet) 30%, transparent);
+    box-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px color-mix(in srgb, var(--violet) 12%, transparent);
+    animation: toast-slide .3s cubic-bezier(.34,1.56,.64,1);
+  }
+  @keyframes toast-slide {
+    from { opacity: 0; transform: translateX(20px) scale(.95); }
+    to { opacity: 1; transform: translateX(0) scale(1); }
+  }
+
+  /* ---------- Theme-aware status badges ---------- */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    border: 1px solid color-mix(in srgb, var(--violet) 25%, transparent);
+    background: color-mix(in srgb, var(--violet) 8%, transparent);
+    transition: all .3s ease;
+  }
+  .status-badge.success {
+    border-color: color-mix(in srgb, var(--emerald) 30%, transparent);
+    background: color-mix(in srgb, var(--emerald) 10%, transparent);
+    color: #6EE7B7;
+  }
+  .status-badge.warning {
+    border-color: rgba(251,191,36,.3);
+    background: rgba(251,191,36,.08);
+    color: #FCD34D;
+  }
+  .status-badge.error {
+    border-color: rgba(239,68,68,.3);
+    background: rgba(239,68,68,.08);
+    color: #FCA5A5;
+  }
+
+  .status-dot {
+    box-shadow: 0 0 10px currentColor;
+  }
+
+  /* ---------- Gauges ---------- */
+  .gauge-track { stroke: rgba(255,255,255,.07); }
+  .gauge-fill {
+    stroke-linecap: round;
+    transition: stroke-dashoffset .9s cubic-bezier(.22,1,.36,1), stroke .4s ease;
+    filter: drop-shadow(0 0 6px currentColor);
+  }
+  @keyframes flicker {
+    0%,100% { opacity: 1; } 50% { opacity: .82; }
+  }
+  .live-blink { animation: flicker 1.6s ease-in-out infinite; }
+
+  /* ---------- Layout axis: 'status' (controls in sidebar) vs 'compact' (hero strip) ---------- */
+  body[data-layout="compact"] .layout-sidebar-conn { display: none; }
+  body[data-layout="compact"] .layout-hero-strip { display: flex !important; }
+  .layout-opt {
+    color: #A7B0BF;
+    border-color: rgba(255,255,255,.12);
+    background: rgba(255,255,255,.03);
+  }
+  .layout-opt:hover { background: rgba(255,255,255,.08); }
+  .layout-opt.layout-active {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--violet) 28%, transparent), color-mix(in srgb, var(--cyan) 18%, transparent));
+    border-color: color-mix(in srgb, var(--violet) 55%, transparent);
+    color: #fff;
+  }
+
+  /* ---------- Mode switch ---------- */
+  .mode-pill { transition: all .25s ease; }
+  .mode-pill.active {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--violet) 28%, transparent), color-mix(in srgb, var(--cyan) 18%, transparent));
+    border-color: color-mix(in srgb, var(--violet) 55%, transparent);
+    color: #fff;
+    box-shadow: 0 0 14px color-mix(in srgb, var(--violet) 35%, transparent), inset 0 0 8px color-mix(in srgb, var(--violet) 12%, transparent);
+  }
+  .transport-pill { transition: all .25s ease; }
+  .transport-pill.active {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--cyan) 26%, transparent), color-mix(in srgb, var(--violet) 16%, transparent));
+    border-color: color-mix(in srgb, var(--cyan) 55%, transparent);
+    color: #fff;
+    box-shadow: 0 0 14px color-mix(in srgb, var(--cyan) 30%, transparent), inset 0 0 8px color-mix(in srgb, var(--cyan) 10%, transparent);
+  }
+  .transport-pill.locked {
+    border-color: rgba(245, 158, 11, .45) !important;
+    background: rgba(245, 158, 11, .10) !important;
+    color: #FBBF24 !important;
+    box-shadow: none !important;
+  }
+  #connectBtn:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+    filter: saturate(.6);
+  }
+  .protocol-pill { transition: all .2s ease; }
+  .protocol-pill.active {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--violet) 28%, transparent), color-mix(in srgb, var(--cyan) 16%, transparent));
+    border-color: color-mix(in srgb, var(--violet) 58%, transparent);
+    color: #fff;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--violet) 26%, transparent), inset 0 0 8px color-mix(in srgb, var(--violet) 10%, transparent);
+  }
+  .protocol-pill.unavailable { opacity: .55; }
+  .split-mode-pill { transition: all .2s ease; }
+  .split-mode-pill.active {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--violet) 28%, transparent), color-mix(in srgb, var(--cyan) 16%, transparent));
+    border-color: color-mix(in srgb, var(--violet) 58%, transparent);
+    color: #fff;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--violet) 24%, transparent), inset 0 0 8px color-mix(in srgb, var(--violet) 10%, transparent);
+  }
+  .route-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: .18rem .55rem; font-size: 10px; font-weight: 700; border: 1px solid transparent; white-space: nowrap; }
+  .route-badge.proxy { color: #A5F3FC; background: color-mix(in srgb, var(--cyan) 12%, transparent); border-color: color-mix(in srgb, var(--cyan) 24%, transparent); }
+  .route-badge.direct { color: #A7F3D0; background: color-mix(in srgb, var(--emerald) 12%, transparent); border-color: color-mix(in srgb, var(--emerald) 24%, transparent); }
+  .route-badge.block { color: #FCA5A5; background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.24); }
+  .route-badge.warp { color: #DDD6FE; background: color-mix(in srgb, var(--violet) 12%, transparent); border-color: color-mix(in srgb, var(--violet) 26%, transparent); }
+  .route-badge.unknown { color: #CBD5E1; background: rgba(148,163,184,.1); border-color: rgba(148,163,184,.2); }
+  .proxy-toggle {
+    transition: all .2s ease;
+  }
+  .proxy-toggle.enabled {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--emerald) 20%, transparent), color-mix(in srgb, var(--cyan) 12%, transparent));
+    border-color: color-mix(in srgb, var(--emerald) 42%, transparent);
+    color: #A7F3D0;
+    box-shadow: 0 0 14px color-mix(in srgb, var(--emerald) 24%, transparent), inset 0 0 8px color-mix(in srgb, var(--emerald) 10%, transparent);
+  }
+  .proxy-toggle.owned {
+    border-color: color-mix(in srgb, var(--cyan) 45%, transparent);
+    color: #A5F3FC;
+  }
+  .proxy-address {
+    color: #67E8F9;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    opacity: .9;
+    white-space: nowrap;
+  }
+  .proxy-test-btn {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 2px 7px; border-radius: 999px; font-size: 9px; font-weight: 600;
+    border: 1px solid rgba(255,255,255,.1);
+    background: rgba(255,255,255,.04); color: #8A94A6;
+    cursor: pointer; transition: all .18s ease;
+  }
+  .proxy-test-btn:hover { background: rgba(255,255,255,.08); color: #CBD5E1; }
+  .proxy-test-btn.testing { border-color: rgba(250,204,21,.3); color: #FACC15; cursor: wait; }
+  .proxy-test-btn.success { border-color: rgba(52,211,153,.35); color: #34D399; }
+  .route-group-toggle { cursor: pointer; }
+  .route-group-toggle:hover span { color: #A5F3FC; }
+  .proxy-test-btn.failed { border-color: rgba(239,68,68,.3); color: #F87171; }
+  .tun-proxy-notice { font-size: 10px; color: #94A3B8; line-height: 1.4; }
+  .tun-proxy-notice .tun-accent { color: #67E8F9; }
+  .tun-proxy-notice .proxy-accent { color: #A7F3D0; }
+
+  /* ---------- Native window title bar bridge ----------
+     NOTE: no -webkit-app-region here on purpose. In WebView2 that CSS makes
+     Chromium swallow every pointer event in the region (its own caption-drag
+     handling), so our JS pointerdown -> host 'drag'/'maximize_toggle' messages
+     would never fire and the maximized restore-on-drag could not work. All
+     title-bar interaction is routed through JS -> postMessage -> the host. */
+  .app-titlebar {
+    background: color-mix(in srgb, var(--bg) 94%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--violet) 22%, transparent);
+    box-shadow: 0 0 22px color-mix(in srgb, var(--cyan) 10%, transparent);
+    user-select: none;
+  }
+  .window-control { transition: background .15s ease, color .15s ease; }
+  .window-control:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+  .window-control.close:hover { background: rgba(239, 68, 68, .78); }
+
+  /* ---------- Slim scrollbar ---------- */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--violet) 25%, transparent); border-radius: 99px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .boost-on { box-shadow: 0 0 14px color-mix(in srgb, var(--violet) 35%, transparent); }
+  .num-tabular { font-variant-numeric: tabular-nums; }
+
+  /* ---------- Window frame ----------
+     Windowed mode floats the dashboard on a thin framed card with a soft edge;
+     maximized mode removes the margin so content sits flush against the screen.
+     The host toggles body.window-maximized via window.setWindowMaximized. */
+  body {
+    padding: 10px;
+    transition: padding .18s ease;
+  }
+  body.window-maximized { padding: 0; }
+
+  #appFrame {
+    position: relative;
+    z-index: 1;
+    border: 1px solid color-mix(in srgb, var(--violet) 22%, transparent);
+    border-radius: 14px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--cyan) 8%, transparent), 0 24px 70px rgba(0, 0, 0, 0.55);
+    transition: border-radius .2s ease, border-color .2s ease, box-shadow .2s ease;
+  }
+  body.window-maximized #appFrame {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  /* ---------- Node cards ---------- */
+  .node-card { transition: all .2s ease; cursor: pointer; }
+  .node-card:hover { border-color: color-mix(in srgb, var(--violet) 45%, transparent); background: color-mix(in srgb, var(--violet) 8%, transparent); }
+  .node-card.selected {
+    border-color: color-mix(in srgb, var(--cyan) 65%, transparent);
+    background: color-mix(in srgb, var(--cyan) 7%, transparent);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--cyan) 28%, transparent), inset 0 0 12px color-mix(in srgb, var(--cyan) 7%, transparent);
+  }
+  .node-check {
+    z-index: 5;
+    transform-origin: center;
+  }
+  .load-bar {
+    background: linear-gradient(90deg, var(--violet), var(--cyan));
+    box-shadow: 0 0 8px color-mix(in srgb, var(--cyan) 60%, transparent);
+    transition: width .5s ease;
+  }
+
+  /* ---------- Settings ---------- */
+  .settings-input {
+    width: 100%;
+    max-width: 460px;
+    background: rgba(255, 255, 255, .04);
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: .5rem;
+    padding: .5rem .75rem;
+    font-size: .8rem;
+    color: #E2E8F0;
+    outline: none;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .settings-input:focus { border-color: color-mix(in srgb, var(--violet) 65%, transparent); background: color-mix(in srgb, var(--violet) 5%, transparent); }
+  .settings-select {
+    width: 100%;
+    max-width: 460px;
+    background: rgba(255, 255, 255, .04);
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: .5rem;
+    padding: .5rem .75rem;
+    font-size: .8rem;
+    color: #E2E8F0;
+    outline: none;
+    transition: border-color .15s ease;
+  }
+  .settings-select option { background: #12182B; color: #E2E8F0; }
+  .settings-select:focus { border-color: color-mix(in srgb, var(--violet) 65%, transparent); }
+  .quick-select {
+    width: 100%;
+    background: rgba(255, 255, 255, .045);
+    border: 1px solid rgba(255, 255, 255, .08);
+    border-radius: .4rem;
+    padding: .34rem .45rem;
+    font-size: .65rem;
+    color: #CBD5E1;
+    outline: none;
+  }
+  .quick-select option { background: #12182B; color: #E2E8F0; }
+  .quick-select:focus { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
+  /* Themed replacement for native <select> popups (same OS white-box problem as
+     the old language picker). The native select stays hidden in the DOM; this
+     button + popover render its options with the dark glass look. */
+  .cs-hidden { display: none !important; }
+  .cs-trigger {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    max-width: 100%;
+    padding: .3rem .45rem;
+    border-radius: .4rem;
+    border: 1px solid rgba(255, 255, 255, .08);
+    background: rgba(255, 255, 255, .045);
+    color: #CBD5E1;
+    font-size: .72rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+    outline: none;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .cs-trigger:hover { border-color: rgba(255, 255, 255, .16); background: rgba(255, 255, 255, .07); }
+  .cs-trigger:focus-visible { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
+  .cs-trigger.quick-select { width: max-content; }
+  .cs-trigger.cs-empty { color: #64748B; font-weight: 500; }
+  .cs-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+  }
+  .cs-chev {
+    width: .6rem;
+    height: .6rem;
+    flex-shrink: 0;
+    opacity: .7;
+  }
+  .cs-pop {
+    position: fixed;
+    z-index: 90;
+    width: max-content;
+    max-width: min(300px, calc(100vw - 12px));
+    max-height: 240px;
+    overflow-y: auto;
+    padding: .3rem;
+    border-radius: .6rem;
+    border: 1px solid rgba(255, 255, 255, .1);
+    background: rgba(18, 24, 43, .97);
+    /* backdrop-filter removed: the dropdown is ~97% opaque; blur had no visible
+       effect but forced a backdrop re-sample per frame */
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .6);
+  }
+  .cs-option {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    width: 100%;
+    padding: .4rem .55rem;
+    border-radius: .45rem;
+    border: none;
+    background: transparent;
+    color: #A7B0BF;
+    font-size: .72rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .cs-option:hover { background: rgba(255, 255, 255, .06); color: #E2E8F0; }
+  .cs-option.active { background: rgba(255, 255, 255, .09); color: #fff; }
+  .cs-option:focus-visible { background: rgba(255, 255, 255, .14); color: #fff; outline: 1px solid color-mix(in srgb, var(--cyan) 55%, transparent); outline-offset: -1px; }
+  #dashboardLangPopover [data-lang]:focus-visible { background: rgba(255, 255, 255, .14); color: #fff; outline: 1px solid color-mix(in srgb, var(--cyan) 55%, transparent); outline-offset: -1px; }
+  .settings-select option { background: #12182B; color: #E2E8F0; }
+  .settings-select:focus { border-color: color-mix(in srgb, var(--violet) 65%, transparent); }
+  .quick-switch { width: 32px; height: 18px; margin-top: 0; transform: scale(.82); transform-origin: right center; }
+  .quick-switch .slider::before { width: 12px; height: 12px; }
+  .quick-switch input:checked + .slider::before { transform: translateX(14px); }
+  .settings-textarea { min-height: 84px; resize: vertical; }
+  .settings-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 260px) 1fr;
+    gap: .75rem 1rem;
+    align-items: start;
+    padding: .6rem .25rem;
+  }
+  .settings-row + .settings-row { border-top: 1px solid rgba(255, 255, 255, .05); }
+  .settings-label { font-size: .78rem; font-weight: 500; color: #CBD5E1; padding-top: .45rem; line-height: 1.3; }
+  .settings-hint { font-size: .68rem; color: #64748B; margin-top: .3rem; line-height: 1.35; }
+  .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; margin-top: .3rem; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 9999px;
+    transition: .18s ease;
+  }
+  .switch .slider::before {
+    content: '';
+    position: absolute; width: 16px; height: 16px; left: 2px; top: 2px;
+    background: #8A94A6;
+    border-radius: 50%;
+    transition: .18s ease;
+  }
+  .switch input:checked + .slider {
+    background: color-mix(in srgb, var(--violet) 50%, transparent);
+    border-color: color-mix(in srgb, var(--violet) 70%, transparent);
+  }
+  .switch input:checked + .slider::before {
+    transform: translateX(18px);
+    background: var(--violet-soft);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--violet) 90%, transparent);
+  }
+  .settings-tab { transition: all .18s ease; white-space: nowrap; }
+  .settings-tab.active {
+    background: linear-gradient(90deg, color-mix(in srgb, var(--violet) 20%, transparent), color-mix(in srgb, var(--cyan) 8%, transparent));
+    border-color: color-mix(in srgb, var(--violet) 45%, transparent) !important;
+    color: #E9D5FF !important;
+  }
+  .settings-chip { cursor: pointer; }
+  .settings-chip input { accent-color: var(--violet); }
+  .mode-panel{transition:opacity .35s ease,transform .35s ease}
+  .mode-panel.hidden-panel{opacity:0;transform:translateY(8px);pointer-events:none;position:absolute;visibility:hidden}
+  .mode-panel.active-panel{opacity:1;transform:translateY(0)}
+  .mode-panel-wrapper{position:relative}
+  .latency-ms{font-variant-numeric:tabular-nums}
+
+  /* ---------- Cursor effects ---------- */
+  #cursorCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 9999; }
+  #matrixRainCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 9998; opacity: 0.12; }
+  .cursor-fx { position: fixed; pointer-events: none; z-index: 10000; display: none; }
+  #cyberCursor { width: 28px; height: 28px; border: 2px solid rgba(234,179,8,.7); border-radius: 50%; box-shadow: 0 0 12px rgba(234,179,8,.35), inset 0 0 6px rgba(234,179,8,.15); transform: translate(-50%,-50%); }
+  #cyberCursor::after { content: ''; position: absolute; inset: 6px; border: 1px solid rgba(234,179,8,.3); border-radius: 50%; }
+  #matrixCursor { width: 16px; height: 16px; background: radial-gradient(circle, rgba(34,197,94,.9), rgba(22,163,74,.4) 50%, transparent 70%); border-radius: 50%; box-shadow: 0 0 18px rgba(34,197,94,.5); transform: translate(-50%,-50%); }
+  #plasmaCursor { width: 22px; height: 22px; background: radial-gradient(circle, rgba(165,180,252,.9) 0%, rgba(124,58,237,.6) 40%, transparent 70%); border-radius: 50%; box-shadow: 0 0 22px rgba(124,58,237,.5), 0 0 40px rgba(124,58,237,.2); transform: translate(-50%,-50%); }
+  #phantomCursor { width: 20px; height: 20px; border: 1.5px solid rgba(165,180,252,.5); border-radius: 50%; box-shadow: 0 0 15px rgba(165,180,252,.3); transform: translate(-50%,-50%); animation: phantomPulse 1.8s ease-in-out infinite; }
+  @keyframes phantomPulse { 0%,100% { opacity: .5; transform: translate(-50%,-50%) scale(1); } 50% { opacity: .9; transform: translate(-50%,-50%) scale(1.3); } }
+  #cyberOverlay { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 9990; }
+  .cyber-grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(234,179,8,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(234,179,8,.04) 1px, transparent 1px); background-size: 40px 40px; }
+  .cyber-scanlines { position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(234,179,8,.02) 2px, rgba(234,179,8,.02) 4px); }
+  .cyber-vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,.45) 100%); }
+  .cyber-corner { position: absolute; width: 60px; height: 60px; border-color: rgba(234,179,8,.15); border-style: solid; }
+  .cyber-tl { top: 8px; left: 8px; border-width: 1px 0 0 1px; }
+  .cyber-tr { top: 8px; right: 8px; border-width: 1px 1px 0 0; }
+  .cyber-bl { bottom: 8px; left: 8px; border-width: 0 0 1px 1px; }
+  .cyber-br { bottom: 8px; right: 8px; border-width: 0 1px 1px 0; }
+  .cyber-readout { position: absolute; bottom: 16px; right: 24px; font-family: monospace; font-size: 11px; color: rgba(234,179,8,.25); letter-spacing: .12em; }
+
+  /* ---------- Custom tooltips (replaces native title bubbles) ---------- */
+  .custom-tooltip {
+    position: fixed;
+    z-index: 99999;
+    max-width: 340px;
+    padding: 9px 13px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.55;
+    letter-spacing: .01em;
+    color: #E6EAF3;
+    background: rgba(13, 16, 24, 0.94);
+    border: 1px solid color-mix(in srgb, var(--cyan) 22%, rgba(255,255,255,.06));
+    box-shadow: 0 10px 34px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.35), 0 0 0 1px rgba(0,0,0,.2), inset 0 1px 0 rgba(255,255,255,.06);
+    /* backdrop-filter removed: the tooltip is 94% opaque; blur forced a live
+       backdrop re-sample per frame while the aurora layer animates */
+    pointer-events: none;
+    visibility: hidden;
+    opacity: 0;
+    transform: translateY(6px) scale(.96);
+    transform-origin: 50% 100%;
+    transition: opacity .16s ease, transform .18s cubic-bezier(.22,1,.36,1), visibility .16s;
+    text-wrap: balance;
+  }
+  .custom-tooltip::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -5px;
+    width: 10px;
+    height: 10px;
+    background: inherit;
+    border-right: 1px solid color-mix(in srgb, var(--cyan) 22%, rgba(255,255,255,.06));
+    border-bottom: 1px solid color-mix(in srgb, var(--cyan) 22%, rgba(255,255,255,.06));
+    transform: translateX(-50%) rotate(45deg);
+    border-bottom-right-radius: 3px;
+  }
+  .custom-tooltip.below {
+    transform-origin: 50% 0%;
+  }
+  .custom-tooltip.below::before {
+    top: -5px;
+    bottom: auto;
+    transform: translateX(-50%) rotate(225deg);
+  }
+  .custom-tooltip.visible {
+    visibility: visible;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }

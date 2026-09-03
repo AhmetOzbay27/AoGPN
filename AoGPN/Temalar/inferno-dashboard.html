@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>INFERNO — Gaming Network</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#040506; --panel:#0b0d10; --panel2:#0e1114;
+  --line:#1a2127; --line2:#28313a;
+  --red:#ff2d2d; --red2:#d81324; --red3:#ff6a55;
+  --glow:rgba(255,42,42,.55);
+  --green:#34d17b; --amber:#ffb54d;
+  --txt:#e9eef4; --mut:#929ca6; --mut2:#5d6771;
+  --mono:'Share Tech Mono',monospace;
+  --disp:'Orbitron','Rajdhani',sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--txt);font-family:'Rajdhani','Segoe UI',sans-serif;overflow:hidden;-webkit-font-smoothing:antialiased;user-select:none}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{background:#232c34;border-radius:3px}
+a{text-decoration:none;color:inherit}
+button{font-family:inherit}
+svg{display:block}
+
+.app{position:relative;height:100vh;min-width:1460px;display:flex;flex-direction:column;
+ background:
+ radial-gradient(720px 720px at 50% 24%,rgba(200,20,30,.22),transparent 66%),
+ radial-gradient(1100px 620px at 50% 30%,rgba(140,12,18,.18),transparent 62%),
+ radial-gradient(900px 480px at 50% 112%,rgba(140,12,18,.14),transparent 60%),
+ linear-gradient(180deg,#070a0c 0%,#040506 100%);}
+/* Katman 1: belirgin blueprint grid + nokta matrisi */
+.app::before{content:"";position:absolute;inset:0;pointer-events:none;background-image:
+ linear-gradient(rgba(150,172,195,.14) 1px,transparent 1px),
+ linear-gradient(90deg,rgba(150,172,195,.14) 1px,transparent 1px),
+ linear-gradient(rgba(150,172,195,.055) 1px,transparent 1px),
+ linear-gradient(90deg,rgba(150,172,195,.055) 1px,transparent 1px),
+ radial-gradient(circle,rgba(150,172,195,.20) 1px,transparent 1.4px);
+ background-size:220px 220px,220px 220px,44px 44px,44px 44px,22px 22px;
+ background-position:center top,center top,center top,center top,center top;}
+/* Katman 2: köşe braketleri, diyagonal taramalar, kırmızı parçacıklar, vinyet */
+.app::after{content:"";position:absolute;inset:0;pointer-events:none;background-image:
+ /* köşe braketleri (4 köşe) */
+ linear-gradient(rgba(255,70,60,.5),rgba(255,70,60,.5)),
+ linear-gradient(rgba(255,70,60,.5),rgba(255,70,60,.5)),
+ linear-gradient(rgba(255,70,60,.5),rgba(255,70,60,.5)),
+ linear-gradient(rgba(255,70,60,.5),rgba(255,70,60,.5)),
+ linear-gradient(rgba(255,70,60,.5),rgba(255,70,60,.5)),
+ linear-gradient(rgba(255,70,60,.5),rgba(255,70,60,.5)),
+ linear-gradient(rgba(255,70,60,.5),rgba(255,70,60,.5)),
+ linear-gradient(rgba(255,70,60,.5),rgba(255,70,60,.5)),
+ /* diyagonal tarama şeritleri */
+ repeating-linear-gradient(45deg,transparent 0 26px,rgba(150,172,195,.028) 26px 27px),
+ /* kırmızı parçacıklar */
+ radial-gradient(1.6px 1.6px at 8% 14%,rgba(255,95,85,.95),transparent 60%),
+ radial-gradient(1.1px 1.1px at 16% 38%,rgba(255,125,115,.85),transparent 60%),
+ radial-gradient(1.3px 1.3px at 24% 8%,rgba(255,75,75,.8),transparent 60%),
+ radial-gradient(1.1px 1.1px at 33% 26%,rgba(255,115,105,.8),transparent 60%),
+ radial-gradient(1.8px 1.8px at 44% 12%,rgba(255,85,85,.95),transparent 60%),
+ radial-gradient(1.1px 1.1px at 55% 20%,rgba(255,135,125,.7),transparent 60%),
+ radial-gradient(1.4px 1.4px at 63% 9%,rgba(255,75,75,.85),transparent 60%),
+ radial-gradient(1.1px 1.1px at 72% 30%,rgba(255,115,105,.75),transparent 60%),
+ radial-gradient(1.7px 1.7px at 81% 15%,rgba(255,95,90,.9),transparent 60%),
+ radial-gradient(1.1px 1.1px at 90% 34%,rgba(255,125,115,.7),transparent 60%),
+ radial-gradient(1.3px 1.3px at 95% 10%,rgba(255,85,80,.8),transparent 60%),
+ radial-gradient(1.1px 1.1px at 6% 62%,rgba(255,105,95,.65),transparent 60%),
+ radial-gradient(1.5px 1.5px at 93% 66%,rgba(255,95,90,.75),transparent 60%),
+ radial-gradient(1.1px 1.1px at 28% 78%,rgba(255,115,105,.6),transparent 60%),
+ radial-gradient(1.4px 1.4px at 70% 84%,rgba(255,85,80,.65),transparent 60%),
+ /* vinyet */
+ radial-gradient(120% 90% at 50% 45%,transparent 55%,rgba(0,0,0,.55) 100%);
+ background-size:
+ 26px 2px,2px 26px, 26px 2px,2px 26px, 26px 2px,2px 26px, 26px 2px,2px 26px,
+ auto,
+ auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,
+ auto;
+ background-position:
+ 14px 46px,14px 46px, right 14px top 46px,right 14px top 46px,
+ left 14px bottom 14px,left 14px bottom 14px, right 14px bottom 14px,right 14px bottom 14px,
+ 0 0,
+ 0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,
+ 0 0;
+ background-repeat:no-repeat,no-repeat,no-repeat,no-repeat,no-repeat,no-repeat,no-repeat,no-repeat,
+ repeat,
+ repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,
+ no-repeat;}
+
+/* ---------- TITLEBAR ---------- */
+.titlebar{height:38px;display:flex;align-items:center;justify-content:flex-end;gap:4px;padding:0 12px;position:relative;z-index:6}
+.tb{width:32px;height:30px;display:grid;place-items:center;color:#98a2ab;border-radius:5px;cursor:pointer;position:relative}
+.tb svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tb:hover{background:#151b21;color:#eef3f7}
+.tb .n{position:absolute;top:5px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--red);box-shadow:0 0 6px var(--glow)}
+.tb.close:hover{background:#c81e1e;color:#fff}
+.tb .win{width:10px;height:10px;border:1.6px solid currentColor;border-radius:1px}
+
+/* ---------- LAYOUT ---------- */
+.ws{flex:1;display:flex;min-height:0;position:relative;z-index:2}
+.center{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+.rightbar{width:368px;flex:none;display:flex;flex-direction:column;gap:14px;padding:8px 16px 14px 4px;min-height:0}
+/* ---------- SIDEBAR ---------- */
+.sidebar{width:216px;flex:none;display:flex;flex-direction:column;background:linear-gradient(180deg,#0b0d10 0%,#07090b 100%);border-right:1px solid #10151b;position:relative;z-index:3}
+.brand{display:flex;flex-direction:column;align-items:center;padding:12px 0 16px}
+.brand .mark{width:74px;height:85px;filter:drop-shadow(0 0 14px rgba(255,40,40,.45))}
+.brand h1{font-family:var(--disp);font-weight:800;font-size:19px;letter-spacing:6px;margin-top:8px;color:#f3f6f9;text-indent:6px}
+.brand small{margin-top:3px;font-size:9px;font-weight:700;letter-spacing:5.5px;color:var(--red);text-indent:5.5px;text-shadow:0 0 10px rgba(255,45,45,.6)}
+.nav{display:flex;flex-direction:column;padding:2px 0}
+.nav a{display:flex;align-items:center;gap:14px;height:45px;padding:0 24px;position:relative;color:#98a2ab;font-size:13px;font-weight:600;letter-spacing:2.2px;cursor:pointer;transition:color .15s}
+.nav a svg{width:19px;height:19px;stroke:#7b868f;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none;transition:stroke .15s}
+.nav a:hover{color:#e6ecf2}
+.nav a:hover svg{stroke:#c8d2da}
+.nav a.active{color:#fff;background:linear-gradient(90deg,rgba(255,45,45,.20) 0%,rgba(255,45,45,.05) 70%,transparent 100%)}
+.nav a.active svg{stroke:var(--red);filter:drop-shadow(0 0 5px rgba(255,45,45,.7))}
+.nav a.active::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:2px;background:linear-gradient(180deg,#ff6a55,#c70e1e);box-shadow:0 0 12px var(--glow)}
+
+/* side cards */
+.cut{clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px)}
+.side-card{margin:14px 12px 0;padding:14px 12px 12px;background:linear-gradient(180deg,#0c0f13,#080a0c);border:1px solid var(--line);text-align:center}
+.sc-title{font-size:12.5px;font-weight:700;letter-spacing:2.5px;color:#c3ccd4;display:flex;align-items:center;justify-content:center;gap:8px}
+.sc-title .rd{width:6px;height:6px;border-radius:50%;background:var(--red);box-shadow:0 0 7px var(--glow);animation:pulse 1.6s infinite}
+.sc-sub{margin-top:3px;font-size:9.5px;font-weight:600;letter-spacing:2px;color:var(--mut2)}
+.sc-sub.live{color:var(--green);display:flex;align-items:center;justify-content:center;gap:5px}
+.sc-sub.live i{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px rgba(52,209,123,.8);animation:pulse 1.6s infinite}
+.gpn-art{position:relative;width:132px;height:104px;margin:10px auto 8px}
+.guard-art{position:relative;width:120px;height:100px;margin:6px auto 0}
+
+/* buttons */
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:34px;font-size:11px;font-weight:700;letter-spacing:2px;color:#dfe6ec;background:#10151a;border:1px solid #242d35;cursor:pointer;transition:.15s}
+.btn:hover{border-color:#33404b;background:#141a20}
+.btn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
+.btn-red{background:linear-gradient(180deg,#e11a28,#9d0e1b);border:1px solid #ff5348;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5);box-shadow:0 0 16px rgba(255,40,40,.35),inset 0 1px 0 rgba(255,150,140,.35)}
+.btn-red:hover{background:linear-gradient(180deg,#f12230,#b1111f)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+/* ---------- TOP CARDS ---------- */
+.topcards{display:grid;grid-template-columns:1.3fr .95fr 1.3fr;gap:20px;padding:0 30px;margin-top:56px;position:relative;z-index:2}
+.tcard{height:66px;display:flex;align-items:center;gap:14px;padding:0 22px;background:linear-gradient(180deg,#0d1014 0%,#080a0d 100%);border:1px solid #1b232a;position:relative}
+.tcard.a{clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px))}
+.tcard.b{justify-content:center;gap:16px;clip-path:polygon(24px 0,calc(100% - 24px) 0,100% 100%,0 100%);background:linear-gradient(180deg,#100608 0%,#080a0d 65%);border-color:#2a1518}
+.tcard.c{justify-content:space-between;clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px)}
+.tc-lab{font-size:10px;font-weight:700;letter-spacing:2.4px;color:var(--mut)}
+.tc-big{font-family:var(--disp);font-size:19px;font-weight:800;letter-spacing:2px;color:var(--red);text-shadow:0 0 14px rgba(255,45,45,.55)}
+.tc-note{font-size:10.5px;color:var(--mut);letter-spacing:.4px;margin-top:2px}
+.tc-shield{margin-left:auto;width:40px;height:40px;display:grid;place-items:center;border:1px solid #3a1a1d;border-radius:9px;background:radial-gradient(circle at 50% 35%,rgba(255,45,45,.18),rgba(20,8,10,.6));box-shadow:0 0 14px rgba(255,40,40,.18)}
+.tc-shield svg{width:20px;height:20px;stroke:var(--red);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tc-time{display:flex;align-items:center}
+.tc-time .lab{font-size:9.5px;letter-spacing:2.4px;color:var(--mut);font-weight:700}
+.tc-time .val{font-family:var(--mono);font-size:23px;color:#f2f6fa;letter-spacing:2px;text-shadow:0 0 12px rgba(255,90,80,.35)}
+.chev{width:9px;height:26px;stroke:var(--red);stroke-width:2.4;fill:none;filter:drop-shadow(0 0 5px rgba(255,45,45,.7))}
+.tc-ip .val{font-family:var(--mono);font-size:19px;letter-spacing:1px;color:#f0f4f8}
+.btn-hide{flex:none;height:32px;padding:0 16px;font-size:10.5px;font-weight:700;letter-spacing:1.8px;color:#ff6a55;background:rgba(255,45,45,.10);border:1px solid #5a1e22;border-radius:5px;cursor:pointer;display:flex;align-items:center;gap:7px}
+.btn-hide:hover{background:rgba(255,45,45,.18)}
+.btn-hide svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round}
+/* ---------- HUD ---------- */
+.hud-wrap{position:absolute;top:-76px;left:50%;transform:translateX(-50%);width:660px;height:660px;z-index:1;pointer-events:none}
+/* HUD arkası dekoratif doku: nokta halkaları + dikey tarama çizgileri */
+.hud-wrap::before{content:"";position:absolute;inset:-90px -160px;pointer-events:none;background-image:
+ radial-gradient(circle at 50% 50%,transparent 340px,rgba(150,172,195,.10) 340px 341px,transparent 341px),
+ radial-gradient(circle at 50% 50%,transparent 380px,rgba(255,70,60,.16) 380px 381.5px,transparent 381.5px),
+ radial-gradient(circle at 50% 50%,transparent 415px,rgba(150,172,195,.08) 415px 416px,transparent 416px),
+ radial-gradient(circle at 50% 50%,transparent 452px,rgba(255,70,60,.10) 452px 453px,transparent 453px),
+ radial-gradient(circle,rgba(150,172,195,.13) 1px,transparent 1.3px);
+ background-size:auto,auto,auto,auto,20px 20px;background-position:center;}
+.hud-wrap::after{content:"";position:absolute;inset:-70px -140px;pointer-events:none;background:
+ repeating-linear-gradient(90deg,transparent 0 5px,rgba(150,172,195,.045) 5px 6px);
+ -webkit-mask-image:radial-gradient(circle at 50% 50%,transparent 335px,#000 336px,#000 470px,transparent 471px);
+ mask-image:radial-gradient(circle at 50% 50%,transparent 335px,#000 336px,#000 470px,transparent 471px);}
+.hud{position:relative;width:660px;height:660px}
+.hud>svg.rings{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.spin-s{transform-box:fill-box;transform-origin:center;animation:spin 70s linear infinite}
+.spin-r{transform-box:fill-box;transform-origin:center;animation:spin 50s linear infinite reverse}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hud-ui{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;z-index:3}
+.gpn-lab{font-size:11px;font-weight:700;letter-spacing:3.5px;color:#9aa5ae}
+.connected{font-family:var(--disp);font-weight:900;font-size:31px;letter-spacing:5px;color:#ff3333;margin:8px 0 12px;text-shadow:0 0 16px rgba(255,47,47,.85),0 0 50px rgba(255,47,47,.35)}
+.loc{display:flex;align-items:center;gap:9px}
+.loc .flag{width:22px;height:15px;border-radius:2px;overflow:hidden;box-shadow:0 0 0 1px #2a323a;flex:none}
+.loc .col{display:flex;flex-direction:column;align-items:flex-start;line-height:1.15}
+.loc .city{font-size:13.5px;font-weight:700;letter-spacing:2.5px;color:#f1f5f9}
+.loc .edge{font-size:9.5px;font-weight:600;letter-spacing:2.5px;color:#8b959e}
+.htime{font-family:var(--mono);font-size:20px;letter-spacing:3px;color:#eef3f8;margin:12px 0 16px;text-shadow:0 0 10px rgba(255,120,110,.3)}
+.btn-disc{display:flex;align-items:center;gap:10px;height:42px;pointer-events:auto;padding:0 26px;font-size:13px;font-weight:700;letter-spacing:3px;color:#fff;background:linear-gradient(180deg,#e5192a,#a10d1c);border:1px solid #ff5348;clip-path:polygon(12px 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,12px 100%,0 50%);cursor:pointer;box-shadow:0 0 22px rgba(255,40,40,.4),inset 0 1px 0 rgba(255,160,150,.4)}
+.btn-disc:hover{filter:brightness(1.12)}
+.btn-disc i{width:11px;height:11px;background:#fff;border-radius:1.5px;box-shadow:0 0 8px rgba(255,255,255,.7)}
+/* hex nodes */
+.hexnode{position:absolute;top:50%;width:112px;transform:translateY(-56%);display:flex;flex-direction:column;align-items:center;gap:8px;z-index:4}
+.hexnode.left{left:-88px}
+.hexnode.right{right:-88px}
+.hexnode .hex{width:102px;height:110px;position:relative;filter:drop-shadow(0 0 16px rgba(255,40,40,.35))}
+.hexnode .hex>svg{position:absolute;inset:0;width:100%;height:100%}
+.hexnode .hex .ico{position:absolute;inset:0;display:grid;place-items:center}
+.hexnode .hex .ico svg{width:32px;height:32px;stroke:#ff4a3d;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 6px rgba(255,60,50,.8))}
+.hexnode .cap{font-size:10.5px;font-weight:700;letter-spacing:2.5px;color:#e8edf2;text-shadow:0 0 8px rgba(0,0,0,.8)}
+.link{position:absolute;top:50%;height:2px;width:104px;background:linear-gradient(90deg,transparent,#ff3b30 35%,#ff3b30 65%,transparent);box-shadow:0 0 10px rgba(255,50,40,.7);z-index:2;transform:translateY(-50%)}
+.link.l{left:-20px}
+.link.r{right:-20px}
+/* AI banner */
+.ai{position:absolute;left:347px;top:22px;transform:translateX(-50%);z-index:6;display:flex;align-items:center;gap:13px;padding:13px 30px 14px;background:linear-gradient(180deg,#0d0f13,#08090c);border:1px solid #2b171b;clip-path:polygon(22px 0,calc(100% - 22px) 0,100% 100%,0 100%);box-shadow:0 0 30px rgba(255,40,40,.15);white-space:nowrap}
+.ai .brain{width:28px;height:28px;stroke:var(--red);fill:none;stroke-width:1.6;stroke-linecap:round;filter:drop-shadow(0 0 6px rgba(255,45,45,.6))}
+.ai .col{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
+.ai .t1{font-family:var(--disp);font-size:13.5px;font-weight:700;letter-spacing:3px;color:#f0f4f8}
+.ai .t2{font-size:10px;font-weight:700;letter-spacing:2.6px;color:var(--red);text-shadow:0 0 10px rgba(255,45,45,.5)}
+.ai .bars{display:flex;align-items:flex-end;gap:3px;height:22px}
+.ai .bars i{width:4px;background:linear-gradient(180deg,#ff5b4d,#a30f1d);border-radius:1px;box-shadow:0 0 6px rgba(255,45,45,.5)}
+/* ---------- PANELS ---------- */
+.panels{display:grid;grid-template-columns:308px minmax(0,1fr);gap:18px;padding:14px 30px 14px;margin-top:250px;flex:1;min-height:0;position:relative;z-index:2}
+.panel{background:linear-gradient(180deg,#0e1217,#080a0d);border:1px solid #1e262d;position:relative;padding:14px 16px;clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px);box-shadow:0 10px 30px rgba(0,0,0,.35);display:flex;flex-direction:column}
+.p-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.p-title{font-size:12.5px;font-weight:700;letter-spacing:2.6px;color:#c9d1d9}
+.icon-btn{width:24px;height:24px;display:grid;place-items:center;color:#ff5b4d;background:rgba(255,45,45,.1);border:1px solid #4a1c20;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;padding-bottom:2px}
+/* game profiles */
+.game{display:flex;align-items:center;gap:12px;padding:6px 6px;border-radius:6px}
+.game:hover{background:#10151a}
+.gicon{width:34px;height:34px;flex:none;border-radius:5px;overflow:hidden;border:1px solid #232a31;background:#0d1013}
+.gicon svg{width:100%;height:100%}
+.gname{font-size:12px;font-weight:700;letter-spacing:1.2px;color:#dbe2e9;line-height:1.2}
+.gstat{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:10px;font-weight:700;letter-spacing:1.6px;color:var(--green)}
+.gstat i{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px rgba(52,209,123,.9)}
+.panel .btn.ghost{margin-top:auto}
+/* live traffic */
+.dd{display:flex;align-items:center;gap:7px;font-size:10px;font-weight:700;letter-spacing:1.6px;color:#aeb7c0;background:#10151a;border:1px solid #232b33;padding:5px 11px;border-radius:4px;cursor:pointer}
+.dd svg{width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round}
+.chart-wrap{position:relative;flex:1;min-height:148px;padding-left:38px;margin-top:8px}
+.chart-wrap>svg{width:100%;height:100%}
+.ylabs{position:absolute;left:0;top:0;bottom:8px;width:36px;display:flex;flex-direction:column;justify-content:space-between;font-size:8px;font-weight:600;letter-spacing:.4px;color:#5d6771;padding:2px 0}
+.ylabs span b{color:#454f58;font-weight:600;margin-left:2px}
+.legend{display:flex;gap:24px;justify-content:center;font-size:9.5px;font-weight:700;letter-spacing:1.8px;color:var(--mut);margin-top:6px}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.legend .dl i{background:#ff3b30;box-shadow:0 0 8px rgba(255,50,40,.8)}
+.legend .ul i{background:#9aa5ae}
+.gauges{display:flex;justify-content:space-around;margin-top:auto;padding-top:12px}
+.gauge{position:relative;width:148px;text-align:center}
+.gauge svg{width:148px;height:148px}
+.gauge .gv{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.gauge .gv .lab{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--mut)}
+.gauge .gv .num{font-family:var(--disp);font-size:25px;font-weight:800;color:#f3f7fb;margin:3px 0}
+.gauge .gv .unit{font-size:9px;letter-spacing:2px;color:var(--mut)}
+/* ---------- RIGHT BAR ---------- */
+.rpanel{background:linear-gradient(180deg,#0b0e12,#07090b);border:1px solid var(--line);padding:13px 15px;clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px);position:relative}
+.rpanel .p-head{margin-bottom:8px}
+.live-tag{display:flex;align-items:center;gap:7px;font-size:9.5px;font-weight:700;letter-spacing:2px;color:#c9d1d9}
+.live-tag i{width:7px;height:7px;border-radius:50%;background:var(--red);box-shadow:0 0 8px var(--glow);animation:pulse 1.4s infinite}
+.stat-row{display:flex;align-items:center;gap:13px;padding:7px 2px}
+.stat-ico{width:38px;height:38px;flex:none;border-radius:9px;border:1px solid #2a1518;background:radial-gradient(circle at 50% 35%,rgba(255,45,45,.14),rgba(16,7,9,.7));display:grid;place-items:center}
+.stat-ico svg{width:18px;height:18px;stroke:#ff5b4d;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.stat-mid{display:flex;flex-direction:column;gap:1px}
+.stat-lab{font-size:9.5px;font-weight:700;letter-spacing:2px;color:var(--mut)}
+.stat-val{display:flex;align-items:baseline;gap:5px}
+.stat-val b{font-family:var(--disp);font-size:20px;font-weight:800;color:#ff3b30;text-shadow:0 0 12px rgba(255,45,45,.5)}
+.stat-val span{font-size:10px;color:var(--mut);letter-spacing:1px}
+.spark{margin-left:auto;width:118px;height:34px}
+.spark svg{width:100%;height:100%;overflow:visible}
+/* route map */
+.mapbox{position:relative;height:150px;margin-top:4px}
+.mapbox svg{width:100%;height:100%}
+.route-legend{display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding:0 4px}
+.rl-node{display:flex;align-items:center;gap:7px}
+.rl-node .col{display:flex;flex-direction:column;line-height:1.15}
+.rl-node b{font-size:9.5px;font-weight:700;letter-spacing:1.2px;color:#dbe2e9}
+.rl-node small{font-size:8px;font-weight:600;letter-spacing:1.2px;color:var(--mut)}
+.rl-node .ric{width:16px;height:16px;stroke:#ff5b4d;fill:none;stroke-width:1.8}
+.rl-node .flg{width:16px;height:11px;border-radius:2px;overflow:hidden;box-shadow:0 0 0 1px #2a323a;flex:none}
+.rl-arr{color:#3d4852;font-size:13px;letter-spacing:1px}
+.map-foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding-top:10px;border-top:1px solid #141a20}
+.map-foot .l{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--mut)}
+.map-foot .r{font-family:var(--mono);font-size:14px;color:var(--green);text-shadow:0 0 10px rgba(52,209,123,.4);display:flex;align-items:center;gap:7px;letter-spacing:1px}
+.map-foot .r svg{width:13px;height:13px;stroke:var(--green);fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+/* defense */
+.rpanel.grow{flex:1;display:flex;flex-direction:column;min-height:0}
+.defense{display:flex;gap:14px;align-items:center;justify-content:center;flex:1;margin-top:4px}
+.def-art{position:relative;width:152px;height:152px;flex:none}
+.def-art svg{width:100%;height:100%}
+.def-list{display:flex;flex-direction:column;justify-content:center;gap:12px;flex:1}
+.def-item{display:flex;align-items:center;gap:9px}
+.def-item>svg{width:15px;height:15px;stroke:#ff5b4d;fill:none;stroke-width:1.8;flex:none;filter:drop-shadow(0 0 4px rgba(255,60,50,.5))}
+.def-item .col{display:flex;flex-direction:column;line-height:1.2}
+.def-item .n{font-size:9.5px;font-weight:700;letter-spacing:1.2px;color:#c9d1d9}
+.def-item .s{font-size:8.5px;font-weight:700;letter-spacing:1.6px;color:var(--green)}
+/* ---------- STATUS BAR ---------- */
+.statusbar{height:52px;flex:none;display:flex;align-items:center;gap:22px;padding:0 24px;background:linear-gradient(180deg,#0a0c0f,#060708);border-top:1px solid #141a20;position:relative;z-index:4}
+.sb{flex:none}
+.sb .val.now{white-space:nowrap}
+.statusbar::before{content:"";position:absolute;top:-1px;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(255,45,45,.35),transparent)}
+.sb{display:flex;align-items:center;gap:11px}
+.sb .lab{font-size:8.5px;font-weight:700;letter-spacing:2px;color:var(--mut2)}
+.sb .val{font-size:12px;font-weight:700;letter-spacing:1.6px;color:#e6ecf2}
+.sb .col{display:flex;flex-direction:column;gap:2px}
+.sb .flag{width:26px;height:18px;border-radius:2px;overflow:hidden;box-shadow:0 0 0 1px #2a323a;flex:none}
+.sb-ico{width:30px;height:30px;border:1px solid #232b33;border-radius:7px;display:grid;place-items:center;background:#0d1115;flex:none}
+.sb-ico svg{width:14px;height:14px;stroke:#ff5b4d;fill:none;stroke-width:1.8}
+.sep{width:1px;height:32px;background:#1c242c;transform:skewX(-16deg)}
+.btn.change{width:auto;min-width:0;flex:none;height:28px;padding:0 16px;font-size:9.5px;letter-spacing:1.6px;margin-left:6px}
+.v3{font-size:9px;font-weight:800;color:#ff5b4d;border:1px solid #4a1c20;border-radius:3px;padding:1px 5px;background:rgba(255,45,45,.08);letter-spacing:.5px}
+.stars{display:flex;gap:3px}
+.stars svg{width:13px;height:13px;fill:#ff3b30;filter:drop-shadow(0 0 4px rgba(255,50,40,.6))}
+.excel{font-size:11px;font-weight:700;letter-spacing:2px;color:var(--green);text-shadow:0 0 10px rgba(52,209,123,.4)}
+.sb-right{margin-left:auto;display:flex;align-items:center;gap:13px}
+.sb-right .lab{font-size:9px;font-weight:700;letter-spacing:2px;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="app">
+<!-- ===== TITLEBAR ===== -->
+<div class="titlebar">
+  <div class="tb"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+  <div class="tb"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.24.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span class="n"></span></div>
+  <div class="tb"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></div>
+  <div class="tb"><span class="win"></span></div>
+  <div class="tb close"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></div>
+</div>
+
+<div class="ws">
+<!-- ===== SIDEBAR ===== -->
+<aside class="sidebar">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 80 92">
+      <defs>
+        <linearGradient id="lgA" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ff3b30"/><stop offset="1" stop-color="#8f0f18"/>
+        </linearGradient>
+      </defs>
+      <path d="M40 3 75 22v48L40 89 5 70V22Z" fill="#0a0507" stroke="#2a0f12" stroke-width="1.5"/>
+      <path d="M40 8 70 25v42L40 83 10 67V25Z" fill="none" stroke="#1a0b0d" stroke-width="1"/>
+      <g>
+        <polygon points="19,24 37,11 33,38" fill="url(#lgA)"/>
+        <polygon points="61,24 43,11 47,38" fill="#8f0f18"/>
+        <polygon points="21,28 40,19 59,28 53,47 40,44 27,47" fill="url(#lgA)"/>
+        <polygon points="27,47 40,44 40,62 29,56" fill="#7a0d15"/>
+        <polygon points="53,47 40,44 40,62 51,56" fill="#a1121c"/>
+        <polygon points="29,56 40,62 51,56 40,74" fill="#ff2b2b"/>
+        <polygon points="29,35 37,37 30,40" fill="#0c0406"/>
+        <polygon points="51,35 43,37 50,40" fill="#0c0406"/>
+      </g>
+    </svg>
+    <h1>INFERNO</h1>
+    <small>GAMING NETWORK</small>
+  </div>
+  <nav class="nav">
+    <a class="active"><svg viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>DASHBOARD</a>
+    <a><svg viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><circle cx="18" cy="5" r="3"/><path d="M12 19h4.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H12"/></svg>GAME ROUTE</a>
+    <a><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg>SERVERS</a>
+    <a><svg viewBox="0 0 24 24"><path d="M6 12h4"/><path d="M8 10v4"/><path d="M15 13h.01"/><path d="M18 11h.01"/><path d="M17.32 5H6.68a4 4 0 0 0-3.98 3.59C2.62 9.42 2 14.46 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.41-1.41A2 2 0 0 1 9.83 16h4.34a2 2 0 0 1 1.41.59L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.54-.62-6.58-.7-7.41A4 4 0 0 0 17.32 5z"/></svg>GAMES</a>
+    <a><svg viewBox="0 0 24 24"><path d="M3 20h18"/><path d="M7 20v-5M11 20V7M15 20v-8M19 20v-3"/></svg>STATISTICS</a>
+    <a><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>PROTECTION</a>
+    <a><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.24.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>SETTINGS</a>
+    <a><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>TOOLBOX</a>
+    <a><svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/></svg>ACCOUNT</a>
+  </nav>
+  <div class="side-card cut">
+    <div class="sc-title">GPN MODE</div>
+    <div class="sc-sub">GAMING PRIORITY</div>
+    <div class="gpn-art">
+      <svg viewBox="0 0 132 104">
+        <circle cx="66" cy="52" r="47" fill="none" stroke="#1d1013" stroke-width="7"/>
+        <circle cx="66" cy="52" r="47" fill="none" stroke="#ff2d2d" stroke-width="2" stroke-dasharray="70 225" stroke-linecap="round" style="filter:drop-shadow(0 0 6px rgba(255,45,45,.7));transform-box:fill-box;transform-origin:center;animation:spin 8s linear infinite"/>
+        <circle cx="66" cy="52" r="38" fill="none" stroke="#33161a" stroke-width="1" stroke-dasharray="4 6"/>
+        <circle cx="66" cy="52" r="30" fill="#120708" stroke="#451a1e" stroke-width="1.5"/>
+        <polygon points="70,30 54,55 63,55 59,74 77,48 67,48" fill="#ff2d2d" style="filter:drop-shadow(0 0 7px rgba(255,45,45,.8))"/>
+      </svg>
+    </div>
+    <button class="btn">SWITCH TO VPN MODE</button>
+  </div>
+  <div class="side-card cut">
+    <div class="sc-title" style="justify-content:space-between;padding:0 4px">NETWORK GUARD <span class="rd"></span></div>
+    <div class="sc-sub live" style="justify-content:flex-start;padding:0 4px">ACTIVE <i></i></div>
+    <div class="guard-art">
+      <svg viewBox="0 0 120 100">
+        <ellipse cx="60" cy="86" rx="48" ry="11" fill="none" stroke="#2a1114" stroke-width="2"/>
+        <ellipse cx="60" cy="86" rx="34" ry="7.5" fill="none" stroke="#5a1a1e" stroke-width="1" stroke-dasharray="5 5"/>
+        <ellipse cx="60" cy="86" rx="48" ry="11" fill="none" stroke="#ff2d2d" stroke-width="1" stroke-dasharray="40 260" style="filter:drop-shadow(0 0 5px rgba(255,45,45,.6))"/>
+        <path d="M60 16 86 27v21c0 17-12 27-26 33-14-6-26-16-26-33V27Z" fill="#150809" stroke="#ff2d2d" stroke-width="2" style="filter:drop-shadow(0 0 9px rgba(255,45,45,.55))"/>
+        <path d="M60 25 78 33v15c0 12-8 20-18 25-10-5-18-13-18-25V33Z" fill="none" stroke="#7a1c20" stroke-width="1.2"/>
+        <path d="M52 50l6 6 11-13" fill="none" stroke="#ff5b4d" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+  </div>
+</aside>
+
+<!-- ===== CENTER ===== -->
+<main class="center">
+  <div class="topcards">
+    <div class="tcard a">
+      <div>
+        <div class="tc-lab">YOUR STATUS</div>
+        <div class="tc-big">PROTECTED</div>
+        <div class="tc-note">Your gaming traffic is secure <i style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#ff3b30;margin-left:4px;box-shadow:0 0 6px rgba(255,45,45,.8)"></i></div>
+      </div>
+      <div class="tc-shield"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 11.5 2.2 2.2L15.5 9"/></svg></div>
+    </div>
+    <div class="tcard b">
+      <svg class="chev" viewBox="0 0 9 26"><path d="M8 1 1 13l7 12"/></svg>
+      <div class="tc-time" style="flex-direction:column;align-items:center;gap:1px">
+        <span class="lab">SESSION TIME</span>
+        <span class="val" id="stimer">00:12:47</span>
+      </div>
+      <svg class="chev" viewBox="0 0 9 26"><path d="M1 1l7 12-7 12"/></svg>
+    </div>
+    <div class="tcard c">
+      <div>
+        <div class="tc-lab">YOUR IP ADDRESS</div>
+        <div class="tc-ip"><span class="val">103.21.244.18</span></div>
+      </div>
+      <button class="btn-hide"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/><path d="m3 3 18 18"/></svg>HIDE IP</button>
+    </div>
+  </div>
+  <!-- ===== HUD ===== -->
+  <div class="hud-wrap">
+    <div class="hud">
+      <svg class="rings" viewBox="0 0 640 640">
+        <defs>
+          <radialGradient id="fadeG" cx="50%" cy="50%" r="50%">
+            <stop offset="0" stop-color="#fff"/><stop offset=".62" stop-color="#fff"/><stop offset=".95" stop-color="#000"/>
+          </radialGradient>
+          <mask id="globeM"><circle cx="320" cy="320" r="272" fill="url(#fadeG)"/></mask>
+          <pattern id="dotp" width="7" height="7" patternUnits="userSpaceOnUse">
+            <circle cx="3.5" cy="3.5" r="1.15" fill="#2c343c"/>
+          </pattern>
+          <linearGradient id="rg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#ff6a55"/><stop offset=".5" stop-color="#ff2d2d"/><stop offset="1" stop-color="#a30f1d"/>
+          </linearGradient>
+          <linearGradient id="flare" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="rgba(255,60,50,0)"/>
+          </linearGradient>
+        </defs>
+
+        <!-- dotted globe backdrop -->
+        <g mask="url(#globeM)" opacity=".55">
+          <circle cx="320" cy="320" r="272" fill="url(#dotp)"/>
+          <ellipse cx="320" cy="320" rx="272" ry="272" fill="none" stroke="#151a1f" stroke-width="1"/>
+          <ellipse cx="320" cy="320" rx="200" ry="272" fill="none" stroke="#151a1f" stroke-width=".8"/>
+          <ellipse cx="320" cy="320" rx="120" ry="272" fill="none" stroke="#151a1f" stroke-width=".8"/>
+          <ellipse cx="320" cy="230" rx="252" ry="70" fill="none" stroke="#13181d" stroke-width=".8"/>
+          <ellipse cx="320" cy="410" rx="252" ry="70" fill="none" stroke="#13181d" stroke-width=".8"/>
+        </g>
+
+        <!-- outer structure rings -->
+        <circle cx="320" cy="320" r="308" fill="none" stroke="#1b2228" stroke-width="1"/>
+        <circle cx="320" cy="320" r="297" fill="none" stroke="#171d22" stroke-width="1"/>
+        <circle cx="320" cy="320" r="286" fill="none" stroke="#0e1317" stroke-width="16"/>
+        <circle cx="320" cy="320" r="294" fill="none" stroke="#0b0f12" stroke-width="3"/>
+
+        <!-- rotating tick ring -->
+        <g class="spin-s">
+          <circle cx="320" cy="320" r="286" fill="none" stroke="#ff2d2d" stroke-width="16" stroke-dasharray="1.6 9" opacity=".5"/>
+        </g>
+        <g class="spin-r">
+          <circle cx="320" cy="320" r="286" fill="none" stroke="url(#rg)" stroke-width="4.5" stroke-dasharray="150 90 26 240 60 300" stroke-linecap="round" style="filter:drop-shadow(0 0 6px rgba(255,45,45,.8))"/>
+        </g>
+
+        <!-- cardinal markers -->
+        <g fill="#0b0f12" stroke="#ff3b30" stroke-width="1.6">
+          <rect x="313" y="26" width="14" height="14"/>
+          <rect x="313" y="600" width="14" height="14"/>
+          <rect x="26" y="313" width="14" height="14"/>
+          <rect x="600" y="313" width="14" height="14"/>
+        </g>
+
+        <!-- diagonal red segments -->
+        <g stroke="#ff5b4d" stroke-width="9" fill="none" stroke-linecap="butt" opacity=".9" style="filter:drop-shadow(0 0 8px rgba(255,45,45,.6))">
+          <path d="M 508.6 131.4 A 268 268 0 0 1 545.2 168.1"/>
+          <path d="M 131.4 508.6 A 268 268 0 0 1 94.8 471.9"/>
+          <path d="M 508.6 508.6 A 268 268 0 0 1 471.9 545.2"/>
+          <path d="M 131.4 131.4 A 268 268 0 0 1 168.1 94.8"/>
+        </g>
+
+        <!-- mid rings -->
+        <circle cx="320" cy="320" r="254" fill="none" stroke="#1d242a" stroke-width="26"/>
+        <circle cx="320" cy="320" r="254" fill="none" stroke="#2b171a" stroke-width="26" stroke-dasharray="8 10" opacity=".9"/>
+        <g class="spin-s">
+          <circle cx="320" cy="320" r="254" fill="none" stroke="#ff2d2d" stroke-width="26" stroke-dasharray="34 220 10 330 18 260" stroke-linecap="butt" opacity=".8" style="filter:drop-shadow(0 0 7px rgba(255,45,45,.8))"/>
+        </g>
+        <circle cx="320" cy="320" r="240" fill="none" stroke="#20282e" stroke-width="1.2"/>
+        <g class="spin-r">
+          <circle cx="320" cy="320" r="230" fill="none" stroke="#ff2d2d" stroke-width="3" stroke-dasharray="60 30 6 30" opacity=".85" style="filter:drop-shadow(0 0 5px rgba(255,45,45,.7))"/>
+        </g>
+        <circle cx="320" cy="320" r="216" fill="none" stroke="#141a1f" stroke-width="10"/>
+        <g class="spin-s">
+          <circle cx="320" cy="320" r="216" fill="none" stroke="#ff3b30" stroke-width="1.4" stroke-dasharray="4 7" opacity=".7"/>
+        </g>
+        <circle cx="320" cy="320" r="204" fill="none" stroke="#232b32" stroke-width="1"/>
+
+        <!-- inner core -->
+        <circle cx="320" cy="320" r="186" fill="#070809" stroke="#1e262c" stroke-width="1.5"/>
+        <circle cx="320" cy="320" r="186" fill="none" stroke="#ff2d2d" stroke-width="1" opacity=".16"/>
+        <circle cx="320" cy="320" r="178" fill="none" stroke="#10151a" stroke-width="1"/>
+
+        <!-- top & bottom flares -->
+        <rect x="318.6" y="2" width="2.8" height="66" fill="url(#flare)" style="filter:drop-shadow(0 0 6px rgba(255,80,70,.9))"/>
+        <circle cx="320" cy="46" r="3.4" fill="#fff" style="filter:drop-shadow(0 0 8px #ff5040)"/>
+        <rect x="318.6" y="572" width="2.8" height="66" fill="url(#flare)" transform="rotate(180 320 606)" style="filter:drop-shadow(0 0 6px rgba(255,80,70,.9))"/>
+        <circle cx="320" cy="594" r="3.4" fill="#fff" style="filter:drop-shadow(0 0 8px #ff5040)"/>
+      </svg>
+      <!-- center UI -->
+      <div class="hud-ui">
+        <div class="connected">CONNECTED</div>
+        <div class="loc">
+          <span class="flag">
+            <svg viewBox="0 0 22 15"><rect width="22" height="7.5" fill="#ef2d3c"/><rect y="7.5" width="22" height="7.5" fill="#fff"/><circle cx="6.1" cy="3.75" r="2.7" fill="#fff"/><circle cx="7.1" cy="3.75" r="2.3" fill="#ef2d3c"/><g fill="#fff"><circle cx="8.6" cy="2.2" r=".42"/><circle cx="9.7" cy="3.4" r=".42"/><circle cx="8.6" cy="4.6" r=".42"/><circle cx="10.3" cy="2.5" r=".42"/><circle cx="10.3" cy="4.3" r=".42"/></g></svg>
+          </span>
+          <span class="col"><span class="city">SINGAPORE</span><span class="edge">GAMING EDGE</span></span>
+        </div>
+        <div class="htime" id="htimer">00:12:47</div>
+        <button class="btn-disc"><i></i>DISCONNECT</button>
+      </div>
+
+      <!-- connection links -->
+      <div class="link l"></div>
+      <div class="link r"></div>
+
+      <!-- hexagon nodes -->
+      <div class="hexnode left">
+        <div class="hex">
+          <svg viewBox="0 0 104 112">
+            <path d="M52 4 97 29v54L52 108 7 83V29Z" fill="#0b0709" stroke="#ff2d2d" stroke-width="1.7"/>
+            <path d="M52 12 89 33v46L52 100 15 79V33Z" fill="none" stroke="#4a161a" stroke-width="1"/>
+            <path d="M40 4 52 4 64 4" stroke="#ff6a55" stroke-width="3"/>
+            <path d="M40 108 52 108 64 108" stroke="#ff6a55" stroke-width="3"/>
+          </svg>
+          <div class="ico"><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="12.5" rx="1.5"/><path d="M8.5 20.5h7M12 16.5v4"/></svg></div>
+        </div>
+        <div class="cap">YOU</div>
+      </div>
+      <div class="hexnode right">
+        <div class="hex">
+          <svg viewBox="0 0 104 112">
+            <path d="M52 4 97 29v54L52 108 7 83V29Z" fill="#0b0709" stroke="#ff2d2d" stroke-width="1.7"/>
+            <path d="M52 12 89 33v46L52 100 15 79V33Z" fill="none" stroke="#4a161a" stroke-width="1"/>
+            <path d="M40 4 52 4 64 4" stroke="#ff6a55" stroke-width="3"/>
+            <path d="M40 108 52 108 64 108" stroke="#ff6a55" stroke-width="3"/>
+          </svg>
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M6 12h4"/><path d="M8 10v4"/><path d="M15 13h.01"/><path d="M18 11h.01"/><path d="M17.32 5H6.68a4 4 0 0 0-3.98 3.59C2.62 9.42 2 14.46 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.41-1.41A2 2 0 0 1 9.83 16h4.34a2 2 0 0 1 1.41.59L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.54-.62-6.58-.7-7.41A4 4 0 0 0 17.32 5z"/></svg></div>
+        </div>
+        <div class="cap">GAME SERVER</div>
+      </div>
+
+    </div>
+  </div>
+  <!-- ===== BOTTOM PANELS ===== -->
+  <div class="panels">
+    <!-- AI banner -->
+    <div class="ai">
+      <svg class="brain" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M9 2.5V5M15 2.5V5M9 19v2.5M15 19v2.5M2.5 9H5M2.5 15H5M19 9h2.5M19 15h2.5"/></svg>
+      <span class="col"><span class="t1">AI SMART ROUTE</span><span class="t2">OPTIMAL PATH ACTIVE</span></span>
+      <span class="bars"><i style="height:7px"></i><i style="height:12px"></i><i style="height:17px"></i><i style="height:22px"></i></span>
+    </div>
+    <section class="panel">
+      <div class="p-head"><span class="p-title">GAME PROFILES</span><span class="icon-btn">+</span></div>
+      <div class="game">
+        <span class="gicon"><svg viewBox="0 0 34 34"><rect width="34" height="34" fill="#20262c"/><text x="17" y="22" text-anchor="middle" font-family="Arial,sans-serif" font-size="10.5" font-weight="bold" fill="#e8edf2">MW</text><rect y="30" width="34" height="4" fill="#c40f1f"/></svg></span>
+        <span class="gname">CALL OF DUTY<br>WARZONE</span>
+        <span class="gstat">OPTIMAL <i></i></span>
+      </div>
+      <div class="game">
+        <span class="gicon"><svg viewBox="0 0 34 34"><rect width="34" height="34" fill="#160b0d"/><polygon points="17,5 29,27 23.5,27 17,13.5 10.5,27 5,27" fill="#d8302f"/><rect x="14.6" y="20" width="4.8" height="3" fill="#160b0d"/></svg></span>
+        <span class="gname">APEX LEGENDS</span>
+        <span class="gstat">OPTIMAL <i></i></span>
+      </div>
+      <div class="game">
+        <span class="gicon"><svg viewBox="0 0 34 34"><rect width="34" height="34" fill="#1b0d10"/><path d="M6 9l11 16L28 9h-4.6L17 18.6 10.6 9Z" fill="#ff4655"/><path d="M28 9l-4 5.4V9Z" fill="#ff8a93" opacity=".7"/></svg></span>
+        <span class="gname">VALORANT</span>
+        <span class="gstat">OPTIMAL <i></i></span>
+      </div>
+      <div class="game">
+        <span class="gicon"><svg viewBox="0 0 34 34"><rect width="34" height="34" fill="#17130a"/><circle cx="17" cy="16" r="9" fill="#d9a13b"/><rect x="7" y="14.6" width="20" height="3.4" fill="#17130a"/><rect x="12" y="25" width="10" height="3" rx="1" fill="#8a6420"/></svg></span>
+        <span class="gname">PUBG BATTLEGROUNDS</span>
+        <span class="gstat">OPTIMAL <i></i></span>
+      </div>
+      <div class="game">
+        <span class="gicon"><svg viewBox="0 0 34 34"><rect width="34" height="34" fill="#22262b"/><text x="17" y="22" text-anchor="middle" font-family="Arial,sans-serif" font-size="9.5" font-weight="bold" fill="#b9c2cc" letter-spacing="1">EFT</text><rect width="34" height="3" fill="#3a4149"/></svg></span>
+        <span class="gname">ESCAPE FROM TARKOV</span>
+        <span class="gstat">OPTIMAL <i></i></span>
+      </div>
+      <button class="btn ghost">MANAGE PROFILES</button>
+    </section>
+
+    <section class="panel">
+      <div class="p-head"><span class="p-title">LIVE TRAFFIC</span><span class="dd">ALL TRAFFIC <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span></div>
+      <div class="chart-wrap">
+        <div class="ylabs"><span>100<b>Mbps</b></span><span>75<b>Mbps</b></span><span>50<b>Mbps</b></span><span>25<b>Mbps</b></span><span>0<b>Mbps</b></span></div>
+        <svg viewBox="0 0 560 148" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="rf" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="rgba(255,45,45,.5)"/><stop offset="1" stop-color="rgba(255,45,45,0)"/>
+            </linearGradient>
+            <linearGradient id="gf" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="rgba(154,165,174,.28)"/><stop offset="1" stop-color="rgba(154,165,174,0)"/>
+            </linearGradient>
+          </defs>
+          <g stroke="#12181d" stroke-width="1">
+            <line x1="0" y1="29" x2="560" y2="29"/><line x1="0" y1="59" x2="560" y2="59"/>
+            <line x1="0" y1="88" x2="560" y2="88"/><line x1="0" y1="118" x2="560" y2="118"/>
+          </g>
+          <path d="M0 96 C 30 88, 55 102, 85 94 S 145 66, 185 76 S 245 100, 285 88 S 335 58, 375 66 S 435 96, 475 78 S 535 90, 560 82 L560 148 0 148 Z" fill="url(#gf)"/>
+          <path d="M0 96 C 30 88, 55 102, 85 94 S 145 66, 185 76 S 245 100, 285 88 S 335 58, 375 66 S 435 96, 475 78 S 535 90, 560 82" fill="none" stroke="#8b959e" stroke-width="1.2" opacity=".8"/>
+          <path d="M0 112 C 25 106, 50 118, 80 110 S 140 92, 175 100 S 235 116, 275 102 S 325 34, 365 44 S 415 92, 455 66 S 525 100, 560 92 L560 148 0 148 Z" fill="url(#rf)"/>
+          <path d="M0 112 C 25 106, 50 118, 80 110 S 140 92, 175 100 S 235 116, 275 102 S 325 34, 365 44 S 415 92, 455 66 S 525 100, 560 92" fill="none" stroke="#ff3b30" stroke-width="1.6" style="filter:drop-shadow(0 0 4px rgba(255,45,45,.6))"/>
+        </svg>
+      </div>
+      <div class="legend"><span class="dl"><i></i>DOWNLOAD</span><span class="ul"><i></i>UPLOAD</span></div>
+      <div class="gauges">
+        <div class="gauge">
+          <svg viewBox="0 0 148 148">
+            <circle cx="74" cy="74" r="60" fill="none" stroke="#181f25" stroke-width="10"/>
+            <circle cx="74" cy="74" r="60" fill="none" stroke="#ff2d2d" stroke-width="10" stroke-linecap="round" stroke-dasharray="282.7 94.3" transform="rotate(-90 74 74)" style="filter:drop-shadow(0 0 6px rgba(255,45,45,.7))"/>
+            <circle cx="74" cy="74" r="60" fill="none" stroke="#ff6a55" stroke-width="2" stroke-dasharray="2 6.56" transform="rotate(-90 74 74)" opacity=".8"/>
+          </svg>
+          <div class="gv"><span class="lab">DOWNLOAD</span><span class="num">92.7</span><span class="unit">Mbps</span></div>
+        </div>
+        <div class="gauge">
+          <svg viewBox="0 0 148 148">
+            <circle cx="74" cy="74" r="60" fill="none" stroke="#181f25" stroke-width="10"/>
+            <circle cx="74" cy="74" r="60" fill="none" stroke="#9aa5ae" stroke-width="10" stroke-linecap="round" stroke-dasharray="147 230" transform="rotate(-90 74 74)" style="filter:drop-shadow(0 0 5px rgba(160,170,180,.4))"/>
+            <circle cx="74" cy="74" r="60" fill="none" stroke="#3a434c" stroke-width="2" stroke-dasharray="2 6.56" transform="rotate(-90 74 74)" opacity=".9"/>
+          </svg>
+          <div class="gv"><span class="lab">UPLOAD</span><span class="num">36.4</span><span class="unit">Mbps</span></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+<!-- ===== RIGHT BAR ===== -->
+<aside class="rightbar">
+  <section class="rpanel">
+    <div class="p-head"><span class="p-title">CONNECTION STATS</span><span class="live-tag">LIVE <i></i></span></div>
+    <div class="stat-row">
+      <span class="stat-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="1.6" fill="#ff5b4d" stroke="none"/></svg></span>
+      <span class="stat-mid"><span class="stat-lab">PING</span><span class="stat-val"><b>18</b><span>ms</span></span></span>
+      <span class="spark"><svg viewBox="0 0 118 34" preserveAspectRatio="none"><path d="M0 24 8 20 14 26 22 13 30 21 38 17 46 26 54 11 62 19 70 24 78 9 86 21 94 15 102 24 110 17 118 21" fill="none" stroke="#ff3b30" stroke-width="1.6"/><path d="M0 24 8 20 14 26 22 13 30 21 38 17 46 26 54 11 62 19 70 24 78 9 86 21 94 15 102 24 110 17 118 21 L118 34 0 34 Z" fill="rgba(255,45,45,.12)" stroke="none"/></svg></span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-ico"><svg viewBox="0 0 24 24"><path d="M4.5 19a9 9 0 1 1 15 0"/><path d="M12 14l4.5-4.5"/><circle cx="12" cy="14" r="1.5" fill="#ff5b4d" stroke="none"/></svg></span>
+      <span class="stat-mid"><span class="stat-lab">JITTER</span><span class="stat-val"><b>2</b><span>ms</span></span></span>
+      <span class="spark"><svg viewBox="0 0 118 34" preserveAspectRatio="none"><path d="M0 26 10 22 18 27 28 18 36 24 46 20 56 27 66 16 74 22 84 25 94 14 104 22 118 18" fill="none" stroke="#ff3b30" stroke-width="1.6"/><path d="M0 26 10 22 18 27 28 18 36 24 46 20 56 27 66 16 74 22 84 25 94 14 104 22 118 18 L118 34 0 34 Z" fill="rgba(255,45,45,.12)" stroke="none"/></svg></span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-ico"><svg viewBox="0 0 24 24"><path d="M19 5 5 19"/><circle cx="7" cy="7" r="2.6"/><circle cx="17" cy="17" r="2.6"/></svg></span>
+      <span class="stat-mid"><span class="stat-lab">PACKET LOSS</span><span class="stat-val"><b>0.0</b><span>%</span></span></span>
+      <span class="spark"><svg viewBox="0 0 118 34" preserveAspectRatio="none"><path d="M0 27 12 24 20 28 32 21 42 26 54 22 64 28 76 19 86 25 98 21 108 26 118 22" fill="none" stroke="#ff3b30" stroke-width="1.6"/><path d="M0 27 12 24 20 28 32 21 42 26 54 22 64 28 76 19 86 25 98 21 108 26 118 22 L118 34 0 34 Z" fill="rgba(255,45,45,.12)" stroke="none"/></svg></span>
+    </div>
+  </section>
+  <section class="rpanel">
+    <div class="p-head"><span class="p-title">ROUTE MAP</span><span class="live-tag">LIVE <i></i></span></div>
+    <div class="mapbox">
+      <svg viewBox="0 0 340 150">
+        <defs>
+          <pattern id="mdot" width="5.5" height="5.5" patternUnits="userSpaceOnUse">
+            <circle cx="2.7" cy="2.7" r="1" fill="#39424b"/>
+          </pattern>
+          <radialGradient id="nodeG"><stop offset="0" stop-color="#ff6a55"/><stop offset="1" stop-color="rgba(255,45,45,0)"/></radialGradient>
+        </defs>
+        <g stroke="#10151a" stroke-width=".6">
+          <line x1="42" y1="0" x2="42" y2="150"/><line x1="85" y1="0" x2="85" y2="150"/>
+          <line x1="128" y1="0" x2="128" y2="150"/><line x1="170" y1="0" x2="170" y2="150"/>
+          <line x1="212" y1="0" x2="212" y2="150"/><line x1="255" y1="0" x2="255" y2="150"/>
+          <line x1="298" y1="0" x2="298" y2="150"/>
+          <line x1="0" y1="38" x2="340" y2="38"/><line x1="0" y1="75" x2="340" y2="75"/><line x1="0" y1="112" x2="340" y2="112"/>
+        </g>
+        <g fill="url(#mdot)">
+          <path d="M18 42 38 28 62 24 82 26 92 34 96 44 86 52 74 60 66 74 58 86 50 78 40 66 28 58Z"/>
+          <path d="M64 92 82 88 92 96 94 112 86 132 74 140 64 128 58 108Z"/>
+          <path d="M150 34 168 28 184 30 190 40 178 48 162 50 150 44Z"/>
+          <path d="M148 56 172 52 186 58 192 74 186 96 174 112 160 116 150 100 144 76Z"/>
+          <path d="M196 30 232 20 268 22 292 32 296 46 284 58 262 66 238 70 218 62 204 50Z"/>
+          <path d="M238 78 262 74 276 80 272 90 250 94 238 88Z"/>
+          <path d="M268 104 296 100 306 110 302 126 284 134 268 126 262 114Z"/>
+        </g>
+        <g fill="none" stroke="#ff3b30" stroke-width="1.3" opacity=".9" style="filter:drop-shadow(0 0 3px rgba(255,45,45,.7))">
+          <path d="M44 58 Q 96 22 158 40"/>
+          <path d="M158 40 Q 210 56 252 84"/>
+          <path d="M252 84 Q 276 104 290 118"/>
+        </g>
+        <g>
+          <circle cx="44" cy="58" r="8" fill="url(#nodeG)"/><circle cx="44" cy="58" r="2.6" fill="#ff5040"/><circle cx="44" cy="58" r="1" fill="#fff"/>
+          <circle cx="158" cy="40" r="8" fill="url(#nodeG)"/><circle cx="158" cy="40" r="2.6" fill="#ff5040"/><circle cx="158" cy="40" r="1" fill="#fff"/>
+          <circle cx="252" cy="84" r="9" fill="url(#nodeG)"/><circle cx="252" cy="84" r="3" fill="#ff5040"/><circle cx="252" cy="84" r="1.2" fill="#fff"/>
+          <circle cx="290" cy="118" r="7" fill="url(#nodeG)"/><circle cx="290" cy="118" r="2.4" fill="#ff5040"/><circle cx="290" cy="118" r="1" fill="#fff"/>
+        </g>
+      </svg>
+    </div>
+    <div class="route-legend">
+      <span class="rl-node"><span class="flg"><svg viewBox="0 0 22 15"><rect width="22" height="7.5" fill="#ef2d3c"/><rect y="7.5" width="22" height="7.5" fill="#fff"/><circle cx="6.1" cy="3.75" r="2.7" fill="#fff"/><circle cx="7.1" cy="3.75" r="2.3" fill="#ef2d3c"/></svg></span><b>SG</b></span>
+      <span class="rl-arr">⟶</span>
+      <span class="rl-node"><svg class="ric" viewBox="0 0 24 24"><path d="M12 21s-7-5.6-7-11a7 7 0 0 1 14 0c0 5.4-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span class="col"><b>FRANKFURT</b><small>GERMANY</small></span></span>
+      <span class="rl-arr">⟶</span>
+      <span class="rl-node"><svg class="ric" viewBox="0 0 24 24"><path d="M6 12h4M8 10v4M15 13h.01M18 11h.01"/><path d="M17.32 5H6.68a4 4 0 0 0-3.98 3.59C2.62 9.42 2 14.46 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.41-1.41A2 2 0 0 1 9.83 16h4.34a2 2 0 0 1 1.41.59L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.54-.62-6.58-.7-7.41A4 4 0 0 0 17.32 5z"/></svg><span class="col"><b>GAME SERVER</b></span></span>
+    </div>
+    <div class="map-foot"><span class="l">OPTIMAL ROUTE</span><span class="r">18 MS <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span></div>
+  </section>
+  <section class="rpanel grow">
+    <div class="p-head"><span class="p-title">DEFENSE MATRIX</span><span class="icon-btn" style="font-size:12px">⤢</span></div>
+    <div class="defense">
+      <div class="def-art">
+        <svg viewBox="0 0 152 152">
+          <defs>
+            <pattern id="hexp" width="13" height="11.3" patternUnits="userSpaceOnUse">
+              <path d="M3.25 0h6.5L13 5.65l-3.25 5.65h-6.5L0 5.65Z" fill="none" stroke="#33161a" stroke-width=".8"/>
+            </pattern>
+            <radialGradient id="defG" cx="50%" cy="50%" r="50%">
+              <stop offset="0" stop-color="rgba(255,45,45,.16)"/><stop offset=".7" stop-color="rgba(255,45,45,.05)"/><stop offset="1" stop-color="transparent"/>
+            </radialGradient>
+          </defs>
+          <circle cx="76" cy="76" r="70" fill="url(#defG)"/>
+          <circle cx="76" cy="76" r="62" fill="url(#hexp)" stroke="#3a1215" stroke-width="1.5"/>
+          <circle cx="76" cy="76" r="62" fill="none" stroke="#ff2d2d" stroke-width="2" stroke-dasharray="90 300" stroke-linecap="round" style="filter:drop-shadow(0 0 6px rgba(255,45,45,.8));transform-box:fill-box;transform-origin:center;animation:spin 10s linear infinite"/>
+          <circle cx="76" cy="76" r="70" fill="none" stroke="#241016" stroke-width="1" stroke-dasharray="3 6"/>
+          <circle cx="76" cy="76" r="46" fill="#120708" stroke="#451a1e" stroke-width="1"/>
+          <path d="M76 38 102 50v20c0 18-12 29-26 36-14-7-26-18-26-36V50Z" fill="#150809" stroke="#ff2d2d" stroke-width="2.2" style="filter:drop-shadow(0 0 10px rgba(255,45,45,.6))"/>
+          <path d="M76 47 94 55v14c0 13-9 21-18 26-9-5-18-13-18-26V55Z" fill="none" stroke="#7a1c20" stroke-width="1.2"/>
+          <path d="M67 71l6.5 6.5L86 62" fill="none" stroke="#ff5b4d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="def-list">
+        <div class="def-item"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 11.5 2.2 2.2L15.5 9"/></svg><span class="col"><span class="n">KILL SWITCH</span><span class="s">ACTIVE</span></span></div>
+        <div class="def-item"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 11.5 2.2 2.2L15.5 9"/></svg><span class="col"><span class="n">DDoS PROTECTION</span><span class="s">ACTIVE</span></span></div>
+        <div class="def-item"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 11.5 2.2 2.2L15.5 9"/></svg><span class="col"><span class="n">IP LEAK PROTECTION</span><span class="s">ACTIVE</span></span></div>
+        <div class="def-item"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 11.5 2.2 2.2L15.5 9"/></svg><span class="col"><span class="n">DNS LEAK PROTECTION</span><span class="s">ACTIVE</span></span></div>
+        <div class="def-item"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 11.5 2.2 2.2L15.5 9"/></svg><span class="col"><span class="n">TRAFFIC ENCRYPTION</span><span class="s">AES-256</span></span></div>
+      </div>
+    </div>
+  </section>
+</aside>
+</div>
+
+<!-- ===== STATUS BAR ===== -->
+<footer class="statusbar">
+  <div class="sb">
+    <span class="flag"><svg viewBox="0 0 22 15"><rect width="22" height="7.5" fill="#ef2d3c"/><rect y="7.5" width="22" height="7.5" fill="#fff"/><circle cx="6.1" cy="3.75" r="2.7" fill="#fff"/><circle cx="7.1" cy="3.75" r="2.3" fill="#ef2d3c"/><g fill="#fff"><circle cx="8.6" cy="2.2" r=".42"/><circle cx="9.7" cy="3.4" r=".42"/><circle cx="8.6" cy="4.6" r=".42"/><circle cx="10.3" cy="2.5" r=".42"/><circle cx="10.3" cy="4.3" r=".42"/></g></svg></span>
+    <span class="col"><span class="lab">CURRENT SERVER</span><span class="val now">SINGAPORE - SG 01</span></span>
+  </div>
+  <button class="btn change">CHANGE</button>
+  <span class="sep"></span>
+  <div class="sb">
+    <span class="col"><span class="lab">PROTOCOL</span><span class="val now">INFERNO PROTOCOL</span></span>
+    <span class="v3">v3</span>
+  </div>
+  <span class="sep"></span>
+  <div class="sb">
+    <span class="sb-ico"><svg viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+    <span class="col"><span class="lab">ENCRYPTION</span><span class="val now">AES-256-GCM</span></span>
+  </div>
+  <div class="sb-right">
+    <span class="lab">ROUTE QUALITY</span>
+    <span class="stars">
+      <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z"/></svg>
+      <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z"/></svg>
+      <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z"/></svg>
+      <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z"/></svg>
+      <svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z"/></svg>
+    </span>
+    <span class="excel">EXCELLENT</span>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var s=12*60+47;
+  function f(n){return (n<10?'0':'')+n}
+  function tick(){
+    s++;
+    var t=f(Math.floor(s/3600))+':'+f(Math.floor(s%3600/60))+':'+f(s%60);
+    var a=document.getElementById('stimer'),b=document.getElementById('htimer');
+    if(a)a.textContent=t;
+    if(b)b.textContent=t;
+  }
+  setInterval(tick,1000);
+})();
+</script>
+</div>
+</body>
+</html>
+<script>window.addEventListener("load",()=>{setTimeout(()=>{const out=[];document.querySelectorAll(".topcards,.tcard,.hud-wrap,.center").forEach(e=>{const r=e.getBoundingClientRect();const cs=getComputedStyle(e);out.push(e.className+" | rect:"+Math.round(r.x)+","+Math.round(r.y)+","+Math.round(r.width)+"x"+Math.round(r.height)+" | disp:"+cs.display+" vis:"+cs.visibility+" op:"+cs.opacity+" z:"+cs.zIndex+" pos:"+cs.position)});const pre=document.createElement("pre");pre.id="dbg";pre.textContent=out.join(" || ");document.body.appendChild(pre);},800)});</script>

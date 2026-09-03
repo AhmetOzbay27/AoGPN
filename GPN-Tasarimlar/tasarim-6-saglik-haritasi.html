@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tasarım 6 · Sağlık Haritası — AO GPN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Orbitron:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #070A10;
+    --good: #34D399;
+    --mid: #FBBF24;
+    --bad: #F87171;
+    --violet: #8B5CF6;
+    --cyan: #22D3EE;
+    --text: #E2E8F0;
+    --dim: #8A94A6;
+    --faint: #5B6472;
+    --card: rgba(255,255,255,.025);
+    --border: rgba(255,255,255,.07);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(900px 500px at 90% -10%, rgba(52,211,153,.07), transparent 55%),
+      radial-gradient(800px 500px at -5% 110%, rgba(139,92,246,.10), transparent 55%),
+      var(--bg);
+    min-height: 100vh; padding: 22px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mockup-ribbon {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    background: rgba(7,10,16,.85); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    font-size: 10.5px; letter-spacing: .14em; font-weight: 600; color: var(--dim);
+    padding: 7px 16px;
+  }
+  .mockup-ribbon b { color: var(--good); font-family: 'Orbitron', monospace; }
+  .mockup-ribbon a { color: var(--violet); text-decoration: none; }
+  .shell {
+    width: 100%; max-width: 1240px;
+    background: rgba(10,14,22,.8);
+    border: 1px solid var(--border);
+    border-radius: 18px; overflow: hidden;
+    box-shadow: 0 30px 90px rgba(0,0,0,.55);
+  }
+
+  .head { display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.015); }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-logo { width: 32px; height: 32px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(145deg, var(--good), var(--cyan)); box-shadow: 0 0 16px rgba(52,211,153,.3); }
+  .brand-name { font-family: 'Rajdhani', sans-serif; font-size: 17px; font-weight: 700; letter-spacing: .1em; }
+  .brand-name em { font-style: normal; color: var(--good); }
+  .head-right { margin-left: auto; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; padding: 6px 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: #C7CDD9; }
+  .pill .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .pill.on { border-color: rgba(52,211,153,.35); background: rgba(52,211,153,.08); color: #6EE7B7; }
+  .pill.on .dot { background: var(--good); box-shadow: 0 0 8px var(--good); animation: blink 2s infinite; }
+  .pill .mono { font-family: 'Orbitron', monospace; font-size: 10.5px; }
+  .pill.stable { border-color: rgba(251,191,36,.35); background: rgba(251,191,36,.07); color: #FCD34D; }
+  .pill.stable .dot { background: var(--mid); box-shadow: 0 0 8px var(--mid); }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  .body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 13px; padding: 14px 16px; min-width: 0; }
+  .panel-ttl { display: flex; align-items: center; gap: 8px; font-size: 9.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--dim); font-weight: 700; margin-bottom: 12px; }
+  .panel-ttl .right { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 9px; letter-spacing: .05em; text-transform: none; font-weight: 500; }
+
+  /* ---- Row A: monitored paths ---- */
+  .paths { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .path {
+    border-radius: 13px; border: 1px solid var(--border);
+    background: linear-gradient(160deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+    padding: 13px 14px; position: relative; overflow: hidden;
+  }
+  .path::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+  .path.good::before { background: var(--good); }
+  .path.warn::before { background: var(--mid); }
+  .path.bad::before { background: var(--bad); }
+  .path-top { display: flex; align-items: center; gap: 10px; }
+  .path .pi { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-family: 'Rajdhani', sans-serif; font-size: 17px; font-weight: 700; background: rgba(255,255,255,.05); border: 1px solid var(--border); flex-shrink: 0; }
+  .path .pn { font-size: 12.5px; font-weight: 700; }
+  .path .ps { font-size: 9.5px; color: var(--faint); margin-top: 1px; }
+  .path .pst { margin-left: auto; font-size: 8.5px; font-weight: 700; letter-spacing: .1em; padding: 3px 8px; border-radius: 999px; flex-shrink: 0; }
+  .path.good .pst { color: #6EE7B7; background: rgba(52,211,153,.1); border: 1px solid rgba(52,211,153,.3); }
+  .path.warn .pst { color: #FCD34D; background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.3); }
+  .path.bad .pst { color: #FCA5A5; background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.3); }
+  .path-mid { margin-top: 11px; display: flex; align-items: center; gap: 8px; }
+  .path-mid .pp { font-family: 'Orbitron', monospace; font-size: 11px; }
+  .path-mid .pp .b { color: var(--bad); text-decoration: line-through; text-decoration-color: rgba(248,113,113,.45); }
+  .path-mid .pp .a { color: #6EE7B7; font-weight: 700; font-size: 13px; }
+  .path-mid .pp .a.muted { color: var(--dim); }
+  .path-mid .bar { flex: 1; height: 4px; border-radius: 4px; background: rgba(255,255,255,.06); overflow: hidden; }
+  .path-mid .bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--good), var(--cyan)); }
+  .path-stats { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .pchip { font-size: 9px; font-weight: 600; color: var(--dim); padding: 3.5px 8px; border-radius: 7px; background: rgba(255,255,255,.04); border: 1px solid var(--border); display: inline-flex; align-items: center; gap: 4px; }
+  .pchip b { font-family: 'Orbitron', monospace; font-weight: 600; }
+  .pchip.ok { color: #6EE7B7; border-color: rgba(52,211,153,.28); background: rgba(52,211,153,.06); }
+  .pchip.warn { color: #FCD34D; border-color: rgba(251,191,36,.28); background: rgba(251,191,36,.06); }
+  .pchip.bad { color: #FCA5A5; border-color: rgba(248,113,113,.28); background: rgba(248,113,113,.06); }
+
+  /* ---- Row B: heatmap + failover ---- */
+  .mid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; }
+  .legend { display: flex; gap: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; color: var(--dim); }
+  .legend i { width: 9px; height: 9px; border-radius: 2.5px; }
+  .legend .lg i { background: var(--good); }
+  .legend .la i { background: var(--mid); }
+  .legend .lr i { background: var(--bad); }
+
+  .hm { display: flex; flex-direction: column; gap: 5px; }
+  .hm-row { display: flex; align-items: center; gap: 9px; }
+  .hm-lbl { width: 78px; flex-shrink: 0; display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600; }
+  .hm-lbl .di { width: 18px; height: 18px; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-family: 'Rajdhani', sans-serif; font-size: 9.5px; font-weight: 700; background: rgba(255,255,255,.05); border: 1px solid var(--border); }
+  .hm-cells { flex: 1; display: grid; grid-template-columns: repeat(60, 1fr); gap: 2.5px; }
+  .hm-cells span { height: 17px; border-radius: 2.5px; background: rgba(255,255,255,.05); }
+  .hm-cells span.g { background: var(--good); opacity: .85; }
+  .hm-cells span.a { background: var(--mid); opacity: .85; }
+  .hm-cells span.r { background: var(--bad); opacity: .9; }
+  .hm-cells span.now { outline: 1.5px solid #fff; outline-offset: -1px; }
+  .hm-x { margin-top: 7px; margin-left: 87px; display: flex; justify-content: space-between; font-family: 'Orbitron', monospace; font-size: 8.5px; color: var(--faint); }
+  .hm-note { margin-top: 10px; font-size: 9.5px; color: var(--faint); display: flex; align-items: center; gap: 6px; }
+  .hm-note .ex { display: inline-block; width: 10px; height: 10px; border-radius: 2.5px; background: var(--bad); }
+  .hm-note .ex.a { background: var(--mid); }
+
+  /* Failover center */
+  .fo-active {
+    display: flex; align-items: center; gap: 12px;
+    border-radius: 11px; padding: 12px 13px;
+    border: 1px solid rgba(52,211,153,.3); background: rgba(52,211,153,.05);
+  }
+  .fo-active .fo-flag { font-size: 22px; }
+  .fo-active .fo-nm { font-size: 13.5px; font-weight: 700; }
+  .fo-active .fo-sub { font-size: 10px; color: var(--dim); margin-top: 1px; }
+  .fo-active .fo-ping { margin-left: auto; text-align: right; }
+  .fo-active .fo-ping b { font-family: 'Orbitron', monospace; font-size: 17px; color: #6EE7B7; }
+  .fo-active .fo-ping span { display: block; font-size: 8.5px; color: var(--faint); letter-spacing: .1em; }
+  .fo-state { display: inline-flex; align-items: center; gap: 5px; font-size: 8.5px; font-weight: 700; letter-spacing: .1em; padding: 2.5px 8px; border-radius: 999px; color: #6EE7B7; background: rgba(52,211,153,.1); border: 1px solid rgba(52,211,153,.3); margin-top: 4px; }
+
+  .fo-tbl { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  .fo-tbl th { font-size: 8px; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); font-weight: 700; }
+  .fo-tbl td { padding: 8px 6px; font-size: 10.5px; border-bottom: 1px solid rgba(255,255,255,.04); }
+  .fo-tbl tr:last-child td { border-bottom: none; }
+  .fo-tbl .cand { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .fo-tbl .ping { font-family: 'Orbitron', monospace; }
+  .fo-tbl .ping.good { color: #6EE7B7; }
+  .fo-tbl .ping.warn { color: #FCD34D; }
+  .fo-tbl .st { font-size: 8px; font-weight: 700; letter-spacing: .08em; padding: 2.5px 7px; border-radius: 999px; }
+  .fo-tbl .st.ready { color: #6EE7B7; background: rgba(52,211,153,.1); border: 1px solid rgba(52,211,153,.3); }
+  .fo-tbl .st.wait { color: var(--dim); background: rgba(255,255,255,.05); border: 1px solid var(--border); }
+
+  .fo-rules { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--border); display: flex; gap: 6px; flex-wrap: wrap; }
+  .rule { font-size: 9px; font-weight: 600; color: var(--dim); padding: 4px 9px; border-radius: 7px; background: rgba(255,255,255,.03); border: 1px dashed rgba(255,255,255,.14); }
+  .rule b { color: #FCD34D; font-family: 'Orbitron', monospace; font-weight: 600; }
+
+  .fo-switches { margin-top: 12px; display: flex; flex-direction: column; gap: 9px; }
+  .sw-row { display: flex; align-items: center; gap: 9px; }
+  .sw-row .sl { font-size: 10.5px; color: var(--dim); flex: 1; }
+  .sw-row .sl b { display: block; font-size: 11.5px; color: var(--text); }
+  .switch { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
+  .switch input { display: none; }
+  .switch i { position: absolute; inset: 0; border-radius: 999px; background: linear-gradient(90deg, var(--violet), var(--cyan)); transition: background .25s; }
+  .switch i::after { content: ''; position: absolute; top: 2.5px; right: 2.5px; width: 13px; height: 13px; border-radius: 50%; background: #fff; transition: transform .25s; }
+  .switch input:not(:checked) + i { background: rgba(255,255,255,.12); }
+  .switch input:not(:checked) + i::after { transform: translateX(-13px); background: #C7CDD9; }
+
+  /* ---- Row C: failover timeline ---- */
+  .timeline { display: flex; align-items: flex-start; gap: 0; padding-top: 4px; overflow-x: auto; }
+  .t-event { flex: 1; min-width: 150px; position: relative; padding: 0 14px 0 0; }
+  .t-event .t-dot { width: 11px; height: 11px; border-radius: 50%; margin-bottom: 7px; position: relative; z-index: 1; }
+  .t-event .t-dot.ok { background: var(--good); box-shadow: 0 0 8px rgba(52,211,153,.6); }
+  .t-event .t-dot.warn { background: var(--mid); box-shadow: 0 0 8px rgba(251,191,36,.6); }
+  .t-event .t-dot.bad { background: var(--bad); box-shadow: 0 0 8px rgba(248,113,113,.6); }
+  .t-event .t-dot.vio { background: var(--violet); box-shadow: 0 0 8px rgba(139,92,246,.6); }
+  .t-event .t-line { position: absolute; top: 5px; left: 11px; right: 0; height: 1.5px; background: rgba(255,255,255,.09); }
+  .t-event:last-child .t-line { display: none; }
+  .t-event .tm { font-family: 'Orbitron', monospace; font-size: 9px; color: var(--faint); }
+  .t-event .ev { font-size: 10.5px; font-weight: 600; margin-top: 3px; line-height: 1.35; }
+  .t-event .ev b { color: #6EE7B7; }
+  .t-event .ev b.vio { color: #C4B5FD; }
+  .t-event .ev b.bad { color: #FCA5A5; }
+  .t-event .sub { font-size: 9px; color: var(--faint); margin-top: 2px; }
+
+  .foot { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 16px; font-size: 10px; color: var(--faint); flex-wrap: wrap; }
+  .foot b { color: var(--dim); font-family: 'Orbitron', monospace; font-weight: 500; }
+
+  @media (max-width: 1060px) {
+    .paths { grid-template-columns: repeat(2, 1fr); }
+    .mid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="mockup-ribbon">
+  TASARIM 6 · <b>SAĞLIK HARİTASI</b> — görsel deneme, programa bağlı değil
+  &nbsp;·&nbsp; <a href="index.html">← Tüm tasarımlar</a>
+</div>
+
+<div class="shell">
+
+  <header class="head">
+    <div class="brand">
+      <span class="brand-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2 3 6v5c0 5.2 3.7 9.9 9 11 5.3-1.1 9-5.8 9-11V6l-9-4Z" fill="#fff" opacity=".92"/><path d="m8.5 12 2.5 2.5 5-5" stroke="#0B0F19" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+      <span class="brand-name">AO <em>GPN</em> · Sağlık Haritası</span>
+    </div>
+    <div class="head-right">
+      <span class="pill on"><span class="dot"></span> BAĞLI</span>
+      <span class="pill stable"><span class="dot"></span> STABİL MOD</span>
+      <span class="pill"><span class="mono">01:23:45</span></span>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <!-- Row A: monitored game paths -->
+    <section>
+      <div class="panel-ttl">
+        İzlenen oyun yolları
+        <span class="right">4 yol · her biri 10 sn'de bir ölçülür</span>
+      </div>
+      <div class="paths">
+
+        <div class="path good">
+          <div class="path-top">
+            <span class="pi">CS</span>
+            <div><div class="pn">Counter-Strike 2</div><div class="ps">Oyun sunucusu: Frankfurt · 81.171.12.9</div></div>
+            <span class="pst">SAĞLIKLI</span>
+          </div>
+          <div class="path-mid">
+            <span class="pp"><span class="b">48</span> → <span class="a">19</span> ms</span>
+            <span class="bar"><i style="width:96%"></i></span>
+          </div>
+          <div class="path-stats">
+            <span class="pchip">Jitter <b>2.1ms</b></span>
+            <span class="pchip ok">Kayıp <b>%0</b></span>
+            <span class="pchip">Skor <b style="color:#6EE7B7">96/100</b></span>
+          </div>
+        </div>
+
+        <div class="path good">
+          <div class="path-top">
+            <span class="pi">V</span>
+            <div><div class="pn">Valorant</div><div class="ps">Oyun sunucusu: Frankfurt · 104.160.40.4</div></div>
+            <span class="pst">SAĞLIKLI</span>
+          </div>
+          <div class="path-mid">
+            <span class="pp"><span class="b">52</span> → <span class="a">21</span> ms</span>
+            <span class="bar"><i style="width:94%"></i></span>
+          </div>
+          <div class="path-stats">
+            <span class="pchip">Jitter <b>2.8ms</b></span>
+            <span class="pchip ok">Kayıp <b>%0</b></span>
+            <span class="pchip">Skor <b style="color:#6EE7B7">94/100</b></span>
+          </div>
+        </div>
+
+        <div class="path good">
+          <div class="path-top">
+            <span class="pi">L</span>
+            <div><div class="pn">League of Legends</div><div class="ps">Oyun sunucusu: Amsterdam · 104.160.131.3</div></div>
+            <span class="pst">SAĞLIKLI</span>
+          </div>
+          <div class="path-mid">
+            <span class="pp"><span class="b">61</span> → <span class="a">27</span> ms</span>
+            <span class="bar"><i style="width:90%"></i></span>
+          </div>
+          <div class="path-stats">
+            <span class="pchip">Jitter <b>4.2ms</b></span>
+            <span class="pchip warn">Kayıp <b>%0.1</b></span>
+            <span class="pchip">Skor <b style="color:#6EE7B7">90/100</b></span>
+          </div>
+        </div>
+
+        <div class="path bad">
+          <div class="path-top">
+            <span class="pi">P</span>
+            <div><div class="pn">PUBG</div><div class="ps">Oyun sunucusu: Frankfurt · 162.254.192.6</div></div>
+            <span class="pst">KÖTÜ</span>
+          </div>
+          <div class="path-mid">
+            <span class="pp"><span class="b">84</span> → <span class="a muted">—</span></span>
+            <span class="bar"><i style="width:30%;background:linear-gradient(90deg,var(--bad),var(--mid))"></i></span>
+          </div>
+          <div class="path-stats">
+            <span class="pchip bad">Jitter <b>11.5ms</b></span>
+            <span class="pchip bad">Kayıp <b>%2.4</b></span>
+            <span class="pchip">Skor <b style="color:#FCA5A5">64/100</b></span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Row B: heatmap + failover -->
+    <div class="mid">
+
+      <!-- Heatmap -->
+      <section class="panel">
+        <div class="panel-ttl">
+          Sağlık haritası · Son 60 sn
+          <span class="right legend">
+            <span class="lg"><i></i>İyi</span>
+            <span class="la"><i></i>Orta</span>
+            <span class="lr"><i></i>Kötü</span>
+          </span>
+        </div>
+        <div class="hm" id="healthGrid">
+          <div class="hm-row"><span class="hm-lbl"><span class="di">CS</span> CS2</span><span class="hm-cells"></span></div>
+          <div class="hm-row"><span class="hm-lbl"><span class="di">V</span> Valorant</span><span class="hm-cells"></span></div>
+          <div class="hm-row"><span class="hm-lbl"><span class="di">L</span> LoL</span><span class="hm-cells"></span></div>
+          <div class="hm-row"><span class="hm-lbl"><span class="di">P</span> PUBG</span><span class="hm-cells"></span></div>
+        </div>
+        <div class="hm-x"><span>-60s</span><span>-45s</span><span>-30s</span><span>-15s</span><span>şimdi</span></div>
+        <div class="hm-note">
+          <span class="ex"></span> &nbsp;= bağlantı ölümü / failover anı &nbsp;·&nbsp;
+          <span class="ex a"></span> &nbsp;= gecikme eşiği aşıldı &nbsp;·&nbsp; beyaz çerçeve = şu an
+        </div>
+      </section>
+
+      <!-- Failover center -->
+      <section class="panel">
+        <div class="panel-ttl">Failover merkezi</div>
+
+        <div class="fo-active">
+          <span class="fo-flag">🇩🇪</span>
+          <div>
+            <div class="fo-nm">Almanya-1</div>
+            <div class="fo-sub">WireGuard · TUN · aktif yol</div>
+            <span class="fo-state">● SAĞLIKLI</span>
+          </div>
+          <div class="fo-ping"><b>14 ms</b><span>canlı ping</span></div>
+        </div>
+
+        <table class="fo-tbl">
+          <thead><tr><th>Aday</th><th>Ping</th><th>Kayıp</th><th>Durum</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="cand"><span>🇮🇹</span> İtalya-1</td>
+              <td class="ping good">18 ms</td>
+              <td style="color:#6EE7B7">%0</td>
+              <td><span class="st ready">HAZIR</span></td>
+            </tr>
+            <tr>
+              <td class="cand"><span>🇩🇪</span> Almanya-2</td>
+              <td class="ping warn">31 ms</td>
+              <td style="color:#FCD34D">%0.4</td>
+              <td><span class="st wait">BEKLEMEDE</span></td>
+            </tr>
+            <tr>
+              <td class="cand"><span>🇮🇹</span> İtalya-2</td>
+              <td class="ping warn">44 ms</td>
+              <td style="color:#FCA5A5">%1.2</td>
+              <td><span class="st wait">BEKLEMEDE</span></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="fo-rules">
+          <span class="rule">Geçiş: ping &gt; <b>120 ms</b></span>
+          <span class="rule">Geçiş: kayıp &gt; <b>%2</b></span>
+          <span class="rule">Ölüm: el sıkışma <b>5 sn</b> başarısız</span>
+          <span class="rule">Fallback: <b>V2rayTCP</b></span>
+        </div>
+
+        <div class="fo-switches">
+          <label class="sw-row">
+            <span class="sl"><b>Sabit bağlantı</b>otomatik sunucu geçişi kapalı</span>
+            <span class="switch"><input type="checkbox" checked /><i></i></span>
+          </label>
+          <label class="sw-row">
+            <span class="sl"><b>İyileşme izleme</b>V2ray fallback sonrası WireGuard'a dön</span>
+            <span class="switch"><input type="checkbox" checked /><i></i></span>
+          </label>
+        </div>
+      </section>
+    </div>
+
+    <!-- Row C: failover timeline -->
+    <section class="panel">
+      <div class="panel-ttl">
+        Failover zaman çizelgesi
+        <span class="right">son 30 dakika</span>
+      </div>
+      <div class="timeline">
+        <div class="t-event">
+          <span class="t-dot ok"></span><span class="t-line"></span>
+          <div class="tm">12:04:29</div>
+          <div class="ev">WireGuard el sıkışması <b>başarılı</b></div>
+          <div class="sub">Almanya-1 · 14 ms</div>
+        </div>
+        <div class="t-event">
+          <span class="t-dot vio"></span><span class="t-line"></span>
+          <div class="tm">12:04:12</div>
+          <div class="ev">Sunucu geçişi: <b class="vio">İtalya-1 → Almanya-1</b></div>
+          <div class="sub">failover önerisi · kazanç 4 ms</div>
+        </div>
+        <div class="t-event">
+          <span class="t-dot warn"></span><span class="t-line"></span>
+          <div class="tm">12:03:58</div>
+          <div class="ev">Gecikme eşiği <b class="bad">aşıldı</b> · 148 ms</div>
+          <div class="sub">İtalya-1 üzerinde ölçüldü</div>
+        </div>
+        <div class="t-event">
+          <span class="t-dot bad"></span><span class="t-line"></span>
+          <div class="tm">12:02:58</div>
+          <div class="ev">Bağlantı ölümü <b class="bad">tespit edildi</b></div>
+          <div class="sub">el sıkışma 5 sn başarısız</div>
+        </div>
+        <div class="t-event">
+          <span class="t-dot vio"></span><span class="t-line"></span>
+          <div class="tm">12:02:50</div>
+          <div class="ev"><b class="vio">V2rayTCP</b> fallback'e geçildi</div>
+          <div class="sub">otomatik kurtarma bekleniyor</div>
+        </div>
+        <div class="t-event">
+          <span class="t-dot ok"></span><span class="t-line"></span>
+          <div class="tm">12:00:31</div>
+          <div class="ev">İyileşme: <b>WireGuard'a dönüş</b></div>
+          <div class="sub">sağlıklı sunucu bulundu</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer class="foot">
+    <span>İzlenen yol <b>4</b></span>
+    <span>Sağlıklı <b style="color:#6EE7B7">3</b></span>
+    <span>Son failover <b>12:04:12</b></span>
+    <span>Sayaçlar: geçiş <b>2</b> · ölüm <b>1</b> · fallback <b>1</b> · iyileşme <b>1</b></span>
+    <span style="margin-left:auto">AO GPN · Sağlık Haritası tasarım denemesi — programa bağlı değildir</span>
+  </footer>
+
+</div>
+
+<script>
+/* Yalnızca mockup: ısı haritası hücrelerini üretir (deterministik desen, programa bağlı değildir). */
+(function () {
+  const profiles = [
+    { base: 96 }, { base: 94 }, { base: 90 }, { base: 64 }
+  ];
+  const rows = document.querySelectorAll('#healthGrid .hm-row');
+  profiles.forEach(function (p, ri) {
+    const cells = rows[ri].querySelector('.hm-cells');
+    for (let c = 0; c < 60; c++) {
+      const span = document.createElement('span');
+      let cls = 'g';
+      const j = (ri * 7 + c * 3) % 11;
+      if (p.base < 70) {               // PUBG: genel olarak bozuk
+        cls = (c % 3 === 0) ? 'a' : (c % 5 === 0 ? 'r' : 'g');
+      } else if (j >= 9) { cls = 'r'; }
+      else if (j >= 6) { cls = 'a'; }
+      if (c === 34 || c === 35) cls = 'r';   // failover anı
+      if (c === 33 || c === 36 || c === 58) cls = 'a';
+      span.className = cls;
+      cells.appendChild(span);
+    }
+  });
+  const last = document.querySelectorAll('#healthGrid .hm-cells');
+  last.forEach(function (r) { r.lastElementChild.classList.add('now'); });
+})();
+</script>
+
+</body>
+</html>

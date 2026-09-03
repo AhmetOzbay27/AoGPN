@@ -1,0 +1,16 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: nebula
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+
+
+
+  /* ---------- Gaming theme palettes (refined) ---------- */
+  body[data-theme="nebula"] {
+    --bg: #080C18;
+    --violet: #7C3AED;
+    --cyan: #0891B2;
+    --emerald: #059669;
+    --glass: rgba(124, 58, 237, 0.035);
+    --glass-border: rgba(124, 58, 237, 0.10);
+  }

@@ -1,0 +1,56 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: velocity
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+
+
+  body[data-theme="velocity"] {
+    --bg: #07101D;
+    --violet: #EF4444;
+    --cyan: #3B82F6;
+    --emerald: #22C55E;
+    --glass: rgba(59, 130, 246, 0.045);
+    --glass-border: rgba(239, 68, 68, 0.15);
+  }
+
+  /* --- Velocity: red/blue high-speed network telemetry --- */
+  body[data-theme="velocity"]::after {
+    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      linear-gradient(120deg, transparent 0 46%, rgba(239,68,68,.055) 47% 48%, transparent 49%),
+      linear-gradient(300deg, transparent 0 58%, rgba(59,130,246,.06) 59% 60%, transparent 61%),
+      radial-gradient(500px 300px at 78% 14%, rgba(59,130,246,.12), transparent 64%);
+    background-size: 220% 220%, 180% 180%, auto;
+    animation: velocity-lines 14s steps(240) infinite;
+    /* Quantized scan: background-position is a paint property, so a smooth
+       timing function repaints this full-screen layer every vsync. steps(240)
+       advances it in 240 discrete jumps per 14 s cycle (the fastest stripe
+       then jumps ~5-13 px depending on window width — imperceptible on these
+       faint alpha-0.06 stripes) and the compositor idles in between. */
+  }
+  @keyframes velocity-lines {
+    from { background-position: 0 0, 100% 100%, 0 0; }
+    to { background-position: 100% 0, 0 100%, -28px 16px; }
+  }
+  body[data-theme="velocity"]::before {
+    opacity: .07 !important;
+    animation-duration: 42s !important;
+    /* no filter: full-screen blur on the animated aurora layer is the biggest
+       per-frame GPU cost in the dashboard; the shared gradient is soft already */
+  }
+  body[data-theme="velocity"] .glass {
+    border-color: rgba(59,130,246,.14);
+    box-shadow: 0 1px 18px rgba(30,64,175,.09), inset 0 0 16px rgba(239,68,68,.018);
+  }
+  body[data-theme="velocity"] .glass:hover {
+    border-color: rgba(96,165,250,.32);
+    box-shadow: 0 4px 26px rgba(59,130,246,.13), inset 0 0 20px rgba(239,68,68,.025);
+  }
+  body[data-theme="velocity"] .font-display { text-shadow: 0 0 12px rgba(59,130,246,.2); }
+  body[data-theme="velocity"]  .ring-wrap .ring-svg { filter: drop-shadow(0 0 10px #3B82F6) drop-shadow(0 0 4px #EF4444); }
+  body[data-theme="velocity"] .theme-spinner {
+    border-top-color: #EF4444;
+    border-right-color: #3B82F6;
+    border-bottom-color: rgba(239,68,68,.25);
+    animation-duration: .55s;
+  }

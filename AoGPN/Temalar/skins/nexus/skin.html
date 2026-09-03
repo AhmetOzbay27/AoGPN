@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AO GPN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Orbitron:wght@500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="skin.css" />
+</head>
+<body class="skin-nexus" data-nx-skin="nexus-gpn">
+  <div class="nx-app">
+    <aside class="nx-sidebar">
+      <div class="nx-logo"><div class="nx-logoMark"><img src="../../icon/AO-GPN-logo.png" alt="AO GPN" draggable="false" /></div><div><strong data-nx-i18n="brand">AO GPN</strong><small data-nx-i18n="brandSub">GAMING PRIVATE NETWORK</small></div></div>
+      <div class="nx-section" data-nx-i18n="section.network">Network</div>
+      <nav class="nx-nav">
+        <button class="active" data-nx-view="dashboard"><span class="ico">◈</span><span data-nx-i18n="nav.dashboard">Dashboard</span></button>
+        <button data-nx-view="route"><span class="ico">⌁</span><span data-nx-i18n="nav.route">Smart Route</span></button>
+        <button data-nx-view="servers"><span class="ico">◎</span><span data-nx-i18n="nav.servers">Servers</span></button>
+        <button data-nx-view="gpnsrv"><span class="ico">▤</span><span data-nx-i18n="nav.gpnServers">GPN Servers</span></button>
+        <button data-nx-view="games"><span class="ico">▣</span><span data-nx-i18n="nav.games">Game Profiles</span></button>
+      </nav>
+      <div class="nx-section" data-nx-i18n="section.system">System</div>
+      <nav class="nx-nav">
+        <button data-nx-view="analytics"><span class="ico">◌</span><span data-nx-i18n="nav.analytics">Analytics</span></button>
+        <button data-nx-view="settings"><span class="ico">⚙</span><span data-nx-i18n="nav.settings">Settings</span></button>
+        <button data-nx-view="about"><span class="ico">ⓘ</span><span data-nx-i18n="nav.about">About &amp; Help</span></button>
+      </nav>
+      <div class="nx-profile"><div class="nx-avatar">AO GPN</div><div><b data-nx-i18n="profile.name">AO GPN PLAYER</b><span data-nx-i18n="profile.role">PRO MEMBER</span></div></div>
+    </aside>
+
+    <main class="nx-main">
+      <header class="nx-top">
+        <div id="nxDragRegion"><div class="nx-eyebrow" data-nx-i18n="eyebrow">GPN CONTROL CENTER</div><div class="nx-title"><span data-nx-i18n="title.prefix">NETWORK</span> <span>/</span> <span id="nxTitleLabel">DASHBOARD</span></div></div>
+        <div class="nx-utils">
+          <button type="button" id="nxToStandardBtn" class="nx-util" title="Switch to Standard dashboard" aria-label="Switch to Standard dashboard">⧉</button>
+          <button type="button" id="nxMinBtn" class="nx-util" title="Minimize" aria-label="Minimize window">─</button>
+          <button type="button" id="nxMaxBtn" class="nx-util" title="Maximize" aria-label="Maximize window">▢</button>
+          <button type="button" id="nxCloseBtn" class="nx-util nx-close" title="Close" aria-label="Close window">✕</button>
+          <div class="nx-status"><span class="nx-dot" id="nxNodeStatus"></span> <span id="nxStatusText">NETWORK ONLINE · READY</span></div>
+        </div>
+      </header>
+
+      <section class="nx-grid" data-nx-view="dashboard">
+        <div class="nx-card nx-hero">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="tunnel">Gaming tunnel</div><div class="nx-route"><span data-nx-i18n="route.prefix">ROUTE</span> <i id="nxRouteState">OPTIMIZED</i> · <b id="nxRouteMode">LOW LATENCY</b></div></div>
+          <div class="nx-connectArea">
+            <div class="nx-routeNode"><div class="nx-nodeIcon">⌂</div><b data-nx-i18n="you">YOU</b><span id="nxYouCity" data-nx-i18n="local">Local</span></div>
+            <div class="nx-orb" id="nxOrb">
+              <button class="nx-power" id="nxPower" aria-label="Connect">⏻</button>
+              <div class="nx-connectText"><b id="nxState">CONNECT</b><span id="nxSubstate">START GPN SESSION</span></div>
+            </div>
+            <div class="nx-routeNode"><div class="nx-nodeIcon">✦</div><b data-nx-i18n="gameServer">GAME SERVER</b><span id="nxGameServer">Singapore · #04</span></div>
+          </div>
+          <div class="nx-stats">
+            <div class="nx-stat"><label data-nx-i18n="stat.ping">AVG PING</label><strong id="nxPing">--<small> ms</small></strong><em id="nxPingEm" data-nx-i18n="stat.measuring">MEASURING</em></div>
+            <div class="nx-stat"><label data-nx-i18n="stat.jitter">JITTER</label><strong id="nxJitter">--<small> ms</small></strong><em data-nx-i18n="stat.stable">STABLE</em></div>
+            <div class="nx-stat"><label data-nx-i18n="stat.loss">PACKET LOSS</label><strong id="nxLoss">--<small>%</small></strong><em id="nxLossEm" data-nx-i18n="stat.excellent">EXCELLENT</em></div>
+          </div>
+        </div>
+
+        <div class="nx-side">
+          <div class="nx-card nx-server">
+            <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="activeRoute">Active route</div><span class="nx-best">● <span data-nx-i18n="bestPath">BEST PATH</span></span></div>
+            <div class="nx-serverRow">
+              <div class="nx-flag" id="nxFlag">🌐</div>
+              <div><b id="nxServerName">Singapore · SG-04</b><span id="nxServerMeta">18 hops · 10 Gbps uplink</span></div>
+              <div class="nx-ping" id="nxServerPing">--ms</div>
+            </div>
+            <select class="nx-select" id="nxServer">
+              <option value="">Loading nodes…</option>
+            </select>
+          </div>
+          <div class="nx-card nx-games">
+            <div class="nx-label" data-nx-i18n="gameProfiles">Game profiles</div>
+            <div id="nxGameList"><!-- populated by skin.js --></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="nx-bottom" data-nx-view="dashboard">
+        <div class="nx-card nx-wide">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="telemetry">Latency telemetry</div><span class="nx-subtle" data-nx-i18n="telemetryLast">LAST 60 SECONDS</span></div>
+          <div class="nx-bar" id="nxBars"></div>
+        </div>
+        <div class="nx-card nx-wide">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="protection">Protection</div><span class="nx-ok" data-nx-i18n="active">ACTIVE</span></div>
+          <div class="nx-security">
+            <div class="nx-shieldWrap">
+              <div class="nx-shield">✓</div>
+              <div><b data-nx-i18n="secured">Gaming tunnel secured</b><span data-nx-i18n="securedDesc">Traffic routing is ready for your selected games.</span></div>
+            </div>
+            <div class="nx-switch on" id="nxKillSwitch" role="switch" aria-checked="true" tabindex="0" aria-label="Kill switch"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live GPN / Global panels + status banners (populated by skin.js) -->
+      <section class="nx-view nx-dashLive" data-nx-view="dashboard">
+        <div id="nxBanners" class="nx-banners"></div>
+        <div id="nxGpnPanel" class="nx-card nx-wide"></div>
+        <div id="nxGlobalPanel" class="nx-card nx-wide nx-hidden"></div>
+      </section>
+
+      <!-- Sub-views -->
+      <section class="nx-view" data-nx-view="route">
+        <div class="nx-card nx-wide">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="smartRoute">Smart Route</div><span class="nx-subtle" data-nx-i18n="smartRouteSub">Connection strategy</span></div>
+          <div class="nx-routeGrid">
+            <div class="nx-segGroup">
+              <div class="nx-segLabel" data-nx-i18n="routeMode">Route mode</div>
+              <div class="nx-seg">
+                <button type="button" data-nx-mode="gpn" class="nx-segOpt"><span data-nx-i18n="modeGpn">GPN Game Tunnel</span></button>
+                <button type="button" data-nx-mode="vpn" class="nx-segOpt"><span data-nx-i18n="modeGlobal">Global VPN</span></button>
+              </div>
+            </div>
+            <div class="nx-segGroup">
+              <div class="nx-segLabel" data-nx-i18n="capture">Capture</div>
+              <div class="nx-seg">
+                <button type="button" data-nx-transport="proxy" class="nx-segOpt"><span data-nx-i18n="transportProxy">Proxy</span></button>
+                <button type="button" data-nx-transport="tun" class="nx-segOpt"><span data-nx-i18n="transportTun">TUN</span></button>
+              </div>
+            </div>
+            <div class="nx-segGroup">
+              <div class="nx-segLabel" data-nx-i18n="direction">Routing direction</div>
+              <div class="nx-seg">
+                <button type="button" data-nx-dir="whitelist" class="nx-segOpt"><span data-nx-i18n="dir.whitelist">Whitelist</span></button>
+                <button type="button" data-nx-dir="blacklist" class="nx-segOpt"><span data-nx-i18n="dir.blacklist">Blacklist</span></button>
+              </div>
+            </div>
+            <div class="nx-routeHint" id="nxRouteHint">.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="nx-view" data-nx-view="servers">
+        <div class="nx-card nx-wide">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="servers">Servers</div><span class="nx-subtle" data-nx-i18n="serversSub">Choose your route endpoint</span></div>
+          <div class="nx-servers" id="nxServers"><!-- populated by skin.js --></div>
+        </div>
+      </section>
+
+      <section class="nx-view" data-nx-view="games">
+        <div class="nx-card nx-wide">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="gameProfilesTitle">Game Profiles</div><span class="nx-subtle" data-nx-i18n="gameProfilesSub">Boost-tunneled games &amp; apps</span></div>
+          <div id="nxGameProfiles" class="nx-games"><!-- populated by skin.js --></div>
+        </div>
+      </section>
+
+      <section class="nx-view" data-nx-view="analytics">
+        <div class="nx-card nx-wide">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="analytics">Analytics</div><span class="nx-subtle" data-nx-i18n="analyticsSub">Live network telemetry</span></div>
+          <div class="nx-ana" id="nxAnalytics"><!-- populated by skin.js --></div>
+        </div>
+      </section>
+
+      <section class="nx-view" data-nx-view="gpnsrv">
+        <div class="nx-card nx-wide">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="gpnServers">GPN Servers</div><span class="nx-subtle" data-nx-i18n="gpnServersSub">Italy/Germany WireGuard candidates</span></div>
+          <div id="nxGpnServers"><!-- populated by skin.js --></div>
+        </div>
+      </section>
+
+      <section class="nx-view" data-nx-view="settings">
+        <div class="nx-card nx-wide">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="settings">Settings</div><span class="nx-subtle" data-nx-i18n="settingsSub">Preferences</span></div>
+          <div class="nx-settings" id="nxSettings"><!-- populated by skin.js --></div>
+        </div>
+      </section>
+
+      <section class="nx-view" data-nx-view="about">
+        <div class="nx-card nx-wide">
+          <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="about">About &amp; Help</div><span class="nx-subtle" data-nx-i18n="aboutSub">Program info, help and release notes</span></div>
+          <div id="nxAbout"><!-- populated by skin.js --></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="nx-toast" id="nxToast">GPN route updated.</div>
+  <script src="../route-keys.js"></script>
+  <script src="skin.js"></script>
+</body>
+</html>

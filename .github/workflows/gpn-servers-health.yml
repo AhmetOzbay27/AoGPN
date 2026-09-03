@@ -1,0 +1,87 @@
+name: GPN servers health
+
+# Canlı İtalya/Almanya WireGuard sunucularını GpnProbeTool ile ölçüp
+# sonucu JSONL olarak toplar; hiçbir sunucuya UDP yolu doğrulanamazsa iş başarısız
+# olur ve (tanımlıysa) webhook ile bildirilir — GpnProbeTool'un --jsonl / --webhook
+# çıktısıyla entegre bir health-notifier CI'ı.
+
+on:
+  schedule:
+    # Her 30 dakikada bir (UTC).
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+  push:
+    branches: [main, master]
+    paths:
+      - 'AoGPN/AoGPN.GpnProbeTool/**'
+      - '.github/workflows/gpn-servers-health.yml'
+
+env:
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # WireGuard istemci özel anahtarları GİZLİ olduğundan conf'lar repoda değil,
+      # secret'ların base64'ünden geçici dosyaya açılır (iş bittiğinde runner yok olur).
+      - name: Materialize WireGuard confs (secrets)
+        if: ${{ secrets.ITALY_CONF_B64 != '' && secrets.GERMANY_CONF_B64 != '' }}
+        shell: bash
+        run: |
+          echo "${{ secrets.ITALY_CONF_B64 }}" | base64 -d > "$RUNNER_TEMP/italy.conf"
+          echo "${{ secrets.GERMANY_CONF_B64 }}" | base64 -d > "$RUNNER_TEMP/germany.conf"
+          test -s "$RUNNER_TEMP/italy.conf" && test -s "$RUNNER_TEMP/germany.conf"
+          echo "confs=$RUNNER_TEMP/italy.conf $RUNNER_TEMP/germany.conf" >> "$GITHUB_OUTPUT"
+        id: confs
+
+      - name: Probe live servers (JSONL)
+        id: probe
+        if: steps.confs.outputs.confs != ''
+        shell: bash
+        run: |
+          set +e
+          dotnet run --project AoGPN/AoGPN.GpnProbeTool -- \
+            --jsonl \
+            --timeout-ms 2500 --samples 2 \
+            --webhook "${{ secrets.GPN_WEBHOOK_URL }}" \
+            ${{ steps.confs.outputs.confs }} \
+            | tee /tmp/gpn-probe.jsonl
+          code=${PIPESTATUS[0]}
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Print health summary
+        if: always()
+        shell: bash
+        run: |
+          grep '"event":"summary"' /tmp/gpn-probe.jsonl | head -1 || echo "(no summary JSONL emitted)"
+
+      - name: Fail if no UDP path reachable
+        if: ${{ steps.probe.outputs.code != '0' }}
+        run: |
+          echo "::error::Hiçbir sunucuya UDP yolu doğrulanamadı (exit=${{ steps.probe.outputs.code }})."
+          exit 1
+
+      # Opsiyonel notifier: GPN_WEBHOOK_URL secret'ı Discord/ntfy/Gotify gibi bir
+      # uca işaret ederse, tünel sağlığı bozulduğunda bildirim gönderilir.
+      - name: Notify failure (webhook)
+        if: ${{ failure() && steps.confs.outputs.confs != '' && secrets.GPN_WEBHOOK_URL != '' }}
+        shell: bash
+        run: |
+          echo "{\"event\":\"ci_failure\",\"repo\":\"${{ github.repository }}\",\"run_id\":${{ github.run_id }},\"best\":\"$(grep '"event":"summary"' /tmp/gpn-probe.jsonl | head -1 | sed -n 's/.*"best":"\([^"]*\)".*/\1/p')\"}" > /tmp/ci-payload.json
+          curl -fsS -X POST -H 'Content-Type: application/json' -d @/tmp/ci-payload.json "${{ secrets.GPN_WEBHOOK_URL }}" || echo "::warning::webhook bildirimi gönderilemedi"

@@ -1,0 +1,12 @@
+{
+  "name": "aogpn-skin-tests",
+  "private": true,
+  "description": "Standalone unit/integration tests for the AoGPN dashboard skins (Temalar/skins/*.test.js).",
+  "scripts": {
+    "test": "node --test \"*.test.js\""
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0",
+    "rrweb-cssom": "0.8.0"
+  }
+}

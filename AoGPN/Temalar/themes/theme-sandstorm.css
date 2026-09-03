@@ -1,0 +1,6 @@
+/* Sandstorm — charcoal sand, turquoise and ivory, not red/amber. */
+body[data-theme="sandstorm"] { --violet:#14B8A6; --cyan:#F4E4BA; --emerald:#84CC16; --violet-rgb:20,184,166; --cyan-rgb:244,228,186; --emerald-rgb:132,204,22; background:#211A12; color:#FFF8E7; }
+body[data-theme="sandstorm"]::before { content:""; position:fixed; inset:0; pointer-events:none; opacity:.35; background:repeating-linear-gradient(115deg,transparent 0 32px,rgba(244,228,186,.035) 33px 35px); }
+body[data-theme="sandstorm"] .glass { background:rgba(48,37,24,.72); border-color:rgba(244,228,186,.22); }
+body[data-theme="sandstorm"] .ring-wrap .ring-svg { filter:drop-shadow(0 0 10px #F4E4BA) drop-shadow(0 0 5px #14B8A6); }
+body[data-theme="sandstorm"] .theme-spinner { border-top-color:#F4E4BA; border-right-color:#14B8A6; }

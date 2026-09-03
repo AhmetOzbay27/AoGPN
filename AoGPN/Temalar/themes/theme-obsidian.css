@@ -1,0 +1,6 @@
+/* Obsidian — monochrome graphite, silver and electric white. */
+body[data-theme="obsidian"] { --violet:#CBD5E1; --cyan:#F8FAFC; --emerald:#94A3B8; --violet-rgb:203,213,225; --cyan-rgb:248,250,252; --emerald-rgb:148,163,184; background:#050505; color:#F8FAFC; }
+body[data-theme="obsidian"]::before { content:""; position:fixed; inset:0; pointer-events:none; background:linear-gradient(135deg,rgba(255,255,255,.045),transparent 35%),linear-gradient(315deg,rgba(148,163,184,.06),transparent 45%); }
+body[data-theme="obsidian"] .glass { background:rgba(18,18,18,.82); border-color:rgba(226,232,240,.2); box-shadow:inset 0 1px rgba(255,255,255,.05); }
+body[data-theme="obsidian"] .ring-wrap .ring-svg { filter:drop-shadow(0 0 9px #F8FAFC); }
+body[data-theme="obsidian"] .theme-spinner { border-top-color:#F8FAFC; border-right-color:#94A3B8; }

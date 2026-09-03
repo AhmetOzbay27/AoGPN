@@ -1,0 +1,57 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: crimson
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+
+
+  body[data-theme="crimson"] {
+    --bg: #09090D;
+    --violet: #F43F5E;
+    --cyan: #991B1B;
+    --emerald: #F59E0B;
+    --glass: rgba(244, 63, 94, 0.045);
+    --glass-border: rgba(244, 63, 94, 0.16);
+  }
+
+  /* --- Crimson: tactical red/black threat-map atmosphere --- */
+  body[data-theme="crimson"]::after {
+    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      linear-gradient(115deg, transparent 0 48%, rgba(244,63,94,.055) 49% 50%, transparent 51%),
+      radial-gradient(650px 420px at 92% 8%, rgba(244,63,94,.12), transparent 62%),
+      radial-gradient(500px 320px at 12% 92%, rgba(127,29,29,.12), transparent 65%);
+    background-size: auto, auto, auto;
+    animation: crimson-scan 12s steps(40) infinite alternate;
+    /* Quantized scan: background-position is a paint property, so a smooth
+       timing function repaints this full-screen layer every vsync. steps(40)
+       advances it in 40 discrete jumps (~0.85 px each over a 12 s half-cycle)
+       — visually indistinguishable at these speeds — cutting repaints from
+       ~720 per cycle to 40 and letting the compositor idle in between. */
+  }
+  @keyframes crimson-scan {
+    from { opacity: .42; background-position: 0 0, 0 0, 0 0; }
+    to { opacity: .9; background-position: 34px 0, -18px 12px, 20px -8px; }
+  }
+  body[data-theme="crimson"]::before {
+    opacity: .075 !important;
+    animation-duration: 48s !important;
+    /* no filter: full-screen blur on the animated aurora layer is the biggest
+       per-frame GPU cost in the dashboard; the shared gradient is soft already */
+  }
+  body[data-theme="crimson"] .glass {
+    border-color: rgba(244,63,94,.13);
+    box-shadow: 0 1px 18px rgba(127,29,29,.08), inset 0 0 18px rgba(244,63,94,.018);
+  }
+  body[data-theme="crimson"] .glass:hover {
+    border-color: rgba(251,113,133,.3);
+    box-shadow: 0 4px 24px rgba(244,63,94,.11), inset 0 0 20px rgba(244,63,94,.03);
+  }
+  body[data-theme="crimson"] .font-display { text-shadow: 0 0 12px rgba(244,63,94,.2); }
+  body[data-theme="crimson"]   .ring-wrap .ring-svg { filter: drop-shadow(0 0 10px #F43F5E); }
+
+  body[data-theme="crimson"] .theme-spinner {
+    border-top-color: #F43F5E;
+    border-right-color: #FCA5A5;
+    border-bottom-color: #7F1D1D;
+    animation-duration: .62s;
+  }

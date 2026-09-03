@@ -1,0 +1,137 @@
+name: Driver Smoke (Windows) — Wintun + WinDivert
+
+# Gerçek Wintun sürücüsüne karşı Faz 2b smoke testlerini yönetici (elevated) bir
+# Windows runner'da çalıştırır. Bunlar varsayılan `dotnet test`'te ATLANIR —
+# wintun.dll + sürücü + yönetici gerekir (adapter oluşturma sürücüyü kurar).
+# Bu workflow sürücüyü sağlar ve regresyonu (özellikle 87-geçersiz adaptör adı)
+# gerçek donanıma karşı doğrular.
+#
+# Tetikleme:
+#   • workflow_dispatch — manual (önerilen; sürücü smoke'u çevreye bağlı olduğu
+#     için her PR'de zorunlu değildir).
+#   • pull_request → master — köprü/natif katman dosyaları dokunulduğunda otomatik.
+#     Sürücü ortamda kullanılamıyorsa testler skip üretir (kırmızı değil) — yalnızca
+#     gerçek regresyon FAIL olur; admin yoksa ayrı "Assert administrator" adımı
+#     kırmızı verir.
+#
+# Not: GitHub-hosted `windows-latest` runner'ları yükseltilmiş (elevated) bağlamda
+# çalışır; yine de ayrı bir "Assert administrator privileges" adımı bu ön koşulu
+# sembolize edip uygun olmayan bir ortamda hızlıca başarısız olur.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'AoGPN/ServiceLib/Services/Gpn/**'
+      - 'AoGPN/ServiceLib/Services/ForeignTunnelDetector.cs'
+      - 'AoGPN/ServiceLib.Tests/Services/WintunDriverSmokeTests.cs'
+      - '.github/workflows/wintun-driver-smoke.yml'
+
+jobs:
+  driver-smoke:
+    name: Wintun + WinDivert driver smoke (Windows x64)
+    runs-on: windows-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: 'recursive'
+        fetch-depth: '0'
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6.0.0
+      with:
+        dotnet-version: '10.0.1xx'
+
+    # Smoke testleri gerçek Wintun adaptörünü kurabilmesi için yönetici yetkisi
+    # ister (WintunCreateAdapter sürücü servisini kurar). Bu ön koşulu bir adım
+    # olarak sembolize et: yetki yoksa job hemen, net bir mesajla kırmızı olur
+    # (testlerin sessizce skip olup ortam sorununu gizlemesine izin verilmez).
+    - name: Assert administrator privileges
+      shell: pwsh
+      run: |
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+        if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+          Write-Error "Runner is NOT elevated — Wintun driver smoke tests need administrator privileges to install the Wintun driver."
+          exit 1
+        }
+        Write-Host "Elevation: OK (Administrator)"
+
+    - name: Build ServiceLib tests
+      shell: bash
+      working-directory: ./AoGPN
+      run: dotnet build ./ServiceLib.Tests/ServiceLib.Tests.csproj -c Release --nologo
+
+    # WintunClientBridge (WintunNative P/Invoke) "wintun.dll"i işlemin appbase
+    # dizininden yükler  → test host'unun yanına koy. Resmi Wintun dağıtımının
+    # amd64 derlemesi seçilir (x64 runner). DLL olmadan smoke testleri Open'ta
+    # DLL-bulunamadı diye skip eder — bu adım o yanlış skip'i önler.
+    - name: Fetch official wintun.dll (x64) into test output
+      shell: pwsh
+      working-directory: ./AoGPN
+      run: |
+        $testBin   = "ServiceLib.Tests/bin/Release/net10.0"
+        if (-not (Test-Path $testBin)) {
+          Write-Error "Test output dir not found: $testBin — build step must have run first."
+          exit 1
+        }
+        $zip     = Join-Path $env:RUNNER_TEMP 'wintun.zip'
+        $extract = Join-Path $env:RUNNER_TEMP 'wintun'
+        Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $zip
+        if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+        Expand-Archive -Path $zip -DestinationPath $extract -Force
+        $dll = Get-ChildItem -Path $extract -Recurse -Filter 'wintun.dll' |
+               Where-Object { $_.FullName -match 'amd64' } |
+               Select-Object -First 1
+        if (-not $dll) {
+          Write-Error "amd64/wintun.dll not found inside the official Wintun zip."
+          exit 1
+        }
+        Copy-Item $dll.FullName (Join-Path $testBin 'wintun.dll') -Force
+        Write-Host "wintun.dll -> $testBin\wintun.dll"
+
+    # WinDivertDriverSmokeTests de aynı şekilde gerçek sürücüyü kurar
+    # (WinDivertOpen ilk çağrıda sürücüyü WinDivert64.sys'ten sessizce kurar —
+    # dosyalar DLL'in yanında olmalı). Resmi WinDivert 2.2.2 dağıtımından x64
+    # ikilisini test host'unun yanına koy; eksikse smoke testleri yanlış skipe
+    # düşer. (Uygulama paketinin kendisi aynı dosyaları MsBuild'in
+    # PromoteWinDivertToOutputRoot hedefiyle dağıtır.)
+    - name: Fetch official WinDivert 2.2.2 files (x64) into test output
+      shell: pwsh
+      working-directory: ./AoGPN
+      run: |
+        $testBin   = "ServiceLib.Tests/bin/Release/net10.0"
+        if (-not (Test-Path $testBin)) {
+          Write-Error "Test output dir not found: $testBin — build step must have run first."
+          exit 1
+        }
+        $zip     = Join-Path $env:RUNNER_TEMP 'windivert.zip'
+        $extract = Join-Path $env:RUNNER_TEMP 'windivert'
+        Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/basil00/WinDivert/releases/download/v2.2.2/WinDivert-2.2.2-A.zip' -OutFile $zip
+        if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+        Expand-Archive -Path $zip -DestinationPath $extract -Force
+        $src = Join-Path $extract 'WinDivert-2.2.2-A\x64'
+        foreach ($f in @('WinDivert.dll','WinDivert64.sys')) {
+          $from = Join-Path $src $f
+          if (-not (Test-Path $from)) {
+            Write-Error "$f not found inside the official WinDivert zip."
+            exit 1
+          }
+          Copy-Item $from (Join-Path $testBin $f) -Force
+        }
+        Write-Host "WinDivert.dll + WinDivert64.sys -> $testBin"
+
+    # Yalnızca DriverSmoke kategorisi; geri kalan testler çalışmaz. Sürücü
+    # ortamda kurulamazsa (ör. sanallaştırılmış/hardened runner) testler skip
+    # üretir (kırmızı değil). Kırmızı yalnızca gerçek regresyonda çıkar —
+    # örneğin Open_InvalidAdapterName_ReportsClearError87, geçersiz ':' adında
+    # 87 üretmezse FAIL olur.
+    - name: Run Wintun driver smoke tests
+      shell: bash
+      working-directory: ./AoGPN
+      env:
+        AOGPN_SMOKE_DRIVER: '1'
+      run: dotnet test ./ServiceLib.Tests -c Release --no-build --filter "Category=DriverSmoke" -v minimal

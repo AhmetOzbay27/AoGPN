@@ -1,0 +1,48 @@
+/* ==========================================================================
+   AoGPN dashboard — stylesheet manifest (bölüm haritası)
+   --------------------------------------------------------------------------
+   Bu dosya stil içermez; aşağıdaki dosyaları SIRAYLA birleştirir. Sıra
+   önemlidir: base → components → themes (temalar ortak stilleri ezer).
+
+   1) base.css        :root değişkenleri, sıfırlama, body zemini ve ambiyans
+                        (aurora), ortak yardımcılar (accent-*, tema kartları,
+                        theme deck, spinner iskeleti)
+   2) components.css  Bileşen stilleri: navigasyon, CONNECT halkası, özel
+                        tooltip'ler, toast, rozetler, göstergeler, mod seçici,
+                        pencere çerçevesi, kaydırma çubuğu, düğüm kartları,
+                        ayarlar, imleç efektleri
+   3) themes/*.css    Her tema kendi dosyasında: palet değişkenleri
+                        (body[data-theme="..."]), imza efektleri
+                        (::before/::after, .glass, .font-display, spinner,
+                        tooltip, rozet, imleç) ve o temanın @keyframes'leri
+
+   YENİ TEMA EKLEMEK:
+     1. Temalar/themes/theme-<id>.css dosyası oluştur
+     2. Bu dosyaya @import url("themes/theme-<id>.css"); satırı ekle
+     3. Temalar/themes.json dosyasına giriş ekle (swatch renkleri için)
+   ========================================================================== */
+@import url("base.css");
+@import url("components.css");
+@import url("themes/theme-nebula.css");
+@import url("themes/theme-inferno.css");
+@import url("themes/theme-venom.css");
+@import url("themes/theme-cryo.css");
+@import url("themes/theme-synthwave.css");
+@import url("themes/theme-cyberpunk.css");
+@import url("themes/theme-matrix.css");
+@import url("themes/theme-plasma.css");
+@import url("themes/theme-phantom.css");
+@import url("themes/theme-crimson.css");
+@import url("themes/theme-velocity.css");
+
+@import url("themes/theme-aurora.css");
+@import url("themes/theme-candy.css");
+@import url("themes/theme-obsidian.css");
+@import url("themes/theme-sandstorm.css");
+@import url("themes/theme-nexus-palettes.css");
+
+/* Loaded LAST so the reduce-effects kill switch always wins the cascade. */
+@import url("effects.css");
+
+/* Theme files are all loaded once, but only the matching body[data-theme]
+   rules apply. This avoids creating/removing stylesheet layers on every switch. */

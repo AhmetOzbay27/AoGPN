@@ -1,0 +1,25 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: synthwave
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+
+
+  body[data-theme="synthwave"] {
+    --bg: #110814;
+    --violet: #C026D3;
+    --cyan: #DB2777;
+    --emerald: #0D9488;
+    --glass: rgba(192, 38, 211, 0.035);
+    --glass-border: rgba(192, 38, 211, 0.11);
+  }
+  body[data-theme="synthwave"]::after {
+    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      linear-gradient(180deg, transparent 0 76%, rgba(244,114,182,.14) 100%),
+      repeating-linear-gradient(90deg, rgba(217,70,239,.05) 0 2px, transparent 2px 130px);
+    /* synth-breathe animates opacity only — a compositor-driven property, so
+       this full-screen layer is never re-rasterized per frame and needs no
+       steps() quantization or blur removal. */
+    animation: synth-breathe 5.5s ease-in-out infinite alternate;
+  }
+  @keyframes synth-breathe { from { opacity: .5; } to { opacity: 1; } }

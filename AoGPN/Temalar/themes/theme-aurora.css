@@ -1,0 +1,6 @@
+/* Copper Aurora — deep teal, copper and parchment accents. */
+body[data-theme="aurora"] { --violet:#B87333; --cyan:#2DD4BF; --emerald:#A3E635; --violet-rgb:184,115,51; --cyan-rgb:45,212,191; --emerald-rgb:163,230,53; background:#071B1B; color:#E7F5F2; }
+body[data-theme="aurora"]::before { content:""; position:fixed; inset:0; pointer-events:none; background:radial-gradient(ellipse at 20% 10%,rgba(45,212,191,.18),transparent 42%),radial-gradient(ellipse at 85% 85%,rgba(184,115,51,.16),transparent 40%); }
+body[data-theme="aurora"] .glass { border-color:rgba(45,212,191,.25); box-shadow:0 0 24px rgba(45,212,191,.08); }
+body[data-theme="aurora"] .ring-wrap .ring-svg { filter:drop-shadow(0 0 10px #2DD4BF) drop-shadow(0 0 5px #B87333); }
+body[data-theme="aurora"] .theme-spinner { border-top-color:#B87333; border-right-color:#2DD4BF; }

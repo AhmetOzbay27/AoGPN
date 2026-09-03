@@ -1,0 +1,19 @@
+# AoGPN örnek WireGuard şablonu — Almanya (Ubuntu)
+# Gerçek sunucuyla birebir eşleşir (130.61.223.36:51820): uç nokta, sunucu genel
+# anahtarı, adres/MTU/DNS — yalnızca İSTEMCİ ÖZEL ANAHTARI bilinçli olarak YOKTUR.
+# Özel anahtar sürüm kontrolüne yazılmaz; tohumlama sırasında dışarıdan gelir:
+#   - env:  GPN_GERMANY_PRIVATE_KEY (yalnızca anahtar, base64)
+#           GPN_GERMANY_CONF_B64    (tam .conf, base64 — CI secret biçimi)
+#   - ayar: Ayarlar > GPN > GpnSeedGermanyPrivateKey
+# Anahtar sağlanmazsa bu şablon tohumlanmaz (anahtarsız profil yararsızdır);
+# anahtar Sunucu Yönetimi ekranından da içe aktarılabilir.
+[Interface]
+Address = 10.66.66.2/24
+MTU = 1360
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = xQZLxeDqYrCcM7oDYbFxDszWnCk4SzwYYXWsrib8S3A=
+Endpoint = 130.61.223.36:51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25

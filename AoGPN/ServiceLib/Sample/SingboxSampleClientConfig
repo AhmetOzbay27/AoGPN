@@ -1,0 +1,20 @@
+{
+	"log": {
+		"level": "debug",
+		"timestamp": true
+	},
+	"inbounds": [],
+	"outbounds": [
+		{
+			"type": "direct",
+			"tag": "direct"
+		},
+		{
+			"type": "block",
+			"tag": "block"
+		}
+	],
+	"route": {
+		"rules": []
+	}
+}

@@ -1,0 +1,52 @@
+name: Code Test
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'AoGPN/ServiceLib/Services/CoreConfig/**'
+      - 'AoGPN/ServiceLib/Handler/Fmt/**'
+      - 'AoGPN/Dil/**'
+      - 'AoGPN/ServiceLib/Resx/**'
+      - 'AoGPN/ServiceLib.Tests/LocalizationConsistencyTests.cs'
+      - 'AoGPN/Temalar/skins/**'
+      - '.github/workflows/test.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: 'recursive'
+        fetch-depth: '0'
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6.0.0
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Test Code
+      working-directory: ./AoGPN
+      run: dotnet test ./ServiceLib.Tests --no-restore
+
+    # Standalone skin tests (Temalar/skins/*.test.js): the pure keyboard
+    # contract, the real keydown listeners and the host-echo override cleanup.
+    # The integration tests run the real skin.js files inside jsdom (real DOM
+    # parsing and event propagation), so jsdom is installed from the local
+    # package.json first. The quoted glob is passed straight to node so every
+    # *.test.js under Temalar/skins runs — no manifest to keep in sync.
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Install Skin Test Dependencies
+      working-directory: ./AoGPN/Temalar/skins
+      run: npm ci
+
+    - name: Test Skins (node)
+      working-directory: ./AoGPN
+      run: node --test "Temalar/skins/*.test.js"

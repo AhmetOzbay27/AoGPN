@@ -1,0 +1,77 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: matrix
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+
+
+  body[data-theme="matrix"] {
+    --bg: #020A03;
+    --violet: #16A34A;
+    --cyan: #15803D;
+    --emerald: #16A34A;
+    --glass: rgba(22, 163, 74, 0.03);
+    --glass-border: rgba(22, 163, 74, 0.10);
+  }
+
+  /* --- Matrix: scanning grid overlay --- */  body[data-theme="matrix"]::after {
+    content: ''; position: fixed; inset: -500px 0 0 0; z-index: 0; pointer-events: none;
+    background:
+      repeating-linear-gradient(180deg, transparent 0 24px, rgba(22,163,74,.04) 24px 25px);
+    animation: matrix-drift 18s linear infinite;
+    opacity: .7;
+    will-change: transform;
+  }
+  /* Transform-only scroll: background-position is a paint property that
+     re-rasterizes the full-screen layer every frame. Translating a layer that
+     starts 500 px above the viewport produces the exact same 500 px scan loop
+     (500 = 20 × 25 px periods, so the wrap is seamless) on the compositor at
+     zero per-frame raster cost. */
+  @keyframes matrix-drift {
+    from { transform: translate3d(0, 0, 0); }
+    to   { transform: translate3d(0, 500px, 0); }
+  }
+  body[data-theme="matrix"]::before {
+    animation-duration: 40s !important;
+    /* no filter: full-screen blur on the animated aurora layer is the biggest
+       per-frame GPU cost in the dashboard; the shared gradient is soft already */
+  }
+
+  /* --- Matrix accent: subtle green terminal tint --- */
+  body[data-theme="matrix"] .glass {
+    border-color: rgba(22, 163, 74, 0.08);
+    box-shadow: 0 1px 12px rgba(22, 163, 74, 0.03);
+  }
+  body[data-theme="matrix"] .font-display {
+    text-shadow: 0 0 4px rgba(22, 163, 74, 0.15);
+  }
+  body[data-theme="matrix"]    .ring-wrap .ring-svg { filter: drop-shadow(0 0 8px #00FF41); }
+
+  /* Matrix: falling bar spinner */
+  body[data-theme="matrix"] .theme-spinner {
+    border: none;
+    background: repeating-linear-gradient(0deg, #00FF41 0 3px, transparent 3px 7px);
+    border-radius: 2px;
+    animation: matrix-bar 1.2s linear infinite;
+  }
+  @keyframes matrix-bar {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 28px; }
+  }
+  /* Matrix: green terminal tooltip */
+  body[data-theme="matrix"] [title]:hover::after {
+    background: rgba(0,0,0,.92);
+    border-color: rgba(0,255,65,.35);
+    color: #00FF41;
+    font-family: 'Courier New', monospace;
+    box-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 12px rgba(0,255,65,.15);
+  }
+  /* Matrix: green terminal toast */
+  body[data-theme="matrix"] #nodeToast {
+    background: rgba(0,0,0,.95);
+    border-color: rgba(0,255,65,.3);
+    color: #00FF41;
+    font-family: 'Courier New', monospace;
+    box-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 15px rgba(0,255,65,.1);
+  }
+  body[data-theme="matrix"] .status-badge { border-color: rgba(0,255,65,.3); color: #00FF41; font-family: 'Courier New', monospace; }
+  body[data-theme="matrix"] #matrixCursor { display: block; }

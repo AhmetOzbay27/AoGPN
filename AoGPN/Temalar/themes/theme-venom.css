@@ -1,0 +1,20 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: venom
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+
+
+  body[data-theme="venom"] {
+    --bg: #080E09;
+    --violet: #65A30D;
+    --cyan: #059669;
+    --emerald: #16A34A;
+    --glass: rgba(101, 163, 13, 0.035);
+    --glass-border: rgba(101, 163, 13, 0.11);
+  }
+  body[data-theme="venom"]::after {
+    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(163,230,53,.05) 3px 4px);
+    animation: scan-drift 9s linear infinite;
+  }
+  @keyframes scan-drift { from { transform: translateY(0); } to { transform: translateY(40px); } }

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "nexus-gpn",
+    "name": "NEXUS GPN",
+    "file": "skins/nexus/skin.html",
+    "accent": "#20e8ff",
+    "tagline": "Gaming private network"
+  },
+  {
+    "id": "cyber",
+    "name": "CYBER",
+    "file": "skins/cyber/skin.html",
+    "accent": "#fcee0a",
+    "tagline": "Netrunner neon protocol"
+  },
+  {
+    "id": "infra",
+    "name": "INFRA",
+    "file": "skins/infra/skin.html",
+    "accent": "#34d399",
+    "tagline": "Infrastructure terminal"
+  }
+]

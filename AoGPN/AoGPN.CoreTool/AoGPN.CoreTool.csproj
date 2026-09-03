@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<AssemblyName>AoGPN.CoreTool</AssemblyName>
+		<!-- The tool is deliberately platform-neutral (net10.0, no WPF) so it can run
+		     on the Linux/macOS packaging hosts and fetch the host-appropriate cores. -->
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
+	</ItemGroup>
+
+</Project>

@@ -1,0 +1,312 @@
+/* ===== CYBER — AoGPN netrunner skin ===== */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body.skin-cyber {
+  --cy-font-ui: 'Rajdhani', sans-serif;
+  --cy-font-term: 'VT323', monospace;
+  --cy-text: #ffffff;
+}
+
+/* theme: CYBER YELLOW (default) */
+body.skin-cyber[data-theme="yellow"] {
+  --cy-primary: #fcee0a;
+  --cy-secondary: #00f0ff;
+  --cy-danger: #ff003c;
+  --cy-bg: #050508;
+  --cy-panel: #0d0f16;
+  --cy-muted: #64748b;
+}
+
+/* theme: NEON VIOLET */
+body.skin-cyber[data-theme="purple"] {
+  --cy-primary: #b026ff;
+  --cy-secondary: #0066ff;
+  --cy-danger: #ff0055;
+  --cy-bg: #0a0510;
+  --cy-panel: #12061a;
+  --cy-muted: #887799;
+}
+
+/* system state (breached = connected) */
+.skin-cyber { --cy-state: var(--cy-danger); --cy-glow: var(--cy-danger); }
+.skin-cyber.is-breached { --cy-state: var(--cy-secondary); --cy-glow: var(--cy-secondary); }
+
+body.skin-cyber {
+  background-color: var(--cy-bg);
+  color: var(--cy-text);
+  font-family: var(--cy-font-ui);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: background-color 0.5s;
+  user-select: none;
+}
+
+/* CRT scanlines */
+body.skin-cyber::after {
+  content: " "; display: block; position: absolute; inset: 0;
+  background: linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,0.25) 50%), linear-gradient(90deg, rgba(255,0,0,0.06), rgba(0,255,0,0.02), rgba(0,0,255,0.06));
+  z-index: 100; background-size: 100% 4px, 6px 100%; pointer-events: none;
+}
+
+/* background grid */
+.cy-grid {
+  position: absolute; inset: 0; z-index: 0; opacity: 0.15;
+  background-image: linear-gradient(var(--cy-state) 1px, transparent 1px), linear-gradient(90deg, var(--cy-state) 1px, transparent 1px);
+  background-size: 30px 30px; transition: 0.5s;
+}
+
+/* main asymmetric frame */
+.cy-frame {
+  width: 1400px; height: 800px; position: relative; z-index: 5;
+  display: grid;
+  grid-template-columns: 350px 1fr 350px;
+  grid-template-rows: 70px 1fr 200px;
+  gap: 15px; padding: 15px;
+  clip-path: polygon(0 0, calc(100% - 40px) 0, 100% 40px, 100% 100%, 40px 100%, 0 calc(100% - 40px));
+  background: var(--cy-panel);
+  border: 2px solid var(--cy-state);
+  box-shadow: inset 0 0 50px rgba(0,0,0,0.9), 0 0 30px rgba(var(--cy-glow), 0.3);
+  transition: border-color 0.5s, background-color 0.5s, box-shadow 0.5s;
+}
+.cy-frame::before {
+  content: ''; position: absolute; bottom: 0; right: 40px; width: 300px; height: 12px;
+  background: repeating-linear-gradient(45deg, var(--cy-state) 0, var(--cy-state) 10px, transparent 10px, transparent 20px);
+  transition: 0.5s; z-index: 8;
+}
+
+/* header */
+.cy-header {
+  grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
+  background: var(--cy-primary); color: var(--cy-bg);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 20px) 100%, 0 100%);
+  padding: 0 30px; z-index: 10; transition: 0.5s; min-width: 0;
+}
+.cy-header-left { display: flex; align-items: center; gap: 20px; flex: 1 1 auto; min-width: 0; cursor: default; }
+.cy-header h1 { font-size: 32px; font-weight: 900; letter-spacing: 2px; line-height: 1; margin: 0; white-space: nowrap; }
+.cy-version { font-family: var(--cy-font-term); font-size: 20px; background: var(--cy-bg); color: var(--cy-primary); padding: 2px 10px; font-weight: bold; transition: 0.5s; white-space: nowrap; }
+.cy-node-label { font-family: var(--cy-font-term); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.cy-theme-switch { display: flex; gap: 8px; flex: 0 0 auto; }
+.cy-btn-theme {
+  background: var(--cy-bg); color: var(--cy-primary);
+  border: 1px solid var(--cy-bg); padding: 5px 15px; font-family: var(--cy-font-term);
+  font-size: 16px; cursor: pointer; transition: 0.3s; font-weight: bold; line-height: 1.2;
+  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+}
+.cy-btn-theme:hover { background: var(--cy-text); color: var(--cy-bg); }
+
+/* PCB traces */
+.cy-traces { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.trace-idle { fill: none; stroke: rgba(255,255,255,0.05); stroke-width: 4px; stroke-linejoin: miter; }
+.trace-active { fill: none; stroke: var(--cy-state); stroke-width: 4px; stroke-linejoin: miter; opacity: 0.2; transition: stroke 0.4s, opacity 0.4s; }
+.trace-pulse {
+  fill: none; stroke: #fff; stroke-width: 6px; stroke-linejoin: miter; stroke-linecap: square;
+  filter: drop-shadow(0 0 10px var(--cy-state));
+  stroke-dasharray: 30 500; stroke-dashoffset: 500;
+  opacity: 0; transition: opacity 0.4s, stroke 0.4s;
+}
+.cy-frame[data-dest="dst0"] #trace-dst0, .cy-frame[data-dest="dst1"] #trace-dst1, .cy-frame[data-dest="dst2"] #trace-dst2 {
+  opacity: 0.8; filter: drop-shadow(0 0 5px var(--cy-glow));
+}
+.skin-cyber.is-breached .cy-frame[data-dest="dst0"] #pulse-dst0,
+.skin-cyber.is-breached .cy-frame[data-dest="dst1"] #pulse-dst1,
+.skin-cyber.is-breached .cy-frame[data-dest="dst2"] #pulse-dst2 {
+  opacity: 1; animation: cySparkIn 1s cubic-bezier(0.4,0,0.2,1) infinite;
+}
+@keyframes cySparkIn { 100% { stroke-dashoffset: 0; } }
+
+/* Dynamic source traces — one per boost app, class-driven (path ids are
+   generated at runtime by skin.js so these rules apply to all of them). */
+.cy-traces .trace-src-idle { fill: none; stroke: rgba(255,255,255,0.05); stroke-width: 4px; stroke-linejoin: miter; }
+.cy-traces .trace-src-line {
+  fill: none; stroke: var(--cy-state); stroke-width: 4px; stroke-linejoin: miter;
+  opacity: 0.15; transition: stroke 0.4s, opacity 0.4s;
+}
+.cy-traces .trace-src-line.active { opacity: 0.8; filter: drop-shadow(0 0 5px var(--cy-glow)); }
+.cy-traces .trace-src-line.live { opacity: 0.5; }
+.skin-cyber.is-breached .cy-traces .trace-src-line.live { opacity: 0.75; filter: drop-shadow(0 0 6px var(--cy-glow)); }
+.cy-traces .trace-src-pulse {
+  fill: none; stroke: #fff; stroke-width: 5px; stroke-linejoin: miter; stroke-linecap: square;
+  filter: drop-shadow(0 0 10px var(--cy-state));
+  stroke-dasharray: 26 500; stroke-dashoffset: 500;
+  opacity: 0; transition: opacity 0.4s, stroke 0.4s;
+}
+.skin-cyber.is-breached .cy-traces .trace-src-pulse.live {
+  opacity: 1; animation: cySparkIn 1s cubic-bezier(0.4,0,0.2,1) infinite;
+}
+
+/* panels */
+.cy-panel {
+  position: relative; z-index: 8;
+  background: rgba(0,0,0,0.5);
+  border-top: 2px solid var(--cy-state);
+  border-bottom: 2px solid var(--cy-state);
+  padding: 18px; display: flex; flex-direction: column; gap: 12px;
+  transition: 0.5s; overflow: hidden;
+}
+.cy-panel-title {
+  font-size: 14px; color: var(--cy-state); text-transform: uppercase; font-weight: 700; letter-spacing: 3px;
+  border-bottom: 1px solid var(--cy-state); padding-bottom: 5px; margin-bottom: 5px; transition: 0.5s; opacity: 0.8;
+}
+.cy-left { grid-column: 1; grid-row: 2; clip-path: polygon(0 0, 100% 0, calc(100% - 20px) 100%, 0 100%); }
+.cy-right { grid-column: 3; grid-row: 2; clip-path: polygon(20px 0, 100% 0, 100% 100%, 0 100%); }
+/* bottom cells: features under the left column, settings under the right —
+   the console stays centered (grid-column 2, row 3). */
+.cy-left-bottom { grid-column: 1; grid-row: 3; clip-path: polygon(0 0, 100% 0, calc(100% - 20px) 100%, 0 100%); overflow-y: auto; }
+.cy-right-bottom { grid-column: 3; grid-row: 3; clip-path: polygon(20px 0, 100% 0, 100% 100%, 0 100%); overflow-y: auto; }
+
+/* ---- bottom-left: system controls ---- */
+.cy-ctl-label { font-size: 10px; color: var(--cy-muted); letter-spacing: 2px; font-family: var(--cy-font-term); }
+.cy-ctl-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cy-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.cy-pill {
+  background: var(--cy-bg); color: var(--cy-muted);
+  border: 1px solid rgba(255,255,255,0.12);
+  font-family: var(--cy-font-term); font-size: 11px; font-weight: bold;
+  padding: 4px 9px; cursor: pointer; transition: 0.25s;
+  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
+.cy-pill:hover { border-color: var(--cy-primary); color: var(--cy-text); }
+.cy-pill.active {
+  background: var(--cy-state); color: var(--cy-bg); border-color: var(--cy-state);
+  box-shadow: 0 0 10px var(--cy-glow);
+}
+
+/* ---- bottom-right: settings ---- */
+.cy-proxy-btn {
+  background: var(--cy-bg); color: var(--cy-muted);
+  border: 1px solid rgba(255,255,255,0.12);
+  font-family: var(--cy-font-term); font-size: 11px; font-weight: bold;
+  padding: 4px 9px; cursor: pointer; transition: 0.25s;
+  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
+.cy-proxy-btn:hover { border-color: var(--cy-primary); color: var(--cy-text); }
+.cy-proxy-btn.on {
+  background: var(--cy-state); color: var(--cy-bg); border-color: var(--cy-state);
+  box-shadow: 0 0 10px var(--cy-glow);
+}
+.cy-select {
+  background: var(--cy-bg); color: var(--cy-text);
+  border: 1px solid rgba(255,255,255,0.12);
+  font-family: var(--cy-font-term); font-size: 11px; font-weight: bold;
+  padding: 3px 6px; cursor: pointer; outline: none;
+  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
+.cy-select:focus { border-color: var(--cy-primary); }
+
+.cy-targets { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.cy-target {
+  position: relative; z-index: 10;
+  background: var(--cy-bg); border: 1px solid rgba(255,255,255,0.1);
+  padding: 11px 14px; cursor: pointer; transition: 0.3s;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.cy-target:hover { border-color: var(--cy-primary); }
+.cy-target > div { min-width: 0; }
+.cy-target h4 { font-size: 15px; font-weight: 700; line-height: 1.1; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cy-target span { font-size: 11px; font-family: var(--cy-font-term); letter-spacing: 1px; color: var(--cy-muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cy-switch { width: 30px; height: 12px; background: var(--cy-bg); border: 1px solid var(--cy-text); transform: skewX(-20deg); transition: 0.3s; position: relative; flex: 0 0 auto; cursor: pointer; outline: none; }
+.cy-switch::after { content: ''; position: absolute; width: 10px; height: 6px; background: var(--cy-text); top: 2px; left: 2px; transition: 0.2s; }
+.cy-switch:focus-visible { box-shadow: 0 0 0 2px var(--cy-primary); }
+/* standalone switch on-state (auto-reconnect) — general rules come BEFORE the
+   target-specific ones below, so the more specific variant stays last. */
+.cy-switch.on { border-color: var(--cy-state); background: var(--cy-state); box-shadow: 0 0 10px var(--cy-glow); }
+.cy-switch.on::after { left: 16px; background: var(--cy-bg); }
+/* on (tunneled) state — filled + glowing, thumb to the right */
+.cy-target .cy-switch.on { border-color: var(--cy-state); background: var(--cy-state); box-shadow: 0 0 10px var(--cy-glow); }
+.cy-target .cy-switch.on::after { left: 16px; background: var(--cy-bg); }
+.cy-target.active { background: rgba(255,255,255,0.05); border-color: var(--cy-state); box-shadow: inset 0 0 20px rgba(var(--cy-state), 0.2); }
+.cy-target.active h4 { color: var(--cy-state); text-shadow: 0 0 8px var(--cy-glow); }
+.cy-target.active span { color: var(--cy-text); }
+/* running (live) boost app: green program-state accent stays on the CARD
+   (border + title); the toggle switch itself only reflects the .on (tunneled)
+   state so its thumb still slides left/right when the route is toggled. */
+.cy-target.live { border-color: rgba(52,211,153,0.55); box-shadow: inset 0 0 18px rgba(52,211,153,0.12); }
+.cy-target.live h4 { color: #34d399; text-shadow: 0 0 8px rgba(52,211,153,0.7); }
+.cy-target .cy-live-tag { color: #34d399; }
+.cy-target .cy-lat { color: var(--cy-muted); margin-left: 4px; }
+/* compact mode: many boost apps → scale cards down so more fit */
+.cy-targets.many { gap: 6px; }
+.cy-targets.many .cy-target { padding: 6px 10px; gap: 8px; }
+.cy-targets.many .cy-target h4 { font-size: 12px; }
+.cy-targets.many .cy-target span { font-size: 10px; letter-spacing: 0.5px; }
+.cy-targets.many .cy-switch { width: 24px; height: 10px; }
+.cy-targets.many .cy-switch::after { width: 8px; height: 5px; top: 1.5px; left: 1.5px; }
+.cy-targets.many .cy-target .cy-switch.on::after { left: 13px; }
+
+/* empty state (no boost apps defined in the real program) */
+.cy-empty { font-family: var(--cy-font-term); font-size: 14px; color: var(--cy-muted); letter-spacing: 1px; border: 1px dashed rgba(255,255,255,0.14); padding: 12px 10px; text-align: center; line-height: 1.5; }
+.cy-empty small { font-size: 11px; opacity: 0.75; }
+/* the selected card's switch stays neutral too — only .on drives its fill/thumb */
+.cy-flag { font-weight: 900; font-size: 13px; color: var(--cy-primary); }
+
+/* center */
+.cy-center { grid-column: 2; grid-row: 2; display: flex; align-items: center; justify-content: center; z-index: 8; position: relative; }
+.cy-jackin {
+  width: 240px; height: 120px; background: var(--cy-primary); color: var(--cy-bg);
+  clip-path: polygon(20px 0, 100% 0, calc(100% - 20px) 100%, 0 100%);
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  cursor: pointer; transition: 0.4s; position: relative;
+  box-shadow: 0 0 0 4px var(--cy-bg), 0 0 0 8px var(--cy-state);
+}
+.cy-jackin:focus-visible { outline: 2px solid var(--cy-primary); outline-offset: 4px; }
+.cy-jackin:hover { filter: brightness(1.2); transform: scale(1.02); }
+.cy-jackin:active { transform: scale(0.95); }
+.cy-main-txt { font-size: 42px; font-weight: 900; letter-spacing: 4px; line-height: 1; transition: 0.4s; }
+.cy-sub-txt { font-family: var(--cy-font-term); font-size: 14px; font-weight: bold; letter-spacing: 2px; background: var(--cy-bg); color: var(--cy-primary); padding: 0 5px; margin-top: 5px; transition: 0.4s; }
+body.skin-cyber.is-breached .cy-jackin { background: var(--cy-secondary); box-shadow: 0 0 0 4px var(--cy-bg), 0 0 0 8px var(--cy-secondary), 0 0 50px var(--cy-secondary); }
+body.skin-cyber.is-breached .cy-sub-txt { color: var(--cy-secondary); }
+.cy-jackin.cn { background: var(--cy-primary); box-shadow: 0 0 0 4px var(--cy-bg), 0 0 0 8px var(--cy-primary), 0 0 44px var(--cy-primary); animation: cyGlitch 0.2s linear infinite; }
+
+/* right panel scroll area for telemetry blocks */
+.cy-data-scroll { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; flex: 1 1 auto; }
+.cy-targets { flex: 0 1 auto; }
+
+/* telemetry */
+.cy-data-block { background: rgba(0,0,0,0.6); padding: 8px 12px; border-left: 4px solid var(--cy-state); transition: 0.5s; flex: 0 0 auto; }
+.cy-throughput { display: flex; gap: 16px; font-family: var(--cy-font-term); font-size: 18px; color: var(--cy-state); transition: 0.5s; text-shadow: 0 0 10px var(--cy-glow); line-height: 1.1; }
+.cy-throughput i { font-style: normal; font-size: 11px; color: var(--cy-text); opacity: 0.65; }
+.cy-data-label { font-size: 10px; color: var(--cy-text); letter-spacing: 2px; opacity: 0.6; }
+.cy-data-value { font-size: 24px; font-weight: 700; color: var(--cy-state); font-family: var(--cy-font-term); transition: 0.5s; text-shadow: 0 0 10px var(--cy-glow); line-height: 1.1; }
+/* Modifier AFTER the base: jsdom's naive cascade only uses source order, so
+   an override placed before its base would silently lose (specificity is
+   ignored). The rule-order test in skins-style.test.js enforces this. */
+.cy-data-value.cy-sm { font-size: 17px; }
+.cy-unit { font-size: 13px; color: var(--cy-text); }
+.cy-bar { width: 100%; height: 6px; background: rgba(255,255,255,0.1); margin-top: 4px; overflow: hidden; }
+.cy-fill { height: 100%; width: 0%; background: var(--cy-state); transition: width 0.3s, background 0.5s; box-shadow: 0 0 10px var(--cy-state); }
+
+/* bottom terminal — centered under the core so the side panels can grow */
+.cy-bottom {
+  grid-column: 2; grid-row: 3; position: relative; z-index: 8;
+  background: var(--cy-bg); border: 2px solid var(--cy-state);
+  padding: 10px 14px; display: flex; flex-direction: column; transition: 0.5s;
+  box-shadow: inset 0 0 20px rgba(0,0,0,0.8); overflow: hidden;
+}
+.cy-term-header { background: var(--cy-state); color: var(--cy-bg); display: inline-block; padding: 2px 10px; font-weight: bold; font-size: 12px; align-self: flex-start; margin-bottom: 8px; clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%); transition: 0.5s; }
+.cy-term-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.cy-term-head-right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.cy-term-session { font-family: var(--cy-font-term); font-size: 13px; color: var(--cy-muted); letter-spacing: 1px; }
+.cy-term-session b { color: var(--cy-state); font-weight: normal; }
+.cy-term-body { flex: 1; overflow-y: auto; overflow-x: auto; font-family: var(--cy-font-term); font-size: 16px; color: var(--cy-primary); display: flex; flex-direction: column; gap: 1px; transition: 0.5s; min-height: 0; scrollbar-width: thin; }
+.cy-term-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.cy-term-body::-webkit-scrollbar-thumb { background: var(--cy-state); opacity: 0.6; }
+.cy-term-body::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); }
+.cy-term-body div { white-space: pre; }
+.cy-term-body .sys-msg { color: var(--cy-text); }
+.cy-term-body .err-msg { color: var(--cy-danger); text-shadow: 0 0 5px var(--cy-danger); }
+.cy-term-body .ok-msg { color: var(--cy-secondary); text-shadow: 0 0 5px var(--cy-secondary); }
+
+@keyframes cyGlitch {
+  0%,100% { transform: none; }
+  2%, 64% { transform: translate(1px,0) skew(0deg); }
+  4%, 60% { transform: translate(-1px,0) skew(0deg); }
+  62% { transform: translate(0,0) skew(1deg); }
+}
+
+.cy-toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--cy-state); color: var(--cy-bg); font-family: var(--cy-font-term); font-size: 16px; font-weight: bold; padding: 6px 14px; opacity: 0; pointer-events: none; transition: 0.2s; clip-path: polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px); z-index: 200; }
+.cy-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }

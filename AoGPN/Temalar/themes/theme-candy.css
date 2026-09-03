@@ -1,0 +1,6 @@
+/* Candy Circuit — dark plum with coral, mint and cream accents. */
+body[data-theme="candy"] { --violet:#FB7185; --cyan:#A7F3D0; --emerald:#FDE68A; --violet-rgb:251,113,133; --cyan-rgb:167,243,208; --emerald-rgb:253,230,138; background:#241522; color:#FFF1F2; }
+body[data-theme="candy"]::before { content:""; position:fixed; inset:0; pointer-events:none; background:radial-gradient(circle at 15% 20%,rgba(167,243,208,.15),transparent 28%),radial-gradient(circle at 80% 70%,rgba(251,113,133,.17),transparent 34%); }
+body[data-theme="candy"] .glass { background:rgba(45,25,43,.76); border-color:rgba(167,243,208,.24); }
+body[data-theme="candy"] .ring-wrap .ring-svg { filter:drop-shadow(0 0 9px #A7F3D0) drop-shadow(0 0 5px #FB7185); }
+body[data-theme="candy"] .theme-spinner { border-top-color:#FB7185; border-right-color:#A7F3D0; }

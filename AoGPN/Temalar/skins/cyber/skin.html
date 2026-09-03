@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AO GPN — HYBRID CYBER-VOLT PROTOCOL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700;900&family=VT323&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="skin.css" />
+</head>
+<body class="skin-cyber" data-theme="yellow" data-cy-skin="cyber">
+  <!-- CRT overlay + grid -->
+  <div class="cy-grid"></div>
+
+  <div class="cy-frame" id="cyFrame" data-source="src0" data-dest="dst0">
+    <!-- PCB / electrical traces -->
+    <svg class="cy-traces" viewBox="0 0 1400 800" preserveAspectRatio="none">
+      <g id="cyPaths">
+        <!-- Source traces are generated dynamically per boost app by skin.js
+             (each connected app gets its own trace into the core). -->
+        <g id="cySourceTraces"></g>
+
+        <path class="trace-idle" d="M 820 400 L 890 290 L 950 230 H 1035" />
+        <path class="trace-active" id="trace-dst0" d="M 820 400 L 890 290 L 950 230 H 1035" />
+        <path class="trace-pulse" id="pulse-dst0" d="M 820 400 L 890 290 L 950 230 H 1035" />
+        <path class="trace-idle" d="M 820 400 L 920 380 L 960 330 H 1035" />
+        <path class="trace-active" id="trace-dst1" d="M 820 400 L 920 380 L 960 330 H 1035" />
+        <path class="trace-pulse" id="pulse-dst1" d="M 820 400 L 920 380 L 960 330 H 1035" />
+        <path class="trace-idle" d="M 820 400 L 930 430 H 1035" />
+        <path class="trace-active" id="trace-dst2" d="M 820 400 L 930 430 H 1035" />
+        <path class="trace-pulse" id="pulse-dst2" d="M 820 400 L 930 430 H 1035" />
+      </g>
+    </svg>
+
+    <!-- header / theme switcher -->
+    <header class="cy-header">
+      <div class="cy-header-left" id="cyDragRegion">
+        <h1>AO GPN</h1>
+        <div class="cy-version" id="cyVersion">v2077.2</div>
+        <div class="cy-node-label" id="cyNodeLabel">[ NODE: DAR ES SALAAM, TZ ]</div>
+      </div>
+      <div class="cy-theme-switch">
+        <button type="button" class="cy-btn-theme" data-cy-theme="yellow">[ CYBER YELLOW ]</button>
+        <!-- NOTE: the theme names are brand accents, intentionally not translated -->
+        <button type="button" class="cy-btn-theme" data-cy-theme="purple">[ NEON VIOLET ]</button>
+        <button type="button" class="cy-btn-theme" id="cyToStandardBtn" title="Standard dashboard">[ STANDARD ]</button>
+        <button type="button" class="cy-btn-theme" id="cyMinBtn">—</button>
+        <button type="button" class="cy-btn-theme" id="cyMaxBtn">□</button>
+        <button type="button" class="cy-btn-theme" id="cyCloseBtn">x</button>
+      </div>
+    </header>
+
+    <!-- left: source nodes -->
+    <div class="cy-panel cy-left">
+      <div class="cy-panel-title" data-cy-i18n="panel.source">SMART SPLIT // INJECTION</div>
+      <div class="cy-targets" id="cySources" data-cy-kind="source"><!-- populated --></div>
+    </div>
+
+    <!-- bottom-left: system controls (route mode, direction, auto-reconnect) -->
+    <div class="cy-panel cy-left-bottom">
+      <div class="cy-panel-title" data-cy-i18n="panel.controls">SYSTEM CONTROLS</div>
+      <div class="cy-ctl-label" data-cy-i18n="ctl.connectionMode">CONNECTION MODE</div>
+      <div class="cy-pills">
+        <button type="button" class="cy-pill" data-cy-mode="gpn" data-cy-i18n="mode.gpn">GPN GAME TUNNEL</button>
+        <button type="button" class="cy-pill" data-cy-mode="vpn" data-cy-i18n="mode.vpn">GLOBAL VPN</button>
+      </div>
+      <div class="cy-ctl-label" data-cy-i18n="ctl.capture">CAPTURE</div>
+      <div class="cy-pills">
+        <button type="button" class="cy-pill" data-cy-transport="proxy" data-cy-i18n="transport.proxy">PROXY</button>
+        <button type="button" class="cy-pill" data-cy-transport="tun" data-cy-i18n="transport.tun">TUN</button>
+      </div>
+      <div class="cy-ctl-label" data-cy-i18n="ctl.routeMode">ROUTE MODE</div>
+      <div class="cy-pills">
+        <button type="button" class="cy-pill" data-cy-split="off" data-cy-i18n="split.off">OFF</button>
+        <button type="button" class="cy-pill" data-cy-split="vpn" data-cy-i18n="split.vpn">GLOBAL VPN</button>
+        <button type="button" class="cy-pill" data-cy-split="manual" data-cy-i18n="split.manual">GPN GAME TUNNEL</button>
+      </div>
+      <div class="cy-ctl-label" data-cy-i18n="ctl.splitDir">SPLIT DIRECTION</div>
+      <div class="cy-pills">
+        <button type="button" class="cy-pill" data-cy-dir="whitelist" data-cy-i18n="dir.whitelist">WHITELIST</button>
+        <button type="button" class="cy-pill" data-cy-dir="blacklist" data-cy-i18n="dir.blacklist">BLACKLIST</button>
+      </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.autoReconnect">AUTO RECONNECT</span>
+        <button type="button" class="cy-switch" id="cyAutoReconnect" role="switch" aria-checked="true" data-cy-i18n-title="arTitle" title="Auto-reconnect on connection drop"></button>
+      </div>
+    </div>
+
+    <!-- center: JACK IN -->
+    <div class="cy-center">
+      <div class="cy-jackin" id="cyPower" role="button" tabindex="0" aria-label="Connect">
+        <span class="cy-main-txt" id="cyMain">JACK IN</span>
+        <span class="cy-sub-txt" id="cySub">SYSTEM OFFLINE</span>
+      </div>
+    </div>
+
+    <!-- right: destination nodes + telemetry -->
+    <div class="cy-panel cy-right">
+      <div class="cy-panel-title" data-cy-i18n="panel.dest">DESTINATION // TELEMETRY</div>
+      <div class="cy-targets" id="cyDestinations" data-cy-kind="dest"><!-- populated --></div>
+      <div class="cy-data-scroll">
+        <div class="cy-data-block">
+          <div class="cy-data-label" data-cy-i18n="tele.latency">LATENCY (PING)</div>
+          <div class="cy-data-value" id="cyPing">ERR <span class="cy-unit">ms</span></div>
+          <div class="cy-bar"><div class="cy-fill" id="cyBarPing"></div></div>
+        </div>
+        <div class="cy-data-block">
+          <div class="cy-data-label" data-cy-i18n="tele.loss">PACKET LOSS</div>
+          <div class="cy-data-value" id="cyLoss">ERR <span class="cy-unit">%</span></div>
+          <div class="cy-bar"><div class="cy-fill" id="cyBarLoss"></div></div>
+        </div>
+        <div class="cy-data-block">
+          <div class="cy-data-label" data-cy-i18n="tele.throughput">THROUGHPUT</div>
+          <div class="cy-throughput"><span id="cyDown">-- <i>Mbps ⇣</i></span><span id="cyUp">-- <i>Mbps ⇡</i></span></div>
+          <div class="cy-bar"><div class="cy-fill" id="cyBarDown"></div></div>
+        </div>
+        <div class="cy-data-block">
+          <div class="cy-data-label" data-cy-i18n="tele.session">SESSION UPTIME</div>
+          <div class="cy-data-value cy-sm" id="cySession">00:00:00</div>
+        </div>
+        <div class="cy-data-block">
+          <div class="cy-data-label" data-cy-i18n="tele.exitIp">EXIT IP</div>
+          <div class="cy-data-value cy-sm" id="cyExitIp">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- bottom-right: settings (proxy + protocol + language) -->
+    <div class="cy-panel cy-right-bottom">
+      <div class="cy-panel-title" data-cy-i18n="panel.settings">SETTINGS</div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.systemProxy">SYSTEM PROXY</span>
+        <button type="button" class="cy-proxy-btn" id="cyProxyToggle" data-cy-i18n="proxy.off">PROXY OFF</button>
+      </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.proxyMode">PROXY MODE</span>
+        <select class="cy-select" id="cyProxyMode" aria-label="System proxy mode">
+          <option value="0">CLEAR</option>
+          <option value="1">SET</option>
+          <option value="2">UNCHANGED</option>
+          <option value="3">PAC</option>
+        </select>
+      </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.protocol">PROTOCOL</span>
+        <select class="cy-select" id="cyProtocol" aria-label="Protocol preference">
+          <option value="auto">AUTO</option>
+          <option value="wireguard">WIREGUARD</option>
+          <option value="mimic">MIMIC</option>
+          <option value="hysteria2">HYSTERIA2</option>
+          <option value="openvpn">OPENVPN</option>
+        </select>
+      </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.language">LANGUAGE</span>
+        <select class="cy-select" id="cyLanguage" aria-label="Interface language"><!-- populated at boot --></select>
+      </div>
+    </div>
+
+    <!-- bottom: terminal (operations console) -->
+    <div class="cy-bottom">
+      <div class="cy-term-head">
+        <div class="cy-term-header" id="cyTermHeader" data-cy-i18n="console.root">CONSOLE // ROOT ACCESS</div>
+        <div class="cy-term-head-right"><span data-cy-i18n="console.session">SESSION</span> <b id="cyTermSession">00:00:00</b></div>
+      </div>
+      <div class="cy-term-body" id="cyTermLog">
+        <div class="sys-msg" data-cy-i18n="console.bootOk">> SYSTEM BOOT: OK</div>
+        <div class="sys-msg" data-cy-i18n="console.bootLoaded">> AO GPN HYBRID PROTOCOL LOADED.</div>
+        <div class="err-msg" id="cyBootVuln" data-cy-i18n="console.bootVuln">> STATUS: VULNERABLE. SELECT ROUTE AND JACK IN.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cy-toast" id="cyToast">ok</div>
+  <script src="../route-keys.js"></script>
+  <script src="skin.js"></script>
+</body>
+</html>

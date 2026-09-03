@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AO GPN — INFRA TERMINAL</title>
+<link rel="stylesheet" href="skin.css" />
+</head>
+<body class="skin-infra" data-if-skin="infra">
+  <div class="if-shell">
+    <!-- header / window controls -->
+    <header class="if-header">
+      <div class="if-header-left" id="ifDragRegion">
+        <span class="if-logo">AO GPN</span>
+        <span class="if-node" id="ifNodeLabel">NODE: —</span>
+      </div>
+      <div class="if-header-right">
+        <span class="if-node" data-if-i18n="lang">LANG</span>
+        <select class="if-lang" id="ifLang" aria-label="Interface language"><!-- populated by skin.js --></select>
+        <div class="if-window">
+          <button type="button" class="if-btn" id="ifToStandardBtn" data-if-i18n-title="stdTitle" title="Standard dashboard">STANDARD</button>
+          <button type="button" class="if-btn" id="ifMinBtn">—</button>
+          <button type="button" class="if-btn" id="ifMaxBtn">□</button>
+          <button type="button" class="if-btn" id="ifCloseBtn">x</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- left top: tunneled apps (togglable routes) -->
+    <section class="if-panel if-apps">
+      <div class="if-panel-title" data-if-i18n="panel.apps">BOOST APPS</div>
+      <div class="if-app-list" id="ifApps"><!-- populated by skin.js --></div>
+    </section>
+
+    <!-- left bottom: route node selection -->
+    <section class="if-panel if-nodes">
+      <div class="if-panel-title" data-if-i18n="panel.nodes">ROUTE NODES</div>
+      <div class="if-node-list" id="ifNodes"><!-- populated by skin.js --></div>
+    </section>
+
+    <!-- center: connect + connection controls -->
+    <section class="if-center">
+      <div class="if-status">
+        <span class="if-dot" id="ifDot"></span>
+        <span class="if-status-text" id="ifStatus">OFFLINE</span>
+      </div>
+      <button type="button" class="if-connect" id="ifConnect">
+        <span class="if-connect-main" id="ifConnectMain">CONNECT</span>
+        <span class="if-connect-sub" id="ifConnectSub">GPN · PROXY</span>
+      </button>
+      <div class="if-meta">
+        <div class="if-metric"><span class="if-metric-label" data-if-i18n="metric.session">SESSION</span><span class="if-metric" id="ifSession">00:00:00</span></div>
+        <div class="if-metric"><span class="if-metric-label" data-if-i18n="metric.exitIp">EXIT IP</span><span class="if-metric sm" id="ifExitIp">—</span></div>
+      </div>
+
+      <div class="if-ctl">
+        <div class="if-ctl-row">
+          <span class="if-ctl-label" data-if-i18n="ctl.mode">MODE</span>
+          <div class="if-pills">
+            <button type="button" class="if-pill" data-if-mode="gpn" data-if-i18n="mode.gpn">GPN</button>
+            <button type="button" class="if-pill" data-if-mode="vpn" data-if-i18n="mode.globalVpn">GLOBAL VPN</button>
+          </div>
+        </div>
+        <div class="if-ctl-row">
+          <span class="if-ctl-label" data-if-i18n="ctl.transport">CAPTURE</span>
+          <div class="if-pills">
+            <button type="button" class="if-pill" data-if-transport="proxy" data-if-i18n="transport.proxy">PROXY</button>
+            <button type="button" class="if-pill" data-if-transport="tun" data-if-i18n="transport.tun">TUN</button>
+          </div>
+        </div>
+        <div class="if-ctl-row">
+          <span class="if-ctl-label" data-if-i18n="ctl.split">SPLIT</span>
+          <div class="if-pills">
+            <button type="button" class="if-pill" data-if-split="off" data-if-i18n="split.off">OFF</button>
+            <button type="button" class="if-pill" data-if-split="vpn" data-if-i18n="split.global">GLOBAL</button>
+            <button type="button" class="if-pill" data-if-split="manual" data-if-i18n="split.gpn">GPN</button>
+          </div>
+        </div>
+        <div class="if-ctl-row">
+          <span class="if-ctl-label" data-if-i18n="ctl.dir">DIRECTION</span>
+          <div class="if-pills">
+            <button type="button" class="if-pill" data-if-dir="whitelist" data-if-i18n="dir.whitelist">WHITELIST</button>
+            <button type="button" class="if-pill" data-if-dir="blacklist" data-if-i18n="dir.blacklist">BLACKLIST</button>
+          </div>
+        </div>
+        <div class="if-ctl-row">
+          <span class="if-ctl-label" data-if-i18n="ctl.autoReconnect">AUTO RECONNECT</span>
+          <button type="button" class="if-switch" id="ifAutoReconnect" role="switch" aria-checked="true" tabindex="0" aria-label="Auto-reconnect on connection drop"></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- right top: telemetry -->
+    <section class="if-panel if-telemetry">
+      <div class="if-panel-title" data-if-i18n="panel.telemetry">TELEMETRY</div>
+      <div class="if-row"><span data-if-i18n="tele.ping">PING</span><b id="ifPing">— ms</b><i><em id="ifPingBar"></em></i></div>
+      <div class="if-row"><span data-if-i18n="tele.loss">LOSS</span><b id="ifLoss">— %</b><i><em id="ifLossBar"></em></i></div>
+      <div class="if-row"><span data-if-i18n="tele.down">DOWN</span><b id="ifDown">— Mbps</b><i><em id="ifDownBar"></em></i></div>
+      <div class="if-row"><span data-if-i18n="tele.up">UP</span><b id="ifUp">— Mbps</b><i><em id="ifUpBar"></em></i></div>
+    </section>
+
+    <!-- right bottom: system proxy + protocol settings -->
+    <section class="if-panel if-proxy">
+      <div class="if-panel-title" data-if-i18n="panel.proxy">PROXY / PROTOCOL</div>
+      <div class="if-proxy-row">
+        <span class="if-ctl-label" data-if-i18n="ctl.systemProxy">SYSTEM PROXY</span>
+        <button type="button" class="if-proxy-btn" id="ifProxyToggle" data-if-i18n-title="sysProxyTitle" title="Toggle system proxy">PROXY OFF</button>
+      </div>
+      <div class="if-proxy-row">
+        <span class="if-ctl-label" data-if-i18n="ctl.proxyMode">PROXY MODE</span>
+        <select class="if-select" id="ifProxyMode" aria-label="System proxy mode">
+          <option value="0">CLEAR</option>
+          <option value="1">SET</option>
+          <option value="2">UNCHANGED</option>
+          <option value="3">PAC</option>
+        </select>
+      </div>
+      <div class="if-proxy-row">
+        <span class="if-ctl-label" data-if-i18n="ctl.protocol">PROTOCOL</span>
+        <select class="if-select" id="ifProtocol" aria-label="Protocol preference">
+          <option value="auto">AUTO</option>
+          <option value="wireguard">WIREGUARD</option>
+          <option value="mimic">MIMIC</option>
+          <option value="hysteria2">HYSTERIA2</option>
+          <option value="openvpn">OPENVPN</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- bottom: console -->
+    <footer class="if-console" id="ifConsole">
+      <div class="if-console-line sys" data-if-i18n="console.ready">> INFRA SHELL READY. WAITING FOR TUNNEL.</div>
+    </footer>
+  </div>
+
+  <script src="../route-keys.js"></script>
+  <script src="skin.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<AssemblyName>AoGPN.GpnProbeTool</AssemblyName>
+		<!-- Platform-neutral (net10.0, no WPF) so it runs on Windows/Linux/macOS for
+		     live-server diagnostics without any GUI or admin requirement. -->
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
+	</ItemGroup>
+
+</Project>

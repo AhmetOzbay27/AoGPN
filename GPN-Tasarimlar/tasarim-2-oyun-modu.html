@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tasarım 2 · Oyun Modu — AO GPN</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Orbitron:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0A0C14;
+    --violet: #8B5CF6;
+    --cyan: #22D3EE;
+    --hot: #F472B6;
+    --emerald: #34D399;
+    --amber: #FBBF24;
+    --red: #F87171;
+    --text: #EDF2F7;
+    --dim: #8A94A6;
+    --faint: #5B6472;
+    --card: rgba(255,255,255,.03);
+    --border: rgba(255,255,255,.09);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(1000px 600px at 15% -10%, rgba(139,92,246,.16), transparent 55%),
+      radial-gradient(800px 500px at 110% 110%, rgba(244,114,182,.10), transparent 55%),
+      var(--bg);
+    min-height: 100vh;
+    padding: 22px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mockup-ribbon {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    background: rgba(10,12,20,.85); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    font-size: 10.5px; letter-spacing: .14em; font-weight: 600; color: var(--dim);
+    padding: 7px 16px;
+  }
+  .mockup-ribbon b { color: var(--hot); font-family: 'Orbitron', monospace; }
+  .mockup-ribbon a { color: var(--violet); text-decoration: none; }
+  .shell {
+    width: 100%; max-width: 1100px;
+    background: rgba(12,15,26,.75);
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: 22px; overflow: hidden;
+    box-shadow: 0 30px 90px rgba(0,0,0,.55);
+  }
+
+  .head { display: flex; align-items: center; gap: 14px; padding: 16px 24px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.015); }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand-logo { width: 36px; height: 36px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(145deg, var(--violet), var(--cyan)); box-shadow: 0 0 18px rgba(139,92,246,.4), inset 0 0 8px rgba(255,255,255,.15); }
+  .brand-name { font-family: 'Rajdhani', sans-serif; font-size: 19px; font-weight: 700; letter-spacing: .08em; }
+  .brand-name em { font-style: normal; color: var(--hot); }
+  .brand-sub { font-size: 10px; color: var(--faint); letter-spacing: .14em; text-transform: uppercase; }
+  .head-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; padding: 7px 13px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); color: #C7CDD9; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 9px var(--emerald); animation: blink 2s ease-in-out infinite; }
+  .pill.grn { border-color: rgba(52,211,153,.35); background: rgba(52,211,153,.08); color: #6EE7B7; }
+  .pill .mono { font-family: 'Orbitron', monospace; font-size: 11px; }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+  .body { padding: 24px; display: flex; flex-direction: column; gap: 22px; }
+
+  /* Hero: selected game */
+  .hero {
+    position: relative;
+    border-radius: 18px; overflow: hidden;
+    border: 1px solid rgba(139,92,246,.35);
+    background:
+      radial-gradient(600px 300px at 80% 0%, rgba(244,114,182,.14), transparent 60%),
+      radial-gradient(500px 300px at 0% 100%, rgba(139,92,246,.16), transparent 60%),
+      linear-gradient(135deg, rgba(139,92,246,.07), rgba(34,211,238,.05));
+    padding: 24px 26px;
+  }
+  .hero .hl { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--dim); font-weight: 700; margin-bottom: 18px; }
+  .hero .hl::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border), transparent); }
+  .hero-grid { display: grid; grid-template-columns: 300px 1fr; gap: 28px; align-items: center; }
+
+  .game-big { display: flex; align-items: center; gap: 18px; }
+  .game-big .cover {
+    width: 88px; height: 88px; border-radius: 18px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Rajdhani', sans-serif; font-size: 40px; font-weight: 700; color: #fff;
+    background: linear-gradient(145deg, #7C3AED, #DB2777);
+    box-shadow: 0 10px 34px rgba(124,58,237,.45), inset 0 0 18px rgba(255,255,255,.2);
+  }
+  .game-big .meta { min-width: 0; }
+  .game-big .gname { font-family: 'Rajdhani', sans-serif; font-size: 28px; font-weight: 700; letter-spacing: .02em; }
+  .game-big .gsub { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .server-pick {
+    margin-top: 13px; display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 12px; cursor: pointer; font-size: 11.5px; font-weight: 600;
+  }
+  .server-pick b { color: var(--cyan); font-family: 'Orbitron', monospace; font-size: 12px; }
+  .server-pick .chk { color: var(--dim); }
+
+  /* Route visualization */
+  .route { display: flex; flex-direction: column; gap: 12px; }
+  .route-track {
+    display: flex; align-items: center; gap: 0;
+    background: rgba(0,0,0,.28); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 18px;
+  }
+  .hop { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 110px; }
+  .hop .hicon {
+    width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: #141B2E; border: 1px solid var(--border); position: relative;
+  }
+  .hop.sen .hicon { border-color: rgba(148,163,184,.5); }
+  .hop.tun .hicon { background: linear-gradient(145deg, rgba(139,92,246,.25), rgba(34,211,238,.18)); border-color: rgba(139,92,246,.6); box-shadow: 0 0 22px rgba(139,92,246,.35); }
+  .hop.game .hicon { border-color: rgba(244,114,182,.55); background: rgba(244,114,182,.1); }
+  .hop .hname { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #C7CDD9; }
+  .hop .hping { font-family: 'Orbitron', monospace; font-size: 11px; color: var(--dim); }
+  .hop.tun .hping { color: #6EE7B7; }
+  .link { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0 10px; min-width: 60px; }
+  .link .wire { width: 100%; height: 2px; border-radius: 2px; background: linear-gradient(90deg, rgba(139,92,246,.7), rgba(34,211,238,.7)); position: relative; overflow: hidden; }
+  .link .wire::after {
+    content: ''; position: absolute; top: -1.5px; left: -20%; width: 10px; height: 5px; border-radius: 50%;
+    background: var(--cyan); box-shadow: 0 0 8px var(--cyan); animation: travel 2.2s linear infinite;
+  }
+  .link.v2 .wire::after { background: var(--hot); box-shadow: 0 0 8px var(--hot); animation-delay: .6s; animation-duration: 1.8s; }
+  @keyframes travel { to { left: 120%; } }
+  .link .ltype { font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); white-space: nowrap; }
+
+  .route-stats { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: center; gap: 10px; }
+  .rs { text-align: center; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px; padding: 10px 8px; }
+  .rs .k { font-size: 8.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+  .rs .v { font-family: 'Orbitron', monospace; font-size: 20px; font-weight: 700; margin-top: 3px; }
+  .rs.before .v { color: var(--red); }
+  .rs.after .v { color: #6EE7B7; }
+  .rs.gain { border-color: rgba(52,211,153,.35); background: rgba(52,211,153,.07); }
+  .rs.gain .v { color: var(--emerald); font-size: 17px; }
+  .rsarrow { text-align: center; color: var(--faint); font-size: 16px; }
+
+  .boost-btn {
+    display: block; width: 100%; margin-top: 18px;
+    padding: 15px; border-radius: 13px; border: none; cursor: pointer;
+    font-family: 'Rajdhani', sans-serif; font-size: 17px; font-weight: 700; letter-spacing: .28em; color: #fff;
+    background: linear-gradient(90deg, var(--violet), var(--hot), var(--violet));
+    background-size: 220% 100%;
+    box-shadow: 0 8px 28px rgba(219,39,119,.35);
+    transition: background-position .5s ease, transform .15s ease;
+  }
+  .boost-btn:hover { background-position: 100% 0; transform: translateY(-1px); }
+  .boost-btn small { display: block; font-family: 'Inter', sans-serif; font-size: 9.5px; font-weight: 500; letter-spacing: .12em; color: rgba(255,255,255,.7); margin-top: 2px; }
+
+  /* Games grid */
+  .section-ttl { display: flex; align-items: center; gap: 8px; font-family: 'Rajdhani', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: #C7CDD9; margin-bottom: 12px; }
+  .section-ttl .right { margin-left: auto; font-size: 10px; color: var(--dim); font-family: 'Inter', sans-serif; letter-spacing: .04em; text-transform: none; font-weight: 500; }
+  .games { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .game {
+    position: relative; border-radius: 14px; border: 1px solid var(--border);
+    background: var(--card); padding: 13px 11px; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 7px; text-align: center;
+    transition: transform .2s, border-color .2s, box-shadow .25s;
+  }
+  .game:hover { transform: translateY(-3px); border-color: rgba(255,255,255,.2); }
+  .game.act {
+    border-color: rgba(139,92,246,.65);
+    background: linear-gradient(160deg, rgba(139,92,246,.14), rgba(34,211,238,.07));
+    box-shadow: 0 0 0 1px rgba(139,92,246,.2), 0 10px 30px rgba(139,92,246,.18);
+  }
+  .game .gicon { width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-family: 'Rajdhani', sans-serif; font-size: 19px; font-weight: 700; background: rgba(255,255,255,.05); border: 1px solid var(--border); }
+  .game.act .gicon { background: linear-gradient(145deg, #7C3AED, #DB2777); border-color: transparent; color: #fff; box-shadow: 0 6px 18px rgba(124,58,237,.4); }
+  .game .gn { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .game .gp { font-family: 'Orbitron', monospace; font-size: 10px; }
+  .game .gp .b { color: var(--red); text-decoration: line-through; text-decoration-color: rgba(248,113,113,.5); }
+  .game .gp .a { color: #6EE7B7; font-weight: 700; }
+  .game .gst { font-size: 8.5px; font-weight: 700; letter-spacing: .1em; padding: 2.5px 8px; border-radius: 999px; color: var(--dim); background: rgba(255,255,255,.05); border: 1px solid var(--border); }
+  .game.act .gst { color: #6EE7B7; background: rgba(52,211,153,.1); border-color: rgba(52,211,153,.3); }
+
+  /* Bottom strip */
+  .strip { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-radius: 14px; background: var(--card); border: 1px solid var(--border); flex-wrap: wrap; }
+  .strip .si { display: inline-flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--dim); }
+  .strip .si b { color: #C7CDD9; font-family: 'Orbitron', monospace; font-size: 11px; }
+  .strip .si.ok { color: #6EE7B7; }
+  .strip .sep { width: 1px; height: 18px; background: var(--border); }
+  .strip .add { margin-left: auto; }
+
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .games { grid-template-columns: repeat(3, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="mockup-ribbon">
+  TASARIM 2 · <b>OYUN MODU</b> — görsel deneme, programa bağlı değil
+  &nbsp;·&nbsp; <a href="index.html">← Tüm tasarımlar</a>
+</div>
+
+<div class="shell">
+
+  <header class="head">
+    <div class="brand">
+      <span class="brand-logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2 3 6v5c0 5.2 3.7 9.9 9 11 5.3-1.1 9-5.8 9-11V6l-9-4Z" fill="#fff" opacity=".9"/><path d="M12 8v5m-2.5-2.5 5 5M14.5 10.5l-5 5" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+      <div>
+        <div class="brand-name">AO <em>GPN</em></div>
+        <div class="brand-sub">Oyun Modu</div>
+      </div>
+    </div>
+    <div class="head-right">
+      <span class="pill grn"><span class="dot"></span> BAĞLI</span>
+      <span class="pill"><span class="mono">01:23:45</span> oturum</span>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <!-- HERO -->
+    <section class="hero">
+      <div class="hl">🎮 Seçili oyun — CS2</div>
+      <div class="hero-grid">
+        <div class="game-big">
+          <div class="cover">CS</div>
+          <div class="meta">
+            <div class="gname">Counter-Strike 2</div>
+            <div class="gsub">Valve · Frankfurt sunucusu</div>
+            <div class="server-pick">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--cyan)"><path d="M12 21s-7-5.5-7-11a7 7 0 0 1 14 0c0 5.5-7 11-7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+              Tünel çıkışı: <b>Almanya-1</b> <span class="chk">▾</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="route">
+          <div class="route-track">
+            <div class="hop sen">
+              <span class="hicon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5" stroke-linecap="round"/></svg></span>
+              <span class="hname">Sen</span>
+              <span class="hping">52 ms</span>
+            </div>
+            <div class="link">
+              <div class="wire"></div>
+              <span class="ltype">Direkt hat</span>
+            </div>
+            <div class="hop tun">
+              <span class="hicon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2 3 6v5c0 5.2 3.7 9.9 9 11 5.3-1.1 9-5.8 9-11V6l-9-4Z" fill="url(#g)"/><path d="M12 8v5m-2.5-2.5 5 5M14.5 10.5l-5 5" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><defs><linearGradient id="g" x1="3" y1="6" x2="21" y2="18"><stop stop-color="#8B5CF6"/><stop offset="1" stop-color="#22D3EE"/></linearGradient></defs></svg></span>
+              <span class="hname">AO GPN Tüneli</span>
+              <span class="hping">18 ms</span>
+            </div>
+            <div class="link v2">
+              <div class="wire"></div>
+              <span class="ltype">Tünelli hat</span>
+            </div>
+            <div class="hop game">
+              <span class="hicon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F472B6" stroke-width="1.8"><rect x="2" y="7" width="20" height="11" rx="3"/><path d="M7 11v3M5.5 12.5h3M15.5 11h.01M18 13h.01" stroke-linecap="round"/></svg></span>
+              <span class="hname">Oyun Sunucusu</span>
+              <span class="hping">19 ms</span>
+            </div>
+          </div>
+          <div class="route-stats">
+            <div class="rs before"><div class="k">Direkt gecikme</div><div class="v">52 ms</div></div>
+            <div class="rsarrow">→</div>
+            <div class="rs after"><div class="k">Tünelli gecikme</div><div class="v">19 ms</div></div>
+            <div class="rsarrow">→</div>
+            <div class="rs gain"><div class="k">Kazanç</div><div class="v">-%63 · 33ms</div></div>
+          </div>
+          <button class="boost-btn">BOOST BAŞLAT <small>CS2 için Almanya-1 üzerinden tünel açılacak</small></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- GAMES -->
+    <section>
+      <div class="section-ttl">
+        Oyunlarım
+        <span class="right">3 oyun tünelli · 6 oyun listelendi</span>
+      </div>
+      <div class="games">
+        <div class="game act">
+          <span class="gicon">CS</span>
+          <span class="gn">CS2</span>
+          <span class="gp"><span class="b">48</span> → <span class="a">21</span></span>
+          <span class="gst">TÜNELLİ</span>
+        </div>
+        <div class="game">
+          <span class="gicon">V</span>
+          <span class="gn">Valorant</span>
+          <span class="gp"><span class="b">52</span> → <span class="a">19</span></span>
+          <span class="gst">TÜNELLİ</span>
+        </div>
+        <div class="game">
+          <span class="gicon">L</span>
+          <span class="gn">LoL</span>
+          <span class="gp"><span class="b">61</span> → <span class="a">27</span></span>
+          <span class="gst">TÜNELLİ</span>
+        </div>
+        <div class="game">
+          <span class="gicon">P</span>
+          <span class="gn">PUBG</span>
+          <span class="gp"><span class="b">84</span> → <span class="a" style="color:var(--dim)">—</span></span>
+          <span class="gst">KAPALI</span>
+        </div>
+        <div class="game">
+          <span class="gicon">F</span>
+          <span class="gn">Fortnite</span>
+          <span class="gp"><span class="b">67</span> → <span class="a" style="color:var(--dim)">—</span></span>
+          <span class="gst">KAPALI</span>
+        </div>
+        <div class="game">
+          <span class="gicon">A</span>
+          <span class="gn">Apex</span>
+          <span class="gp"><span class="b">73</span> → <span class="a" style="color:var(--dim)">—</span></span>
+          <span class="gst">KAPALI</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- STRIP -->
+    <section class="strip">
+      <span class="si ok">✓ IP doğrulandı</span>
+      <span class="sep"></span>
+      <span class="si">Tünel IP <b>45.90.31.42</b></span>
+      <span class="sep"></span>
+      <span class="si">Protokol <b>WireGuard</b></span>
+      <span class="sep"></span>
+      <span class="si">Taşıma <b>TUN</b></span>
+      <span class="sep"></span>
+      <span class="si">Kayıp <b>%0</b></span>
+      <span class="add"><button class="tiny" style="font-size:10.5px;font-weight:600;color:var(--dim);background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:8px;padding:6px 12px;cursor:pointer;">⚙ Bağlantı ayrıntıları</button></span>
+    </section>
+
+  </div>
+</div>
+</body>
+</html>
