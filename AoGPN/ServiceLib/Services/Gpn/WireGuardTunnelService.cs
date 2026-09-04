@@ -213,9 +213,11 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
     /// <see cref="IWireGuardTransport.SendAsync"/> (UDP). Veri yolu kapalıysa veya
     /// şifreleme/gönderim başarısızsa false — köprü sayaçta işler, döngü ölmez.
     /// </summary>
-    public async ValueTask<bool> InjectPacketAsync(byte[] packet, CancellationToken cancellationToken = default)
+    public async ValueTask<bool> InjectPacketAsync(ReadOnlyMemory<byte> packet, CancellationToken cancellationToken = default)
     {
-        var encrypted = Volatile.Read(ref _transport).Encrypt(packet);
+        // Encrypt senkron ve ilk await'ten ÖNCE çalışır — havuzlanmış tampon
+        // (AsMemory) yalnızca bu aşamada okunur; sonrası şifrelenmiş kopyadır.
+        var encrypted = Volatile.Read(ref _transport).Encrypt(packet.Span);
         if (encrypted is null)
         {
             Interlocked.Increment(ref _injectFailed);
@@ -271,7 +273,18 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
                     break;
                 }
                 Interlocked.Increment(ref _captured);
-                await InjectPacketAsync(packet.Data, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    // InjectPacketAsync, paket verisini YALNIZCA senkron Encrypt aşamasında
+                    // okur (sonrası şifrelenmiş kopya üzerinden await eder) — döndüğünde
+                    // kiralanan tampon serbestçe havuza dönebilir (Tier 4). Yalnızca
+                    // mantıksal uzunluk işlenir — havuz kapasitesi değil (Length).
+                    await InjectPacketAsync(packet.Data.AsMemory(0, packet.Length), cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    packet.Release();
+                }
             }
         }
         catch (OperationCanceledException)
@@ -326,7 +339,10 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
     /// paket tünel veri yoluna gider (recv-only yakalama → Encrypt → UDP → sunucu).
     /// </summary>
     public Func<DivertedPacket, CancellationToken, ValueTask> CreateInjectHandler()
-        => async (packet, ct) => { await InjectPacketAsync(packet.Data, ct).ConfigureAwait(false); };
+        => async (packet, ct) =>
+        {
+            await InjectPacketAsync(packet.Data.AsMemory(0, packet.Length), ct).ConfigureAwait(false);
+        };
 
     /// <summary>Paket başına telemetri anlık görüntüsü (dashboard akışı için).</summary>
     public GpnTunnelTelemetrySnapshot Snapshot()

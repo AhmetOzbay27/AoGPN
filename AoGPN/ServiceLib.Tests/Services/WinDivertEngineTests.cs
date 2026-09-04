@@ -429,8 +429,10 @@ public class WinDivertEngineTests
         }
 
         collected.Count.Should().Be(2);
-        collected[0].Data.Should().Equal(packets[0]);
-        collected[1].Data.Should().Equal(packets[1]);
+        // Tier 4: Data havuz kapasitesi olabilir — mantıksal uzunluk (Length) üzerinden karşılaştır.
+        collected[0].Data.AsSpan(0, collected[0].Length).SequenceEqual(packets[0]).Should().BeTrue();
+        collected[1].Data.AsSpan(0, collected[1].Length).SequenceEqual(packets[1]).Should().BeTrue();
+        collected[0].Length.Should().Be(packets[0].Length, "mantıksal uzunluk gerçek paket boyutuyla eşleşmeli");
         collected[0].Address.Direction.Should().Be(1); // outbound işaretlendi
     }
 
@@ -456,6 +458,55 @@ public class WinDivertEngineTests
         {
             await enumerator.DisposeAsync();
         }
+    }
+
+    // ── Tier 4 — DivertWorker sıfır tahsisat: ArrayPool tamponları ──────
+
+    [Fact]
+    public async Task Worker_PooledPacket_IsPooled_ReleaseIdempotent()
+    {
+        // Yakalanan paketlerin Data tamponu artık ArrayPool'dan kiralanır
+        // (paket başına new byte[] yok). Kiralanan paket Release ile havuza
+        // döner; çift Release güvenlidir (idempotent).
+        var ct = TestContext.Current.CancellationToken;
+        var fake = new FakeWinDivertApi(recvPackets: new[] { new byte[] { 0x45, 0, 0, 20 } });
+        using var engine = new WinDivertEngine(fake);
+        engine.Open("outbound and udp");
+
+        var worker = engine.StartCapture(ct);
+#pragma warning disable xUnit1051
+        var enumerator = worker.GetPacketsAsync(TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+#pragma warning restore xUnit1051
+        try
+        {
+            (await enumerator.MoveNextAsync()).Should().BeTrue();
+            var packet = enumerator.Current;
+            packet.IsPooled.Should().BeTrue("DivertWorker Data tamponunu ArrayPool'dan kiralar");
+            packet.Length.Should().Be(4, "havuz kapasitesi değil mantıksal uzunluk bildirilir");
+            packet.Data.AsSpan(0, packet.Length).SequenceEqual(new byte[] { 0x45, 0, 0, 20 }).Should().BeTrue();
+            packet.Data.Length.Should().BeGreaterThanOrEqualTo(4); // ArrayPool dilimi (kapasite)
+
+            packet.Release();
+            packet.Release(); // idempotent — ikinci iade no-op
+        }
+        finally
+        {
+            await enumerator.DisposeAsync();
+            await worker.StopAsync();
+        }
+    }
+
+    [Fact]
+    public void ManualDivertedPacket_Release_IsNoOp()
+    {
+        // Doğrudan kurulan paketler (testler, telemetri) havuza ait değildir —
+        // Release güvenle no-op'tur ve Data'ya dokunmaz.
+        var data = new byte[] { 9, 8, 7 };
+        var packet = new DivertedPacket(data, default, DateTimeOffset.UtcNow);
+
+        packet.IsPooled.Should().BeFalse("yalnızca DivertWorker'ın kiraladığı paketler havuzludur");
+        packet.Release();
+        packet.Data.Should().Equal(data, "manual paketin tamponu iade edilmez");
     }
 
     // ── DivertWorker kapanış sertleştirmesi (ham iş parçacığı çökme regresyonu) ──

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 
 namespace ServiceLib.Services;
@@ -192,5 +193,51 @@ public unsafe struct WinDivertAddress
 /// WinDivert tarafından yakalanmış tek paket. <see cref="Data"/> genişletilmiş
 /// AES-GCM sonrası tünelin içine enjekte edilmek üzere tüketiciye teslim edilir;
 /// <see cref="Address"/> enjeksiyonda WinDivertSend'e aynen geri verilir.
+///
+/// Tier 4: DivertWorker, <see cref="Data"/> tamponunu ArrayPool'dan kiralar
+/// (paket başına GC tahsisatı yok); kiralanan paketler işlendikten sonra
+/// <see cref="Release"/> ile havuza döner. Doğrudan <c>new DivertedPacket(...)</c>
+/// ile kurulan paketler (testler vb.) havuza ait değildir — Release güvenle no-op'tur.
 /// </summary>
-public sealed record DivertedPacket(byte[] Data, WinDivertAddress Address, DateTimeOffset CapturedAt);
+public sealed record DivertedPacket(byte[] Data, WinDivertAddress Address, DateTimeOffset CapturedAt)
+{
+    private int _released; // 0 = havuzda aktif, 1 = iade edildi (çift-release koruması)
+    private readonly bool _pooled;
+    private readonly int _poolLength;
+
+    private DivertedPacket(byte[] data, int length, WinDivertAddress address, DateTimeOffset capturedAt, bool pooled)
+        : this(data, address, capturedAt)
+    {
+        _poolLength = length;
+        _pooled = pooled;
+    }
+
+    /// <summary>
+    /// Paketin GERÇEK mantıksal uzunluğu (bayt). Havuzlanmış paketlerde
+    /// <see cref="Data"/>.Length kapasitedir (ArrayPool dilimleri 2'nin katıdır)
+    /// — tüketiciler yalnızca <c>Data.AsSpan(0, Length)</c> aralığını işlemelidir.
+    /// Doğrudan kurulan paketlerde <c>Data.Length</c> döner — eski davranış.
+    /// </summary>
+    public int Length => _pooled ? _poolLength : Data.Length;
+
+    /// <summary>Paket ArrayPool'dan kiralanmış bir tampon taşıyor mu.</summary>
+    public bool IsPooled => _pooled;
+
+    /// <summary>DivertWorker'ın havuzdan kiraladığı paketi kurar (tam uzunlukla).</summary>
+    internal static DivertedPacket FromPool(byte[] data, int length, WinDivertAddress address, DateTimeOffset capturedAt)
+        => new(data, length, address, capturedAt, pooled: true);
+
+    /// <summary>
+    /// Kiralanan <see cref="Data"/> tamponunu ArrayPool'a iade eder (yalnızca
+    /// kiralanmış paketlerde etkili; idempotent). Tüketici paketi İŞLEDİKTEN
+    /// (inject/telemetri) sonra çağırmalıdır — havuz yeniden kullanıma açılır.
+    /// </summary>
+    public void Release()
+    {
+        if (!_pooled || Interlocked.Exchange(ref _released, 1) != 0)
+        {
+            return;
+        }
+        ArrayPool<byte>.Shared.Return(Data, clearArray: false);
+    }
+}

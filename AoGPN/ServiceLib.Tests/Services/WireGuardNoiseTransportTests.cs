@@ -100,6 +100,44 @@ public class WireGuardNoiseTransportTests
         decrypted!.AsSpan().SequenceEqual(ipPacket).Should().BeTrue();
     }
 
+    // ── Tier 4 — önbellekli AEAD + nonce yeniden kullanımı ──────────────
+
+    [Fact]
+    public void Session_CachedAeads_ManyVariedSizePackets_RoundTrip()
+    {
+        // ChaCha20Poly1305 örneği artık yön başına BİR KEZ kurulur (paket başına
+        // natif anahtar tutamacı yok) ve nonce tamponları yeniden kullanılır;
+        // şifreleme yerinde (in-place) yapılır — ara padding kopyası yok. Bu test
+        // aynı oturumda 16 hizası altı/üstü + sınır boyutlarında çok sayıda
+        // paketin şifrelenip çözülmesiyle önbellekli AEAD + counter ilerlemesi +
+        // padding trim'inin doğruluğunu kilitler (0xFFFF WG üst sınırı).
+        var clientPrivate = RandomBytes(32);
+        var serverPrivate = RandomBytes(32);
+        var serverPublic = WireGuardNoise.PublicKey(serverPrivate);
+        var client = new WireGuardHandshakeClient(clientPrivate, serverPublic);
+        var (response, responderSession, failure) = ResponderCore.Respond(client.CreateInitiation(), serverPrivate, 0x2222u);
+        response.Should().NotBeNull(failure);
+        var clientSession = client.ConsumeResponse(response!);
+        clientSession.Should().NotBeNull();
+
+        var sizes = new[] { 20, 28, 47, 64, 255, 1500, 0xFFFF };
+        foreach (var size in sizes)
+        {
+            var payload = RandomBytes(size);
+            payload[0] = 0x45;                                   // IPv4 başlığı
+            payload[2] = (byte)((size >> 8) & 0xFF);             // toplam uzunluk →
+            payload[3] = (byte)(size & 0xFF);                    // (checked ctx — maske şart)
+            // not: 0xFFFF boyutunda toplam uzunluk alanı 16-bit'e sığmaz; bu sınır
+            // boyutta trim yine de güvenlidir (65535 <= padded 65536)
+
+            var wire = clientSession!.Encrypt(payload);
+            wire.Should().NotBeNull($"{size} bayt paket şifrelenebilmeli");
+            var roundTrip = responderSession!.Decrypt(wire!);
+            roundTrip.Should().NotBeNull($"{size} bayt paket çözülebilmeli");
+            roundTrip!.AsSpan().SequenceEqual(payload).Should().BeTrue();
+        }
+    }
+
     // ── 3. Transport round-trip (loopback UDP, wire format) ───────────────
 
     [Fact]

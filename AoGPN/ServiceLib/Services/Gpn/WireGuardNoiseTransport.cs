@@ -270,6 +270,13 @@ public sealed class WireGuardNoiseTransport : IWireGuardTransport, IDisposable
     private readonly object _gate = new();
     private WireGuardSession? _session;
     private UdpClient? _udp; // Faz 2d: el sıkışma sonrası CANLI kalan UDP soketi
+
+    // Tier 4 — alım döngüsü için TEK kullanımlık (yalnızca o iş parçacığında
+    // dokunulur) 64 KiB ölçekli scratch tampon: UdpClient.ReceiveAsync'in paket
+    // başına byte[] ayırması yerine veri doğrudan buraya okunur (datagram boyutu
+    // UDP sınırı 65507 baytı aşamaz). İçerik her yinelemede senkron çözülür ve
+    // tüketiciye verilen çıktı TAZE bir dizidir — scratch güvenle yeniden kullanılır.
+    private readonly byte[] _recvScratch = new byte[0x10000];
     private long _encrypted;
     private long _decrypted;
     private long _decryptFailed;
@@ -422,7 +429,9 @@ public sealed class WireGuardNoiseTransport : IWireGuardTransport, IDisposable
 
         try
         {
-            await udp.SendAsync(wirePacket, cancellationToken).ConfigureAwait(false);
+            // Tier 4: sıfır tahsisat gönderim — UdpClient byte[] aşırı yükü yerine
+            // doğrudan soketin Memory tabanlı API'si (iç kopya/alloc yok).
+            await udp.Client.SendAsync(wirePacket.AsMemory(), SocketFlags.None, cancellationToken).ConfigureAwait(false);
             Interlocked.Increment(ref _sent);
             return true;
         }
@@ -456,10 +465,14 @@ public sealed class WireGuardNoiseTransport : IWireGuardTransport, IDisposable
                     continue;
                 }
 
-                UdpReceiveResult datagram;
+                int count;
                 try
                 {
-                    datagram = await udp.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+                    // Tier 4: paket başına tahsisat yok — veri yeniden kullanılabilir
+                    // scratch tampona okunur (datagram 65507 baytı aşamaz). UdpClient'in
+                    // byte[] aşırı yükü her çağrıda dizi ayırır; doğrudan soketin Memory
+                    // tabanlı API'si kullanılır.
+                    count = await udp.Client.ReceiveAsync(_recvScratch.AsMemory(), SocketFlags.None, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -479,13 +492,17 @@ public sealed class WireGuardNoiseTransport : IWireGuardTransport, IDisposable
                     break;
                 }
 
-                var type = WireGuardNoise.PeekMessageType(datagram.Buffer);
+                if (count < 4)
+                {
+                    continue; // başlık yok — PeekMessageType'ın uzunluk guard'ı ile aynı
+                }
+                var type = WireGuardNoise.PeekMessageType(_recvScratch);
                 if (type != WireGuardNoise.MessageTypeTransport)
                 {
                     continue; // el sıkışma sonrası gelmemeli ama güvenli atla
                 }
 
-                var decrypted = Decrypt(datagram.Buffer);
+                var decrypted = Decrypt(_recvScratch.AsSpan(0, count));
                 if (decrypted is null)
                 {
                     continue; // decrypt hatası zaten DecryptFailedCount'a işlendi
@@ -534,12 +551,19 @@ public sealed class WireGuardNoiseTransport : IWireGuardTransport, IDisposable
 
     public void Dispose()
     {
+        WireGuardSession? session;
         lock (_gate)
         {
             _udp?.Dispose();
             _udp = null;
+            session = _session;
             _session = null;
         }
+        // Tier 4: cached AEAD'lerin natif anahtar tutamaçlarını serbest bırak.
+        // Teardown'da çağrılır (pompalar durdurulduktan sonra) — veri düzlemi
+        // ile yarış yoktur; el sıkışma değişiminde eski oturum bilinçli olarak
+        // atılır (finalizer geri toplar — veri düzlemi ile yarış riski yok).
+        session?.Dispose();
     }
 
     public byte[]? Encrypt(ReadOnlySpan<byte> packet)

@@ -121,7 +121,10 @@ public class GpnCaptureTests
             engine,
             inject: (packet, ct) =>
             {
-                injected.Add(packet.Data);
+                // Tier 4: havuzlanmış tampon işlendikten sonra havuza DÖNER ve
+                // yeniden kiralanabilir — tüketici yalnızca mantıksal uzunluğu
+                // (Length) kopyalamalı, ham referansı saklamamalı.
+                injected.Add(packet.Data.AsSpan(0, packet.Length).ToArray());
                 if (injected.Count >= 2)
                 {
                     cts.Cancel();
@@ -181,7 +184,8 @@ public class GpnCaptureTests
             engine,
             inject: (packet, ct) =>
             {
-                consumed.Add(packet.Data);
+                // Tier 4: havuzlanmış tamponun mantıksal uzunluğu kopyalanır (Length).
+                consumed.Add(packet.Data.AsSpan(0, packet.Length).ToArray());
                 if (consumed.Count >= 2)
                 {
                     cts.Cancel();
@@ -221,7 +225,7 @@ public class GpnCaptureTests
             engine,
             inject: (packet, ct) =>
             {
-                injected.Add(packet.Data);
+                injected.Add(packet.Data.AsSpan(0, packet.Length).ToArray());
                 return ValueTask.CompletedTask;
             },
             options: new GpnCaptureOptions

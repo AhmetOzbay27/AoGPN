@@ -64,7 +64,7 @@ public class WinDivertDriverSmokeTests
 
             var packet = enumerator.Current;
 
-            packet.Data.Length.Should().BeGreaterThan(0, "sniff edilen paket veri içerir");
+            packet.Length.Should().BeGreaterThan(0, "sniff edilen paket veri içerir");
             packet.Address.Timestamp.Should().NotBe(0, "timestamp QPC tabanlı — sıfır olamaz");
             packet.Address.Layer.Should().Be(WinDivertNative.LayerNetwork, "NETWORK katmanında yakalandı");
             packet.Address.IsOutbound.Should().BeTrue("loopback paketleri yalnızca outbound yakalanır");

@@ -197,13 +197,20 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
             {
                 return;
             }
-            await foreach (var _ in worker.GetPacketsAsync(sniffCts.Token))
+            await foreach (var packet in worker.GetPacketsAsync(sniffCts.Token))
             {
-                Interlocked.Increment(ref _sniffedPackets);
-                if (_options.VerifyPacketCount > 0
-                    && Volatile.Read(ref _sniffedPackets) >= _options.VerifyPacketCount)
+                try
                 {
-                    break; // yeterli kanıt — recv-only'ye geç
+                    Interlocked.Increment(ref _sniffedPackets);
+                    if (_options.VerifyPacketCount > 0
+                        && Volatile.Read(ref _sniffedPackets) >= _options.VerifyPacketCount)
+                    {
+                        break; // yeterli kanıt — recv-only'ye geç
+                    }
+                }
+                finally
+                {
+                    packet.Release(); // sniff yalnızca sayaç tutar — tampon hemen havuzda
                 }
             }
         }
@@ -232,11 +239,20 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
             // döngü _current'i yeniden okur ve yeni worker'dan devam eder.
             await foreach (var packet in worker.GetPacketsAsync(cancellationToken))
             {
-                if (_options.EnableTelemetry)
+                try
                 {
-                    RecordTelemetry(packet);
+                    if (_options.EnableTelemetry)
+                    {
+                        RecordTelemetry(packet); // senkron — Data yalnızca burada okunur
+                    }
+                    // _inject, Data'yı await edilen çağrı içinde senkron tüketir
+                    // (Encrypt aşaması) — dönüşte kiralanan tampon havuza döner (Tier 4).
+                    await _inject(packet, cancellationToken).ConfigureAwait(false);
                 }
-                await _inject(packet, cancellationToken).ConfigureAwait(false);
+                finally
+                {
+                    packet.Release();
+                }
             }
         }
     }
@@ -367,7 +383,9 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
     /// </summary>
     private void RecordTelemetry(DivertedPacket packet)
     {
-        var stats = GpnPacketStats.FromPacket(packet.Data, packet.Address.IsOutbound);
+        // Tier 4: havuzlanmış tamponun YALNIZCA mantıksal uzunluğu işlenir (Length),
+        // kapasitesi değil — dilim boşluğu asla telemetriye girmez.
+        var stats = GpnPacketStats.FromPacket(packet.Data.AsSpan(0, packet.Length), packet.Address.IsOutbound);
         uint? pid = null;
         var inPool = false;
         if (stats.Protocol == GpnPacketProtocol.Udp && stats.LocalPort != 0)

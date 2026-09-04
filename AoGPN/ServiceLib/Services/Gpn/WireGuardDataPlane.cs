@@ -92,12 +92,23 @@ public sealed class WireGuardReplayFilter
 /// filtresi. <see cref="Encrypt"/> tünel içine giden IP paketini, <see cref="Decrypt"/>
 /// tünelden gelen transport mesajını işler (wire format — gerçek sunucuyla uyumlu).
 /// </summary>
-public sealed class WireGuardSession
+public sealed class WireGuardSession : IDisposable
 {
     private readonly byte[] _sendKey;
     private readonly byte[] _recvKey;
     private readonly WireGuardReplayFilter _replay = new();
     private ulong _sendCounter;
+    private int _disposed;
+
+    // Tier 4 — sıfır tahsisat: ChaCha20Poly1305 örneği (natif anahtar tutamacı)
+    // PAKET BAŞINA yaratılmaz; yön başına BİR KEZ tembelce kurulur ve oturum
+    // boyunca yeniden kullanılır (Encrypt yalnızca yakalama hattından, Decrypt
+    // yalnızca alım döngüsünden çağrılır — yönler ayrı olduğu için örnekler
+    // eşzamanlı kullanılmaz). Nonce tamponları da yön başına tek kez ayrılır.
+    private ChaCha20Poly1305? _sendAead;
+    private ChaCha20Poly1305? _recvAead;
+    private readonly byte[] _sendNonce = new byte[12]; // ilk 4 bayt sıfır, son 8 bayt counter
+    private readonly byte[] _recvNonce = new byte[12];
 
     /// <summary>Bu oturumun kendi index'i (incoming mesajların receiver alanında beklenir).</summary>
     public uint LocalIndex { get; }
@@ -136,16 +147,20 @@ public sealed class WireGuardSession
             return null;
         }
 
-        var content = PadToMultiple16(packet);
-        var wire = new byte[WireGuardWire.TransportHeaderSize + content.Length + 16];
+        // Tier 4: tek tahsisat — hedef wire tamponu; padding ara kopyası YOK.
+        // Paket doğrudan wire'ın plaintext bölgesine kopyalanır, geri kalan
+        // padding sıfırdır (yeni dizi) ve AEAD yerinde (in-place) şifreler.
+        var padded = (packet.Length + WireGuardWire.PaddingMultiple - 1) & ~(WireGuardWire.PaddingMultiple - 1);
+        var wire = new byte[WireGuardWire.TransportHeaderSize + padded + 16];
         WireGuardNoise.WriteUint32(wire, 0, WireGuardNoise.MessageTypeTransport);
         WireGuardNoise.WriteUint32(wire, 4, RemoteIndex);
         WireGuardNoise.WriteUint64(wire, 8, counter);
 
-        var nonce = BuildNonce(counter);
-        using var aead = new ChaCha20Poly1305(_sendKey);
-        aead.Encrypt(nonce, content, wire.AsSpan(WireGuardWire.TransportHeaderSize, content.Length),
-            wire.AsSpan(WireGuardWire.TransportHeaderSize + content.Length, 16));
+        packet.CopyTo(wire.AsSpan(WireGuardWire.TransportHeaderSize));
+        WriteNonce(_sendNonce, counter);
+        var aead = _sendAead ??= new ChaCha20Poly1305(_sendKey);
+        var region = wire.AsSpan(WireGuardWire.TransportHeaderSize, padded);
+        aead.Encrypt(_sendNonce, region, region, wire.AsSpan(WireGuardWire.TransportHeaderSize + padded, 16));
         return wire;
     }
 
@@ -177,12 +192,13 @@ public sealed class WireGuardSession
 
         var content = wire[WireGuardWire.TransportHeaderSize..^16];
         var tag = wire[^16..];
-        var nonce = BuildNonce(counter);
+        WriteNonce(_recvNonce, counter);
         var plaintext = new byte[content.Length];
         try
         {
-            using var aead = new ChaCha20Poly1305(_recvKey);
-            aead.Decrypt(nonce, content, tag, plaintext);
+            // Tier 4: cached AEAD (natif anahtar tutamacı paket başına kurulmaz).
+            var aead = _recvAead ??= new ChaCha20Poly1305(_recvKey);
+            aead.Decrypt(_recvNonce, content, tag, plaintext);
         }
         catch (CryptographicException)
         {
@@ -200,20 +216,22 @@ public sealed class WireGuardSession
 
     // ── iç ───────────────────────────────────────────────────────────────
 
-    private static byte[] PadToMultiple16(ReadOnlySpan<byte> packet)
+    /// <summary>Nonce tamponuna counter'ı yazar (ilk 4 bayt zaten sıfır — tekrar sıfırlanmaz).</summary>
+    private static void WriteNonce(byte[] nonce, ulong counter)
     {
-        var pad = (WireGuardWire.PaddingMultiple - (packet.Length % WireGuardWire.PaddingMultiple))
-                  % WireGuardWire.PaddingMultiple;
-        var result = new byte[packet.Length + pad];
-        packet.CopyTo(result);
-        return result;
+        WireGuardNoise.WriteUint64(nonce, 4, counter);
     }
 
-    private static byte[] BuildNonce(ulong counter)
+    public void Dispose()
     {
-        var nonce = new byte[12]; // ilk 4 bayt sıfır
-        WireGuardNoise.WriteUint64(nonce, 4, counter);
-        return nonce;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+        _sendAead?.Dispose();
+        _recvAead?.Dispose();
+        _sendAead = null;
+        _recvAead = null;
     }
 
     /// <summary>

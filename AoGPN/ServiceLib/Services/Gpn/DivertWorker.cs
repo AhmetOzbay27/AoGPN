@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 
@@ -127,30 +128,41 @@ public sealed class DivertWorker
 
                 if (ok && recvLen > 0)
                 {
-                    var data = new byte[recvLen];
+                    // Tier 4: paket başına GC tahsisatı yok — tampon ArrayPool'dan
+                    // kiralanır; tüketici işledikten sonra DivertedPacket.Release ile
+                    // havuza döner. Her atma yolu (iptal/kanal hatası) kiralanan
+                    // tamponu geri verir — havuz sızıntısı olamaz.
+                    var data = ArrayPool<byte>.Shared.Rent(recvLen);
                     Marshal.Copy(buffer, data, 0, recvLen);
+                    var packet = DivertedPacket.FromPool(data, recvLen, address, DateTimeOffset.UtcNow);
 
                     // Tüketici hızına saygı — kanal dolarsa yazılabilir olana kadar bekle (geri basınç).
-                    if (_channel.Writer.TryWrite(new DivertedPacket(data, address, DateTimeOffset.UtcNow)))
+                    if (_channel.Writer.TryWrite(packet))
                     {
                         continue;
                     }
                     if (_cts.IsCancellationRequested)
                     {
+                        packet.Release();
                         break;
                     }
                     try
                     {
                         _ = _channel.Writer.WaitToWriteAsync(_cts.Token).AsTask().GetAwaiter().GetResult();
+                        // MEVCUT davranış: yer açıldıktan sonra bu paket atılır (geri
+                        // basınçta düşürme) — kiralanan tampon havuza iade edilir.
+                        packet.Release();
                     }
                     catch (OperationCanceledException)
                     {
-                        break; // iptal — filter'sız (kapanış yarışında da güvenli)
+                        packet.Release(); // iptal — kiralanan tampon havuza döner
+                        break;
                     }
                     catch (Exception ex)
                     {
                         // StopAsync ile yarışta kanal tamamlanmış olabilir — yazma
                         // hataları döngüyü öldürmez, temiz biter.
+                        packet.Release();
                         Logging.SaveLog($"DivertWorker.Channel: {ex}");
                         break;
                     }
