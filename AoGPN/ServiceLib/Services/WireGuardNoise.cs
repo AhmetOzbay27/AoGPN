@@ -382,7 +382,7 @@ internal static class WireGuardNoise
     {
         for (var i = 0; i < 8; i++)
         {
-            buf[offset + i] = (byte)(value >> (i * 8));
+            buf[offset + i] = unchecked((byte)(value >> (i * 8)));
         }
     }
 

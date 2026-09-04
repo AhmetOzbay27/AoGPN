@@ -138,6 +138,36 @@ public class WireGuardNoiseTransportTests
         }
     }
 
+    [Fact]
+    public void Session_EncryptBeyondCounter255_NoOverflow_RoundTrip()
+    {
+        // WriteUint64 checked-context kusuru: counter >= 256 iken (byte) daraltma
+        // cast'i OverflowException fırlatıyordu (CheckForOverflowUnderflow=true,
+        // Directory.Build.props). Canlı bir oyun oturumu paket #257'de çökerdi;
+        // mevcut testler hiçbir oturumda 256 paketi geçmediği için yakalanamamıştı.
+        // BenchmarkDotNet ölçümü (200k paket/iterasyon) bu kusuru ortaya çıkardı.
+        var clientPrivate = RandomBytes(32);
+        var serverPrivate = RandomBytes(32);
+        var serverPublic = WireGuardNoise.PublicKey(serverPrivate);
+        var client = new WireGuardHandshakeClient(clientPrivate, serverPublic);
+        var (response, responderSession, failure) = ResponderCore.Respond(client.CreateInitiation(), serverPrivate, 0x2222u);
+        response.Should().NotBeNull(failure);
+        var clientSession = client.ConsumeResponse(response!);
+        clientSession.Should().NotBeNull();
+
+        var payload = BuildTestIpPacket(); // 28 bayt IPv4
+        byte[]? last = null;
+        for (var i = 0; i < 300; i++) // counter 0..299 — 255 sınırının ötesinde
+        {
+            last = clientSession!.Encrypt(payload);
+            last.Should().NotBeNull();
+        }
+        // Son paket (counter 299) hâlâ doğru çözülmeli.
+        var roundTrip = responderSession!.Decrypt(last!);
+        roundTrip.Should().NotBeNull();
+        roundTrip!.AsSpan().SequenceEqual(payload).Should().BeTrue();
+    }
+
     // ── 3. Transport round-trip (loopback UDP, wire format) ───────────────
 
     [Fact]
