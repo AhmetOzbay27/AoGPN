@@ -47,6 +47,8 @@ public class GpnMihomoDispatchTests
         // Paylaşılan SQLite'ta başka testlerin bıraktığı aktif routing'ler
         // GetDefaultRouting'in sonucunu kirletebilir — önce hepsini pasife al,
         // sonra kendi kural setini tek aktif satır olarak yaz.
+        // RoutingItem tablosunu AppManager.InitApp yaratır; test host'unda eksik olabilir.
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
         await SQLiteHelper.Instance.ExecuteAsync("UPDATE RoutingItem SET IsActive = 0");
 
         // Aktif rota kural seti: launcher → warp, oyun → vpn, yakalayıcı → direct.
@@ -188,6 +190,8 @@ public class GpnMihomoDispatchTests
 
         // Paylaşılan SQLite'ta başka testlerin bıraktığı aktif routing'ler
         // GetDefaultRouting'in sonucunu kirletebilir — önce hepsini pasife al.
+        // RoutingItem tablosunu AppManager.InitApp yaratır; test host'unda eksik olabilir.
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
         await SQLiteHelper.Instance.ExecuteAsync("UPDATE RoutingItem SET IsActive = 0");
 
         // Kural seti: uygulama-yönetimli satır (superset tarafından ATILIR) +
@@ -292,6 +296,8 @@ public class GpnMihomoDispatchTests
         CoreConfigTestFactory.BindAppManagerConfig(config);
         config.TunModeItem.EnableTun = true;
 
+        // RoutingItem tablosunu AppManager.InitApp yaratır; test host'unda eksik olabilir.
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
         await SQLiteHelper.Instance.ExecuteAsync("UPDATE RoutingItem SET IsActive = 0");
         var activeRouting = new RoutingItem
         {

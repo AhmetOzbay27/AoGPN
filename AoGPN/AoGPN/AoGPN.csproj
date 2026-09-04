@@ -106,14 +106,14 @@
 			<!-- TargetPath resolves to the assembly (AoGPN.dll); the apphost exe is
 			     the one that must be launched for headless core installation. -->
 			<_ReleaseExe>$(TargetDir)$(AssemblyName).exe</_ReleaseExe>
-			<_CoresMissing Condition="!Exists('$(_ReleaseBinDir)sing_box\sing-box.exe') Or !Exists('$(_ReleaseBinDir)xray\xray.exe')">true</_CoresMissing>
+			<_CoresMissing Condition="!Exists('$(_ReleaseBinDir)sing_box\sing-box.exe') Or !Exists('$(_ReleaseBinDir)xray\xray.exe') Or (!Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-arm64.exe'))">true</_CoresMissing>
 		</PropertyGroup>
 		<Exec Condition="'$(_CoresMissing)' == 'true' And Exists('$(_ReleaseExe)')"
 		      Command="&quot;$(_ReleaseExe)&quot; --update-cores"
 		      WorkingDirectory="$(OutDir)"
 		      IgnoreExitCode="true" />
 		<!-- Re-check existence after the Exec so the warning only appears when the
-		     download really did not leave runnable cores behind. -->        <Warning Condition="'$(_CoresMissing)' == 'true' And (!Exists('$(_ReleaseBinDir)sing_box\sing-box.exe') Or !Exists('$(_ReleaseBinDir)xray\xray.exe'))"
+		     download really did not leave runnable cores behind. -->        <Warning Condition="'$(_CoresMissing)' == 'true' And (!Exists('$(_ReleaseBinDir)sing_box\sing-box.exe') Or !Exists('$(_ReleaseBinDir)xray\xray.exe') Or (!Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-arm64.exe')))"
                  Text="Core binaries are missing from '$(_ReleaseBinDir)' and the download did not complete. The build continues; run &quot;AoGPN.exe --update-cores&quot; manually or build again when online." />
 	</Target>
 
@@ -134,7 +134,7 @@
 		<PropertyGroup>
 			<_DebugBinDir>$(OutDir)bin\</_DebugBinDir>
 			<_DebugExe>$(TargetDir)$(AssemblyName).exe</_DebugExe>
-			<_DebugCoresMissing Condition="!Exists('$(_DebugBinDir)sing_box\sing-box.exe') Or !Exists('$(_DebugBinDir)xray\xray.exe')">true</_DebugCoresMissing>
+			<_DebugCoresMissing Condition="!Exists('$(_DebugBinDir)sing_box\sing-box.exe') Or !Exists('$(_DebugBinDir)xray\xray.exe') Or (!Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-arm64.exe'))">true</_DebugCoresMissing>
 		</PropertyGroup>
 		<Exec Condition="'$(_DebugCoresMissing)' == 'true' And Exists('$(_DebugExe)')"
 		      Command="&quot;$(_DebugExe)&quot; --update-cores"
@@ -142,7 +142,7 @@
 		      IgnoreExitCode="true" />
 		<!-- Re-check existence after the Exec so the warning only appears when the
 		     download really did not leave runnable cores behind. -->
-		<Warning Condition="'$(_DebugCoresMissing)' == 'true' And (!Exists('$(_DebugBinDir)sing_box\sing-box.exe') Or !Exists('$(_DebugBinDir)xray\xray.exe'))"
+		<Warning Condition="'$(_DebugCoresMissing)' == 'true' And (!Exists('$(_DebugBinDir)sing_box\sing-box.exe') Or !Exists('$(_DebugBinDir)xray\xray.exe') Or (!Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-arm64.exe')))"
 		         Text="Core binaries are missing from '$(_DebugBinDir)' and the download did not complete. The build continues; run &quot;AoGPN.exe --update-cores&quot; manually or build again when online." />
 	</Target>
 

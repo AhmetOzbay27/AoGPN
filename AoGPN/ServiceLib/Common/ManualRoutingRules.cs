@@ -52,13 +52,10 @@ public static class ManualRoutingRules
             }
         }
 
-        var catchAllTag = mode switch
-        {
-            GameTriggerModes.Vpn => Global.ProxyTag,
-            GameTriggerModes.Manual when invertManual => Global.ProxyTag,
-            _ => Global.DirectTag,
-        };
-        rules.Add(BuildCatchAllRule(catchAllTag));
+        // Yakalayıcı hedefi tek otoriteden gelir (GpnRoutingRuleService.ResolveCatchAll
+        // — mod + yön → nötr varış); buradan yalnızca söz varlığına (OutboundTag)
+        // çevrilir. Karar mantığı çekirdekler arasında çoğaltılmaz.
+        rules.Add(BuildCatchAllRule(DestinationTag(GpnRoutingRuleService.ResolveCatchAll(mode, invertManual))));
         return rules;
     }
 
@@ -80,23 +77,12 @@ public static class ManualRoutingRules
         string action,
         bool invertManual = false)
     {
-        if (invertManual)
-        {
-            // Blacklist direction: listed entries are the exceptions. Tunnel-ish
-            // choices keep them direct; an explicit direct becomes tunnel;
-            // block stays block.
-            action = action switch
-            {
-                "direct" => "vpn",
-                "block" => "block",
-                _ => "direct", // vpn / warp / proxy tünel-benzeri seçimler kara listede istisna = direct
-            };
-        }
-
         return new RulesItem
         {
             Id = Utils.GetGuid(false),
-            OutboundTag = MapActionToOutbound(action),
+            // Eylem + yön → nötr varış yeri tek otoritede çözülür (kara liste
+            // çevirisi dahil); burada yalnızca OutboundTag söz varlığına çevrilir.
+            OutboundTag = DestinationTag(GpnRoutingRuleService.ResolveDestination(action, invertManual)),
             Network = "tcp,udp",
             Enabled = true,
             Remarks = $"{ManagedRemarksPrefix} {value}",
@@ -106,6 +92,18 @@ public static class ManualRoutingRules
             Port = port.IsNotEmpty() ? port : null,
         };
     }
+
+    /// <summary>
+    /// Nötr varış yerini sing-box/legacy OutboundTag etiketine çevirir (tek yönlü
+    /// söz varlığı eşlemesi — karar <see cref="GpnRoutingRuleService"/>'dadır).
+    /// </summary>
+    private static string DestinationTag(GpnRoutingDestination destination) => destination switch
+    {
+        GpnRoutingDestination.Direct => Global.DirectTag,
+        GpnRoutingDestination.Block => Global.BlockTag,
+        GpnRoutingDestination.WarpEgress => Global.WarpTag,
+        _ => Global.ProxyTag, // Tunnel → proxy/vpn çıkışı
+    };
 
     /// <summary>Catch-all rule: every unlisted destination follows <paramref name="outboundTag"/>.</summary>
     public static RulesItem BuildCatchAllRule(string outboundTag)

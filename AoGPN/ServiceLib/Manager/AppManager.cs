@@ -18,6 +18,14 @@ public sealed class AppManager
     /// </summary>
     public CoreEngineHost? CoreEngineHost { get; set; }
 
+    /// <summary>
+    /// Aktif yakalama tünel köprüsü (WinDivert → WireGuard → Wintun). Kompozisyon
+    /// kökü (MainWindowViewModel.GetGpnCaptureBridge) kurar; NativeGpnStartStrategy
+    /// StartAsync'te buradan çözer (NativeGpnEnginePolicy.IsEnabled açıkken yerel
+    /// motor stratejisi köprüyü bu örnekle canlıya alır).
+    /// </summary>
+    public GpnCaptureBridge? CaptureBridge { get; set; }
+
     public int StatePort
     {
         get

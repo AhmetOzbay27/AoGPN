@@ -46,6 +46,7 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
 
     private IWireGuardTransport _transport;
     private readonly IWintunSession? _testSession;
+    private readonly Func<IWintunSession>? _testSessionFactory;
 
     // Natif WintunCreateAdapter çağrısı için test dikişi. Gerçek yolda
     // WintunNative.WintunCreateAdapter'a gider; testler DLL-bulunamadı /
@@ -69,14 +70,22 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
     /// Test amaçlı sahte session. Verilirse <see cref="Open"/> natif katmanı
     /// çağırmaz — sürücüsüz doğrulama mümkün olur.
     /// </param>
+    /// <param name="sessionFactory">
+    /// Test dikişi (re-arm/sunucu değişimi senaryoları): gerçek yol her Open'da TAZE
+    /// bir natif session üretir; factory de her Open'da taze sahte session verir —
+    /// tek-örnek sahte Close sonrası kalıcı kapandığından Close→Open çevrimi
+    /// (GpnCaptureBridge dinamik re-arm) sahteyle test edilemezdi.
+    /// </param>
     public WireGuardTunnelService(
         IWireGuardTransport? transport = null,
         IWintunSession? session = null,
-        Func<string, string, IntPtr, IntPtr>? createAdapter = null)
+        Func<string, string, IntPtr, IntPtr>? createAdapter = null,
+        Func<IWintunSession>? sessionFactory = null)
     {
         _transport = transport ?? new NoopWireGuardTransport();
         _testSession = session;
         _createAdapter = createAdapter ?? WintunNative.WintunCreateAdapter;
+        _testSessionFactory = sessionFactory;
     }
 
     /// <summary>Adapter/session açık mı.</summary>
@@ -138,6 +147,11 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
             AdapterName = adapterName;
             LastRingCapacity = NormalizeCapacity(ringCapacity);
 
+            if (_testSessionFactory is not null)
+            {
+                _session = _testSessionFactory(); // her Open taze sahte session (gerçek yol gibi)
+                return;
+            }
             if (_testSession is not null)
             {
                 _session = _testSession; // test: natif katman yok

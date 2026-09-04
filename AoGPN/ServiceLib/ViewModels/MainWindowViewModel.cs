@@ -705,6 +705,9 @@ public class MainWindowViewModel : MyReactiveObject
                     NoticeManager.Instance.SendMessageEx(message);
                 });
             });
+        // Tier 1 — in-process motor: NativeGpnStartStrategy köprüyü buradan çözer
+        // (NativeGpnEnginePolicy.IsEnabled açıkken CoreManager yerel motoru seçer).
+        AppManager.Instance.CaptureBridge = _gpnCaptureBridge;
         return _gpnCaptureBridge;
     }
 

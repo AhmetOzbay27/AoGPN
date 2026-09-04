@@ -15,11 +15,13 @@
     <File Path="Directory.Packages.props" />
   </Folder>
   <Project Path="AmazTool/AmazTool.csproj" />
-  <Project Path="GlobalHotKeys/src/GlobalHotKeys/GlobalHotKeys.csproj" />
   <Project Path="ServiceLib.Tests/ServiceLib.Tests.csproj" />
   <Project Path="ServiceLib.UdpTest/ServiceLib.UdpTest.csproj" Id="77930428-4dc4-4130-9031-6b9e714f5d20" />
   <Project Path="ServiceLib/ServiceLib.csproj" />
   <Project Path="AoGPN.CoreTool/AoGPN.CoreTool.csproj" />
   <Project Path="AoGPN.GpnSourceCheckTool/AoGPN.GpnSourceCheckTool.csproj" />
+  <Project Path="AoGPN.GpnJsonlConsumer/AoGPN.GpnJsonlConsumer.csproj" />
+  <Project Path="AoGPN.GpnProbeTool/AoGPN.GpnProbeTool.csproj" />
+  <Project Path="AoGPN.GpnSessionTool/AoGPN.GpnSessionTool.csproj" />
   <Project Path="AoGPN/AoGPN.csproj" />
 </Solution>

@@ -1,5 +1,24 @@
 namespace ServiceLib.Services;
 
+/// <summary>
+/// Köprünün son <see cref="GpnCaptureBridge.StartAsync"/> denemesinin "bekleme"
+/// (idle) nedeni. Hata değildir — köprü sözleşmesi gereği isteğe bağlıdır
+/// (optional/non-fatal): hedef oyun yokken köprü başlamaz ve çekirdek bağlantısı
+/// (oturum) bozulmaz. <see cref="GpnBridgeIdleCause.None"/> = deneme canlıya alındı
+/// ya da gerçek bir hata <see cref="GpnCaptureBridge"/> onFailure yoluyla bildirildi.
+/// </summary>
+public enum GpnBridgeIdleCause
+{
+    /// <summary>Son deneme bekleme nedeniyle atlanmadı (canlıya alındı / gerçek hata bildirildi).</summary>
+    None,
+
+    /// <summary>Hedef oyun exe'si yapılandırılmamış ("vpn" eylemli uygulama yok).</summary>
+    NoTargetsConfigured,
+
+    /// <summary>Hedefler tanımlı ama hiçbiri şu an çalışmıyor.</summary>
+    TargetNotRunning,
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // GpnCaptureBridge — yakalama tünel köprüsünün bağlantı-anı kompozisyonu
 //
@@ -46,12 +65,29 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
 
     private readonly Func<string, Task>? _onFailure;
 
+    /// <summary>
+    /// Oturum SIRASINDA beklenmedik motor hatası (yakalama/alım/temizleyici
+    /// görevi fault — iptal değil). NativeGpnStartStrategy bu olaya abone olur
+    /// ve CoreManager'ın onExited kurtarma döngüsüne köprüler (Tier 1 — in-process
+    /// motorun "process-exit"i). Başlangıç-anı hataları (<see cref="ReportFailureAsync"/>
+    /// yolu) bu olayı TETİKLEMEZ — onlar zaten false + onFailure bildirimi döner.
+    /// </summary>
+    public event Func<string, Task>? EngineFailed;
+
     private readonly object _gate = new();
     private CancellationTokenSource? _cts;
     private GpnCaptureLoop? _loop;
     private Task? _loopTask;
     private Task? _receiveTask;
     private long _deliveredToConsumer;
+    private GpnBridgeIdleCause _lastIdleCause;
+    // Tier 3 — dinamik yeniden kurma (yalnızca native motor): başlatmalar tek bir
+    // kapıdan geçer (denetçi + dış çağıranlar çakışamaz).
+    private readonly SemaphoreSlim _startGate = new(1, 1);
+    private volatile bool _dynamicReArm;
+    private CancellationTokenSource? _supervisorCts;
+    private Task? _supervisorTask;
+    private GpnServerProfile? _sessionServer;
 
     /// <param name="targetNames">
     /// Hedef oyun exe adlarını veren delege (ör. SplitTunnelViewModel'deki
@@ -154,7 +190,25 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
     /// döngüsünü tünelin inject hattıyla çalıştırır. Başlatılamadıysa false —
     /// çekirdek bağlantısı devam eder (köprü isteğe bağlıdır, hata ölümcül değildir).
     /// </summary>
+    /// <summary>
+    /// Köprüyü canlıya alır (tek kapı — dış çağıranlar ve Ready-idle denetçisi buradan
+    /// seri geçer). Detaylar için <see cref="StartCoreAsync"/>.
+    /// </summary>
     public async Task<bool> StartAsync(GpnServerProfile? server, CancellationToken cancellationToken = default)
+    {
+        await _startGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await StartCoreAsync(server, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _startGate.Release();
+        }
+    }
+
+    /// <summary>Köprüyü canlıya alma mantığı (kapı dışarıda tutulur — bkz. StartAsync).</summary>
+    private async Task<bool> StartCoreAsync(GpnServerProfile? server, CancellationToken cancellationToken)
     {
         lock (_gate)
         {
@@ -163,6 +217,9 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
                 return true; // zaten çalışıyor — idempotent
             }
         }
+        // Her yeni deneme önceki bekleme nedenini sıfırlar — yalnızca bu denemenin
+        // atlama nedeni (varsa) okunur.
+        LastIdleCause = GpnBridgeIdleCause.None;
 
         if (server is null)
         {
@@ -184,7 +241,13 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
 
         if (names.Count == 0)
         {
-            DiagLog.Write("GPN_BRIDGE skip: hedef oyun seçili değil (vpn eylemli uygulama yok)");
+            // Tier 2 — sessiz, kontrollü Ready-idle: hedef oyun yapılandırılmamış
+            // olması bir hata/uyarı DEĞİLDİR (köprü isteğe bağlıdır — non-fatal).
+            // Gürültülü uyarı yerine nedeni kaydet; çağıran tek satır işaret yazar.
+            LastIdleCause = GpnBridgeIdleCause.NoTargetsConfigured;
+            // Tier 3 — dinamik yeniden kurma: liste sonradan dolarsa (kullanıcı oyun
+            // ekler) denetçi köprüyü canlıya alır.
+            ArmSupervisor(server);
             return false;
         }
 
@@ -206,7 +269,11 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
 
         if (initial is null)
         {
-            DiagLog.Write("GPN_BRIDGE skip: hedef oyun çalışmıyor — oyunu başlatınca yeniden bağlanın");
+            // Tier 2 — kontrollü Ready-idle: hedef tanımlı ama çalışmıyor. Oturum
+            // Ready kalır (oyun bekleniyor); uyarı dili yerine tek neden kaydı.
+            LastIdleCause = GpnBridgeIdleCause.TargetNotRunning;
+            // Tier 3 — dinamik yeniden kurma: oyun başlayınca köprü kendiliğinden canlanır.
+            ArmSupervisor(server);
             return false;
         }
 
@@ -308,7 +375,17 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
                 "bağlantı temizleyici");
 
             DiagLog.Write($"GPN_BRIDGE live server={server.ServerId} pids={initial.Pids.Length} adapter={_tunnel.AdapterName} ring={_tunnel.LastRingCapacity}");
+            // Tier 3 — canlı oturum da denetlenir: hedef oyun kapanınca Ready-idle'a
+            // dönülür, yeniden başlayınca oturum canlanır.
+            ArmSupervisor(server);
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Dış iptal (oturum kapanıyor / Ready-idle denetçisi durduruldu): kısmi
+            // açılışı temizle, kullanıcıya hata bildirimi GÖNDERME (normal kapanış).
+            await StopCoreAsync().ConfigureAwait(false);
+            return false;
         }
         catch (Exception ex)
         {
@@ -392,7 +469,204 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
     /// </summary>
     public async Task StopAsync()
     {
+        // Önce Ready-idle denetçisini durdur (oturum biterken köprü kendini yeniden
+        // canlandıramasın), ardından çekirdek teardown.
+        await StopSupervisorAsync().ConfigureAwait(false);
         await StopCoreAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Ready-idle denetçisini kurar (yalnızca <see cref="DynamicReArmEnabled"/> açıkken):
+    /// oyun başlayınca köprüyü canlıya alır, oyun kapanınca Ready-idle'a döner. Zaten
+    /// kuruluysa no-op (idempotent — StartCore'ün her başarılı/beklemeli çıkışında çağrılır).
+    /// </summary>
+    private void ArmSupervisor(GpnServerProfile? server)
+    {
+        if (!_dynamicReArm || server is null)
+        {
+            return;
+        }
+        CancellationTokenSource cts;
+        lock (_gate)
+        {
+            _sessionServer = server;
+            if (_supervisorCts is not null)
+            {
+                return;
+            }
+            cts = _supervisorCts = new CancellationTokenSource();
+        }
+        _supervisorTask = Task.Run(() => SupervisorLoopAsync(cts, cts.Token));
+        DiagLog.Write("GPN_BRIDGE dynamic re-arm watching — oturum Ready-idle denetleniyor");
+    }
+
+    private async Task SupervisorLoopAsync(CancellationTokenSource owner, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(ReadyIdlePollInterval, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            if (ct.IsCancellationRequested || !ReferenceEquals(_supervisorCts, owner))
+            {
+                break;
+            }
+            try
+            {
+                await SupervisorTickAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog($"[GpnBridge] Ready-idle denetçisi hatası: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Bir denetçi tiki: canlı oturumda hedef yokluğu → Ready-idle'a dön; Ready-idle'da
+    /// hedef başladıysa → yakalama oturumunu yeniden canlandır. Karar arka planda
+    /// (thread pool) verilir; köprü/UI çağrıları asla buradan engellenmez.
+    /// </summary>
+    private async Task SupervisorTickAsync(CancellationToken ct)
+    {
+        GpnServerProfile? server;
+        bool running;
+        lock (_gate)
+        {
+            server = _sessionServer;
+            running = _cts is not null;
+        }
+        if (server is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> names;
+        try
+        {
+            names = _targetNames();
+        }
+        catch
+        {
+            return; // canlı hedef listesi geçici okunamadı — bu turu atla
+        }
+
+        if (running)
+        {
+            // Canlı oturum: hedef oyun kapandıysa (ya da tüm hedefler kaldırıldıysa)
+            // veri düzlemini kapat → Ready-idle (denetçi yeniden canlandırmayı bekler).
+            if (names.Count == 0 || !AnyTargetRunning(names, ct))
+            {
+                DiagLog.Write("GPN_BRIDGE targets lost — engine ready-idle (hedef oyun bekleniyor)");
+                await StopCoreAsync().ConfigureAwait(false);
+            }
+            return;
+        }
+
+        // Ready-idle: hedef oyun başladıysa yakalama oturumunu kendiliğinden canlıya al.
+        if (names.Count == 0 || !AnyTargetRunning(names, ct))
+        {
+            return;
+        }
+        var started = await StartAsync(server, ct).ConfigureAwait(false);
+        if (ct.IsCancellationRequested)
+        {
+            return; // oturum kapanıyor — bu turu bitir
+        }
+        if (started)
+        {
+            DiagLog.Write("GPN_BRIDGE re-arm live — hedef oyun algılandı, yakalama başladı");
+        }
+        else if (LastIdleCause == GpnBridgeIdleCause.None)
+        {
+            // Gerçek başlatma hatası (sürücü/wintun yok vb.): onFailure bildirimi zaten
+            // gitti — 2 sn'de bir toast fırtınası yaratmamak için izlemeyi bırak.
+            DiagLog.Write("GPN_BRIDGE re-arm real failure — dynamic re-arm durduruldu (kullanıcı bildirildi)");
+            StopSupervisorCore();
+        }
+    }
+
+    /// <summary>
+    /// Hedef adlardan herhangi birinin şu an ÇALIŞTIĞINI (kök PID ürettiğini) denetler.
+    /// Kaynak FATAL ise (ağaç erişilemez) "çalışmıyor" SAYILMAZ — false döner ve canlı
+    /// oturum yanlışlıkla kapatılmaz (boş tarama "oyun kapandı" demek değildir).
+    /// </summary>
+    private bool AnyTargetRunning(IReadOnlyList<string> names, CancellationToken ct)
+    {
+        try
+        {
+            var resolver = new GpnTargetResolver(names, _source);
+            var snapshot = resolver.Resolve(ct);
+            return resolver.LastSourceStatus != ProcessTreeStatus.Fatal && snapshot is not null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false; // tarama hatası → bu turda karar yok (sonraki tur yeniden dener)
+        }
+    }
+
+    /// <summary>Denetçiyi bekletmeden iptal eder (gerçek re-arm hatasında — toast fırtınası önlenir).</summary>
+    private void StopSupervisorCore()
+    {
+        CancellationTokenSource? cts;
+        lock (_gate)
+        {
+            cts = _supervisorCts;
+            _supervisorCts = null;
+        }
+        if (cts is null)
+        {
+            return;
+        }
+        cts.Cancel();
+        cts.Dispose();
+    }
+
+    /// <summary>Denetçiyi iptal eder ve döngüsünün bitmesini bekler (oturum kapanışı).</summary>
+    private async Task StopSupervisorAsync()
+    {
+        Task? task;
+        CancellationTokenSource? cts;
+        lock (_gate)
+        {
+            cts = _supervisorCts;
+            _supervisorCts = null;
+            _sessionServer = null;
+            task = _supervisorTask;
+            _supervisorTask = null;
+        }
+        if (cts is null)
+        {
+            return;
+        }
+        cts.Cancel();
+        if (task is not null)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch
+            {
+            }
+        }
+        cts.Dispose();
     }
 
     /// <summary>Varsayılan taşıma: profilin anahtarlarıyla gerçek WireGuard veri düzlemi.</summary>
@@ -475,8 +749,50 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Son StartAsync denemesinin bekleme nedeni (Tier 2 — kontrollü Ready-idle).
+    /// Hedef oyun yokken köprü atlandığında çağıran (NativeGpnStartStrategy) bu
+    /// değerle tek bir sessiz işaret yazar — köprünün kendisi artık gürültülü uyarı
+    /// basmaz. None = deneme canlıya alındı veya gerçek hata onFailure ile bildirildi.
+    /// </summary>
+    public GpnBridgeIdleCause LastIdleCause
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastIdleCause;
+            }
+        }
+        private set
+        {
+            lock (_gate)
+            {
+                _lastIdleCause = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tier 3 — Dinamik yeniden kurma (dynamic re-arm) anahtarı: yalnızca NATIVE
+    /// motor oturumu (NativeGpnStartStrategy) açar. Açıkken köprü Ready-idle'dayken
+    /// hedef oyunun başlamasını bekler ve başlar başlamaz yakalama oturumunu
+    /// kendiliğinden canlıya alır; canlıyken hedef oyun kapanırsa (ya da tüm hedefler
+    /// kaldırılırsa) veri düzlemini kapatıp Ready-idle'a döner — oyun tekrar başlayınca
+    /// yeniden canlanır. Kapalıyken (varsayılan — legacy ve tüm harici çekirdek yolları)
+    /// köprü davranışı zerre değişmez: yalnızca bağlantı anında başlar/durur.
+    /// </summary>
+    public bool DynamicReArmEnabled
+    {
+        get => _dynamicReArm;
+        set => _dynamicReArm = value;
+    }
+
+    /// <summary>Ready-idle denetçisinin hedef yoklama aralığı (testler kısaltır).</summary>
+    internal static TimeSpan ReadyIdlePollInterval { get; set; } = TimeSpan.FromSeconds(2);
+
     /// <summary>Köprü görevlerindeki erken hataları yakalar (sessiz fault önlenir).</summary>
-    private static async Task ObserveFaultAsync(Task task, string what)
+    private async Task ObserveFaultAsync(Task task, string what)
     {
         try
         {
@@ -490,6 +806,27 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
         {
             Logging.SaveLog($"[GpnBridge] {what} görevi hata verdi: {ex}");
             DiagLog.Write($"GPN_BRIDGE {what} fault: {ex.Message}");
+            await NotifyEngineFailedAsync($"{what}: {ex.Message}").ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Oturum-içi fault'u EngineFailed abonelerine iletir (best-effort — abone
+    /// yoksa veya hata verirse köprü akışı bozulmaz).
+    /// </summary>
+    private async Task NotifyEngineFailedAsync(string reason)
+    {
+        if (EngineFailed is null)
+        {
+            return;
+        }
+        try
+        {
+            await EngineFailed(reason).ConfigureAwait(false);
+        }
+        catch
+        {
+            // best-effort: bildirim hatası köprü akışını bozmasın
         }
     }
 
@@ -604,7 +941,7 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await StopCoreAsync().ConfigureAwait(false);
-        await Task.CompletedTask;
+        // Denetçi dahil tam duruş (idempotent — çalışmıyorsa no-op).
+        await StopAsync().ConfigureAwait(false);
     }
 }

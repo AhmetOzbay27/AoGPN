@@ -24,21 +24,13 @@ using AoGPN.Services;
 
 namespace AoGPN.Views;
 
-public partial class MainWindow
+public partial class MainWindow : IDashboardBridge
 {
     private static Config _config;
     private readonly SerialDisposable _layoutBindingsDisposable = new();
     private CheckUpdateView? _checkUpdateView;
     private BackupAndRestoreView? _backupAndRestoreView;
     private ThemeSettingViewModel? _sidebarThemeVm;
-
-    // The bridge accepts only small, strict JSON objects from the WebView2 renderer.
-    private static readonly JsonDocumentOptions WebMessageJsonOptions = new()
-    {
-        AllowTrailingCommas = false,
-        CommentHandling = JsonCommentHandling.Disallow,
-        MaxDepth = 8,
-    };
 
     // Route-test results are pushed to the renderer with camelCase keys to match the
     // rest of the host→renderer payloads.
@@ -118,6 +110,9 @@ public partial class MainWindow
     private readonly WindowLifecycleService _windowLifecycle = new();
     private readonly ConnectionCoordinator _connectionCoordinator = new();
     private readonly AoGPN.Services.DashboardPublisher _dashboardPublisher;
+    private readonly DashboardSettingsService _settingsService;
+    private readonly DashboardGpnServerService _gpnServerService;
+    private readonly DashboardMessageDispatcher _dashboardMessageDispatcher;
 
     public MainWindow()
     {
@@ -144,6 +139,16 @@ public partial class MainWindow
                 Application.Current.Shutdown();
             });
         _dashboardHost = new DashboardHost(WebView, AppContext.BaseDirectory);
+        _dashboardMessageDispatcher = new DashboardMessageDispatcher(this);
+        _settingsService = new DashboardSettingsService(
+            executeScript: ExecuteScriptSafelyAsync,
+            isWebViewReady: () => _webViewReady,
+            readTransport: ReadTransport,
+            proxyOnlyService: _proxyOnlyService);
+        _gpnServerService = new DashboardGpnServerService(
+            executeScript: ExecuteScriptSafelyAsync,
+            isWebViewReady: () => _webViewReady,
+            getViewModel: () => ViewModel);
         _dashboardPublisher = new AoGPN.Services.DashboardPublisher(ExecuteScriptSafelyAsync);
         _connectionCoordinator.SnapshotChanged += snapshot =>
         {
@@ -152,7 +157,7 @@ public partial class MainWindow
                 _ = Dispatcher.InvokeAsync(() => _dashboardPublisher.PublishAsync(snapshot));
             }
         };
-        _dashboardHost.WebMessageReceived += CoreWebView2_WebMessageReceived;
+        _dashboardHost.WebMessageReceived += _dashboardMessageDispatcher.HandleWebMessageReceived;
         _dashboardHost.NavigationCompleted += CoreWebView2_NavigationCompleted;
 
         // Loaded is used instead of the constructor so WebView2 is initialized after
@@ -794,949 +799,10 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Parses only JSON string messages and dispatches the supported frontend actions.
-    /// Unknown actions and malformed payloads are ignored by design.
-    /// </summary>
-    private async void CoreWebView2_WebMessageReceived(
-        object? sender,
-        CoreWebView2WebMessageReceivedEventArgs e)
-    {
-        string rawMessage;
-        try
-        {
-            // The HTML bridge deliberately calls postMessage with JSON.stringify(...).
-            // TryGetWebMessageAsString rejects object messages rather than coercing them.
-            rawMessage = e.TryGetWebMessageAsString();
-        }
-        catch (COMException)
-        {
-            return;
-        }
-
-        // Settings payloads (values + option lists) are far larger than the small
-        // node/connection commands, so the cap is raised well above them. The strict
-        // JSON options below still reject malformed or deeply nested renderer input.
-        if (string.IsNullOrWhiteSpace(rawMessage) || rawMessage.Length > 128 * 1024)
-        {
-            return;
-        }
-
-        if (!DashboardMessageParser.TryParse(rawMessage, out var dashboardMessage)
-            || dashboardMessage is null)
-        {
-            return;
-        }
-
-        try
-        {
-            using var rootDocument = JsonDocument.Parse(rawMessage, WebMessageJsonOptions);
-            var root = rootDocument.RootElement;
-            var action = dashboardMessage.Action;
-
-            switch (action)
-            {
-                case "toggle_connection":
-                    // Delegate to the existing split-tunnel ViewModel so the click
-                    // updates routing rules, persisted settings, TUN requirements and
-                    // the normal AoGPN core reload path instead of changing a UI flag.
-                    var requestedMode = "gpn";
-                    if (TryGetStringProperty(root, "mode", out var requestedModeValue)
-                        && requestedModeValue is "vpn" or "gpn")
-                    {
-                        requestedMode = requestedModeValue;
-                    }
-                    var requestedTransport = "proxy";
-                    if (TryGetStringProperty(root, "transport", out var requestedTransportValue)
-                        && requestedTransportValue is "tun" or "proxy")
-                    {
-                        requestedTransport = requestedTransportValue;
-                    }
-                    await ToggleConnectionAsync(requestedMode, requestedTransport);
-                    break;
-
-                case "gpn_connect":
-                    // Belirgin "GPN Bağlan" butonu: seçili profil ne olursa olsun
-                    // (WireGuard dışı olsa bile) GPN modu açıkça seçildiğinde
-                    // İtalya/Almanya otomatik seçimini zorla tetikle.
-                    await RunGpnConnectAsync();
-                    break;
-
-                case "gpn_servers_list":
-                    // Sunucu Yönetimi ekranı: gpn_servers tablosunun meta verisini
-                    // (özel anahtar hariç) + gömülü varsayılan durumunu dashboard'a gönder.
-                    await PushGpnServersAsync();
-                    await PushGpnDefaultsStatusAsync();
-                    break;
-
-                case "gpn_defaults_status":
-                    // Gömülü varsayılan şablonların katalog kayıtlarıyla durumu
-                    // (tohumlandı mı / anahtar var mı / güncel mi) — saf okuma.
-                    await PushGpnDefaultsStatusAsync();
-                    break;
-
-                case "gpn_defaults_restore":
-                    // "Varsayılanları geri yükle": gömülü anahtarsız şablon alanlarını
-                    // mevcut kayıtlara yeniden uygula (DPAPI anahtarı korunur), durumu
-                    // ve listeyi tazele.
-                    await RestoreGpnDefaultsAsync();
-                    break;
-
-                case "gpn_servers_probe":
-                case "gpn_cluster_probe":
-                    // Canlı ölçüm: gpn_servers'taki etkin sunuculara ICMP ping +
-                    // UDP sağlık testi çalıştır ve rozetleri dashboard'a gönder.
-                    // gpn_cluster_probe aynı ölçümü GPN panelindeki "sunucu kümesi"
-                    // kartı için tetikler — iki akış aynı setGpnServerProbes verisini besler.
-                    await ProbeGpnServersAsync();
-                    break;
-
-                case "gpn_pid_pool_start":
-                    GetGpnPidBridge().Start();
-                    await PushGpnPidPoolAsync();
-                    break;
-
-                case "gpn_pid_pool_stop":
-                    GetGpnPidBridge().Stop();
-                    await PushGpnPidPoolAsync();
-                    break;
-
-                case "gpn_pid_pool_refresh":
-                    // Tek seferlik ölçüm (hedef adlarını da yeniden okur).
-                    GetGpnPidBridge().RefreshNow();
-                    await PushGpnPidPoolAsync();
-                    break;
-
-                case "gpn_server_add":
-                    // .conf metnini kataloğa içe aktar (DPAPI ile şifrelenerek saklanır).
-                    if (TryGetLongStringProperty(root, "confText", out var gpnConfText))
-                    {
-                        await ImportGpnServersAsync(gpnConfText);
-                    }
-                    break;
-
-                case "gpn_server_delete":
-                    if (TryGetStringProperty(root, "serverId", out var gpnDeleteId))
-                    {
-                        await DeleteGpnServerAsync(gpnDeleteId);
-                    }
-                    break;
-
-                case "gpn_server_toggle":
-                    if (TryGetStringProperty(root, "serverId", out var gpnToggleId)
-                        && TryGetBooleanProperty(root, "enabled", out var gpnToggleEnabled))
-                    {
-                        await ToggleGpnServerAsync(gpnToggleId, gpnToggleEnabled);
-                    }
-                    break;
-
-                case "gpn_server_add_dialog":
-                    // WPF ekleme penceresi: DPAPI'li kataloğa manuel sunucu ekle.
-                    await ShowGpnServerEditDialogAsync(existingServerId: null);
-                    break;
-
-                case "gpn_server_edit_dialog":
-                    if (TryGetStringProperty(root, "serverId", out var gpnEditId))
-                    {
-                        await ShowGpnServerEditDialogAsync(gpnEditId);
-                    }
-                    break;
-
-                case "select_node":
-                    if (!TryGetStringProperty(root, "indexId", out var nodeIndexId))
-                    {
-                        return;
-                    }
-
-                    await SelectNodeAsync(nodeIndexId);
-                    break;
-
-                case "copy_nodes":
-                    TryGetStringArrayProperty(root, "indexIds", out var copyIds);
-                    await CopyNodesAsync(copyIds);
-                    break;
-
-                case "paste_nodes":
-                    await PasteNodesAsync();
-                    break;
-
-                case "delete_nodes":
-                    if (!TryGetStringArrayProperty(root, "indexIds", out var deleteIds))
-                    {
-                        return;
-                    }
-
-                    await DeleteNodesAsync(deleteIds);
-                    break;
-
-                case "test_nodes":
-                    TryGetStringArrayProperty(root, "indexIds", out var testIds);
-                    TryGetStringProperty(root, "testType", out var testType);
-                    var requestedRunId = TryGetInt64Property(root, "runId", out var parsedRunId)
-                        ? parsedRunId
-                        : 0;
-                    await StartNodeSpeedtestAsync(testIds, testType, requestedRunId);
-                    break;
-
-                case "stop_test":
-                    if (TryGetInt64Property(root, "runId", out var stopRunId)
-                        && stopRunId != Volatile.Read(ref _nodeTestRunId))
-                    {
-                        return;
-                    }
-                    StopNodeSpeedtest();
-                    break;
-
-                case "disable_nodes":
-                    if (!TryGetStringArrayProperty(root, "indexIds", out var disableIds))
-                    {
-                        return;
-                    }
-
-                    await DisableNodesAsync(disableIds);
-                    break;
-
-                case "restore_nodes":
-                    if (!TryGetStringArrayProperty(root, "indexIds", out var restoreIds))
-                    {
-                        return;
-                    }
-
-                    await RestoreNodesAsync(restoreIds);
-                    break;
-
-                case "cleanup_failed":
-                    TryGetStringProperty(root, "target", out var cleanupTarget);
-                    await CleanupFailedNodesAsync(cleanupTarget == "delete" ? "delete" : "disable");
-                    break;
-
-                case "dedup_nodes":
-                    await DedupNodesAsync();
-                    break;
-
-                case "get_node_pool":
-                    await PushNodePoolAsync();
-                    break;
-
-                case "add_node_pool_link":
-                    if (!TryGetStringProperty(root, "url", out var poolAddUrl) || poolAddUrl.Length < 8)
-                    {
-                        return;
-                    }
-
-                    await AddNodePoolLinkAsync(poolAddUrl);
-                    break;
-
-                case "edit_node_pool_link":
-                    if (!TryGetStringProperty(root, "url", out var poolEditUrl)
-                        || !TryGetStringProperty(root, "newUrl", out var poolNewUrl))
-                    {
-                        return;
-                    }
-
-                    await EditNodePoolLinkAsync(poolEditUrl, poolNewUrl);
-                    break;
-
-                case "remove_node_pool_link":
-                    if (!TryGetStringProperty(root, "url", out var poolRemoveUrl))
-                    {
-                        return;
-                    }
-
-                    await RemoveNodePoolLinkAsync(poolRemoveUrl);
-                    break;
-
-                case "fetch_node_pool":
-                    await FetchNodePoolAsync();
-                    break;
-
-                case "toggle_node_fav":
-                    if (!TryGetStringProperty(root, "indexId", out var favIndexId))
-                    {
-                        return;
-                    }
-
-                    await ToggleNodeFavAsync(favIndexId);
-                    break;
-
-                case "set_connection_mode":
-                    if (!TryGetStringProperty(root, "mode", out var connectionMode)
-                        || connectionMode is not "vpn" and not "gpn")
-                    {
-                        return;
-                    }
-
-                    await SetConnectionModeAsync(connectionMode);
-                    break;
-
-                case "set_transport":
-                    if (!TryGetStringProperty(root, "transport", out var transportValue)
-                        || transportValue is not "tun" and not "proxy")
-                    {
-                        return;
-                    }
-
-                    await SetTransportAsync(transportValue);
-                    break;
-
-                case "set_protocol_preference":
-                    if (!TryGetStringProperty(root, "protocol", out var protocolPreferenceValue))
-                    {
-                        return;
-                    }
-
-                    await SetProtocolPreferenceAsync(protocolPreferenceValue);
-                    break;
-
-                case "set_tun_stack":
-                    if (!TryGetStringProperty(root, "stack", out var tunStackValue)
-                        || !Global.TunStacks.Contains(tunStackValue))
-                    {
-                        return;
-                    }
-
-                    await SetTunStackAsync(tunStackValue);
-                    break;
-
-                case "set_auto_reconnect":
-                    await SetAutoReconnectAsync(GetSettingsBool(
-                        root,
-                        "enabled",
-                        AppManager.Instance.Config.ConnectionItem?.AutoReconnectEnabled ?? true));
-                    break;
-
-                case "set_gpn_recovery_watch":
-                    await SetGpnRecoveryWatchAsync(GetSettingsBool(
-                        root,
-                        "enabled",
-                        AppManager.Instance.Config.GuiItem?.GpnEnableRecoveryWatch ?? true));
-                    break;
-
-                case "set_gpn_failover":
-                    await SetGpnFailoverAsync(GetSettingsBool(
-                        root,
-                        "enabled",
-                        AppManager.Instance.Config.GuiItem?.GpnEnableFailover ?? false));
-                    break;
-
-                case "get_vless_bypass_node":
-                    // Çift Bağlantı (Bölünmüş Tünelleme) küresel launcher-bypass düğümünü
-                    // dashboard'a gönder (window.setVlessBypassNode).
-                    await PushVlessBypassNodeAsync();
-                    break;
-
-                case "set_vless_bypass_node":
-                    // Dashboard'dan gelen VLESS/Reality launcher-bypass düğümünü doğrula ve
-                    // GuiItem.VlessBypassNodeJson'a kaydet — sonraki GPN bağlantısında
-                    // (GpnCoreLauncher) mihomo YAML'ine ikincil "vless-launcher" olarak eklenir.
-                    await SetVlessBypassNodeAsync(root);
-                    break;
-
-                case "set_vless_bypass_from_uri":
-                    // Aynı düğüm, ama ham vless:// Reality paylaşım bağlantısı olarak:
-                    // FmtHandler.ResolveConfig (kanonik URI ayrıştırıcı) ile çözülür,
-                    // VlessProfileItem'a eşlenir ve GuiItem.VlessBypassNodeJson'a kaydedilir.
-                    await SetVlessBypassFromUriAsync(root);
-                    break;
-
-                case "get_gpn_capture_settings":
-                    // WinDivert kuyruk kartı: mevcut GpnCaptureItem ayarlarını dashboard'a gönder.
-                    await PushGpnCaptureSettingsAsync();
-                    break;
-
-                case "set_gpn_capture_settings":
-                    // WinDivert kuyruk kartından gelen ayarları doğrula (saf GpnCaptureSettingsPatch
-                    // ile sınırla) ve config'e yaz — sonraki yakalama başlangıcında uygulanır.
-                    await SetGpnCaptureSettingsAsync(root);
-                    break;
-
-                case "get_gpn_wintun_settings":
-                    // Wintun adapter kartı: mevcut GpnWintunItem ayarlarını dashboard'a gönder.
-                    await PushGpnWintunSettingsAsync();
-                    break;
-
-                case "set_gpn_wintun_settings":
-                    // Wintun adapter kartından gelen ayarları doğrula (saf GpnWintunSettingsPatch
-                    // ile sanitleştir/sınırla) ve config'e yaz — sonraki bağlantıda uygulanır.
-                    await SetGpnWintunSettingsAsync(root);
-                    break;
-
-                case "reset_gpn_telemetry":
-                    _gpnTelemetry.Reset();
-                    await PushGpnTelemetryAsync();
-                    break;
-
-                case "get_gpn_telemetry":
-                    await PushGpnTelemetryAsync();
-                    await PushGpnCaptureStatsAsync();
-                    break;
-
-                case "get_gpn_resilience_log":
-                    await PushGpnResilienceLogAsync();
-                    break;
-
-                case "clear_gpn_resilience_log":
-                    _gpnResilienceLog.Clear();
-                    await PushGpnResilienceLogAsync();
-                    break;
-
-                case "set_active_view":
-                    if (TryGetStringProperty(root, "view", out var activeView)
-                        && activeView is "dashboard" or "nodes" or "perf" or "boost" or "settings" or "coming")
-                    {
-                        _activeView = activeView;
-                    }
-                    break;
-
-                case "request_monitor_snapshot":
-                    await PushMonitorSnapshotAsync(force: true);
-                    break;
-
-                case "list_running_processes":
-                    await PushProcessCatalogAsync();
-                    break;
-
-                case "refresh_monitor":
-                    if (ViewModel?.ConnectionViewModel is { } monitorViewModel)
-                    {
-                        await monitorViewModel.Monitor.RefreshAsync();
-                        await PushMonitorSnapshotAsync(force: true);
-                    }
-                    break;
-
-                case "set_app_route":
-                    if (!TryGetStringProperty(root, "processName", out var routeProcess)
-                        || !TryGetStringProperty(root, "route", out var routeAction)
-                        || routeAction is not ("vpn" or "proxy" or "vpn+proxy" or "direct" or "block" or "warp"))
-                    {
-                        return;
-                    }
-
-                    TryGetStringProperty(root, "displayName", out var routeDisplayName);
-                    if (ViewModel?.ConnectionViewModel is { } routeViewModel)
-                    {
-                        var applied = await routeViewModel.SetDashboardAppRouteAsync(routeProcess, routeDisplayName, routeAction);
-                        await PushMonitorSnapshotAsync(force: true);
-                        await NotifyNodesOpAsync(applied ? "Application route saved" : "Application route was rejected");
-                    }
-                    break;
-
-                case "move_route":
-                    // Game Boost row reordering: rule order = list order (first match
-                    // wins), so a domain rule must be movable above the process rule it
-                    // takes precedence over. Identifies the entry by type + value so
-                    // domain/IP rows are addressable exactly like app rows.
-                    if (TryGetStringProperty(root, "entryType", out var moveEntryType)
-                        && TryGetStringProperty(root, "value", out var moveEntryValue)
-                        && TryGetStringProperty(root, "direction", out var moveDirection)
-                        && moveEntryValue.IsNotEmpty()
-                        && moveDirection is "up" or "down"
-                        && ViewModel?.ConnectionViewModel is { } moveViewModel)
-                    {
-                        var moved = moveViewModel.MoveManualRoute(moveEntryType, moveEntryValue, moveDirection == "up");
-                        await PushMonitorSnapshotAsync(force: true);
-                        await NotifyNodesOpAsync(moved
-                            ? "Route order updated"
-                            : "Route order could not be changed");
-                    }
-                    break;
-
-                case "add_domain_route":
-                    // Manual domain/IP rule from Game Boost (e.g. the one-click
-                    // "BSG API → WARP" entry). Duplicate/invalid values are refused
-                    // by the view model; the row order stays fully manual.
-                    if (TryGetStringProperty(root, "value", out var domainValue)
-                        && domainValue.IsNotEmpty()
-                        && ViewModel?.ConnectionViewModel is { } domainViewModel)
-                    {
-                        TryGetStringProperty(root, "route", out var domainAction);
-                        TryGetStringProperty(root, "displayName", out var domainDisplayName);
-                        var added = domainViewModel.AddDomainRoute(
-                            domainValue, domainAction.IsNotEmpty() ? domainAction : "proxy", domainDisplayName);
-                        await PushMonitorSnapshotAsync(force: true);
-                        await NotifyNodesOpAsync(added
-                            ? "Domain route added"
-                            : "Domain route could not be added");
-                    }
-                    break;
-
-                case "add_app":
-                    if (ViewModel?.ConnectionViewModel is { } addAppViewModel
-                        && UI.OpenFileDialog(out var appPath, "Applications|*.exe|All files|*.*") == true)
-                    {
-                        await addAppViewModel.AddDashboardAppAsync(appPath);
-                        await PushMonitorSnapshotAsync(force: true);
-                    }
-                    break;
-
-                case "add_running_process":
-                    if (root.TryGetProperty("pid", out var pidElement)
-                        && pidElement.ValueKind == JsonValueKind.Number
-                        && pidElement.TryGetInt32(out var pid)
-                        && ViewModel?.ConnectionViewModel is { } runningAppViewModel)
-                    {
-                        if (_processCatalogService.TryResolveExecutablePath(pid, out var runningPath)
-                            && !IsProtectedProcessPath(runningPath))
-                        {
-                            await runningAppViewModel.AddDashboardAppAsync(runningPath);
-                            await PushMonitorSnapshotAsync(force: true);
-                            await NotifyNodesOpAsync("Running application added");
-                            return;
-                        }
-
-                        // Anti-cheat guarded processes (e.g. BattlEye games) deny
-                        // executable-path queries entirely. Routing matches by
-                        // process name only, so add by name from the picker payload
-                        // when native resolution is blocked.
-                        TryGetStringProperty(root, "processName", out var pickerProcessName);
-                        TryGetStringProperty(root, "displayName", out var pickerDisplayName);
-                        pickerProcessName = ProcessCatalogService.NormalizeProcessName(pickerProcessName);
-                        if (pickerProcessName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-                            && !IsProtectedProcessPath(pickerProcessName))
-                        {
-                            var suggested = KnownAppCatalog.SuggestAction(pickerProcessName, pickerDisplayName ?? string.Empty);
-                            var addedByName = await runningAppViewModel.SetDashboardAppRouteAsync(
-                                pickerProcessName, pickerDisplayName, suggested);
-                            await PushMonitorSnapshotAsync(force: true);
-                            await NotifyNodesOpAsync(addedByName
-                                ? "Running application added"
-                                : "Running application was rejected");
-                            return;
-                        }
-
-                        await NotifyNodesOpAsync("Running application could not be resolved");
-                    }
-                    break;
-
-                case "remove_app":
-                    if (TryGetStringProperty(root, "processName", out var removeProcessName)
-                        && ViewModel?.ConnectionViewModel is { } removeAppViewModel)
-                    {
-                        var target = removeAppViewModel.Apps
-                            .FirstOrDefault(a => a.EntryType == "app" &&
-                                a.Value.Equals(removeProcessName, StringComparison.OrdinalIgnoreCase));
-                        if (target is not null)
-                        {
-                            removeAppViewModel.SelectedApp = target;
-                            removeAppViewModel.RemoveAppCmd.Execute().Subscribe();
-                            await PushMonitorSnapshotAsync(force: true);
-                        }
-                    }
-                    break;
-
-                case "add_files":
-                    if (ViewModel?.ConnectionViewModel is { } dropViewModel
-                        && root.TryGetProperty("files", out var filesEl)
-                        && filesEl.ValueKind == JsonValueKind.Array)
-                    {
-                        var fileNames = filesEl.EnumerateArray()
-                            .Where(f => f.ValueKind == JsonValueKind.String)
-                            .Select(f => f.GetString()!)
-                            .Where(n => n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                            .ToArray();
-                        if (fileNames.Length > 0)
-                        {
-                            var resolved = await ResolveDropFilePathsAsync(fileNames);
-                            if (resolved.Length > 0)
-                            {
-                                await dropViewModel.AddDroppedFilesAsync(resolved);
-                                await PushMonitorSnapshotAsync(force: true);
-                            }
-                        }
-                    }
-                    break;
-
-                case "set_auto_game_connect":
-                    if (ViewModel?.ConnectionViewModel is { } autoGameViewModel)
-                    {
-                        autoGameViewModel.AutoConnectOnGameStart = GetSettingsBool(
-                            root,
-                            "enabled",
-                            autoGameViewModel.AutoConnectOnGameStart);
-                        await PushMonitorSnapshotAsync(force: true);
-                    }
-                    break;
-
-                case "set_split_mode":
-                    if (TryGetStringProperty(root, "mode", out var splitMode))
-                    {
-                        await SetDashboardModeAsync(splitMode);
-                    }
-                    break;
-
-                case "set_split_direction":
-                    if (TryGetStringProperty(root, "invert", out var invertManualValue)
-                        && ViewModel?.ConnectionViewModel is { } directionVm)
-                    {
-                        var invert = invertManualValue.Equals("true", StringComparison.OrdinalIgnoreCase);
-                        if (directionVm.InvertManualRouting != invert)
-                        {
-                            directionVm.InvertManualRouting = invert;
-                            await directionVm.ApplyCmd.Execute().ToTask();
-                            await PushMonitorSnapshotAsync(force: true);
-                        }
-                    }
-                    break;
-
-                case "test_route":
-                    if (!TryGetStringProperty(root, "exeName", out var testExe)
-                        || !TryGetStringProperty(root, "destination", out var testDestination))
-                    {
-                        return;
-                    }
-
-                    TryGetStringProperty(root, "port", out var testPort);
-                    TryGetStringProperty(root, "network", out var testNetwork);
-                    TryGetStringProperty(root, "exePath", out var testExePath);
-                    await RunRouteTestAsync(testExe, testDestination, testPort, testNetwork, testExePath);
-                    break;
-
-                case "set_verbose_log":
-                    var verboseEnabled = GetSettingsBool(
-                        root,
-                        "enabled",
-                        AppManager.Instance.Config.GuiItem.EnableVerboseLog);
-                    AppManager.Instance.Config.GuiItem.EnableVerboseLog = verboseEnabled;
-                    Logging.VerboseLoggingEnabled(verboseEnabled);
-                    ConfigSaveQueue.RequestSave(AppManager.Instance.Config);
-                    Logging.VerboseIf(verboseEnabled, "GPN", "verbose_log", verboseEnabled ? "enabled" : "disabled");
-                    break;
-
-                case "set_effects_tier":
-                    // Visual-effects tier from the dashboard segmented control:
-                    // "full" (everything), "balanced" (ambient loops frozen,
-                    // reactive effects stay) or "reduced" (all off). Applies
-                    // immediately on the renderer side, no restart needed.
-                    var effectsTier = TryGetStringProperty(root, "tier", out var tierValue)
-                        ? NormalizeEffectsMode(tierValue)
-                        : "full";
-                    AppManager.Instance.Config.GuiItem.EffectsMode = effectsTier;
-                    AppManager.Instance.Config.GuiItem.ReduceEffects = effectsTier == "reduced";
-                    ConfigSaveQueue.RequestSave(AppManager.Instance.Config);
-                    await PushEffectsTierAsync();
-                    break;
-
-                case "set_reduce_effects":
-                    // Legacy single switch from older dashboard builds: map onto
-                    // the effects tier (reduced kills everything, full restores).
-                    var reduceEffectsEnabled = GetSettingsBool(
-                        root,
-                        "enabled",
-                        AppManager.Instance.Config.GuiItem.ReduceEffects);
-                    AppManager.Instance.Config.GuiItem.EffectsMode = reduceEffectsEnabled ? "reduced" : "full";
-                    AppManager.Instance.Config.GuiItem.ReduceEffects = reduceEffectsEnabled;
-                    ConfigSaveQueue.RequestSave(AppManager.Instance.Config);
-                    await PushEffectsTierAsync();
-                    break;
-
-                case "set_language":
-                    if (TryGetStringProperty(root, "lang", out var newLang)
-                        && Global.Languages.Contains(newLang)
-                        && AppManager.Instance.Config.UiItem.CurrentLanguage != newLang)
-                    {
-                        AppManager.Instance.Config.UiItem.CurrentLanguage = newLang;
-                        Thread.CurrentThread.CurrentUICulture = new(newLang);
-                        ConfigSaveQueue.RequestSave(AppManager.Instance.Config);
-                        await PushLanguageAsync();
-                    }
-                    break;
-
-                case "set_theme":
-                    if (TryGetStringProperty(root, "theme", out var webTheme)
-                        && TryMapWebThemeToWpf(webTheme, out var wpfTheme)
-                        && AppManager.Instance.Config.UiItem.CurrentTheme != wpfTheme)
-                    {
-                        // Reuse the native ViewModel so Material Design resources,
-                        // the title-bar border and the WebView event channel all update
-                        // through the same path as the native theme selector.
-                        if (_sidebarThemeVm is not null)
-                        {
-                            _sidebarThemeVm.CurrentTheme = wpfTheme;
-                            cmbSidebarTheme.SelectedValue = wpfTheme;
-                        }
-                        else
-                        {
-                            AppManager.Instance.Config.UiItem.CurrentTheme = wpfTheme;
-                            ConfigSaveQueue.RequestSave(AppManager.Instance.Config);
-                        }
-                    }
-                    break;
-
-                case "set_system_proxy_mode":
-                    var requestedProxyMode = (ESysProxyType)Math.Clamp(
-                        GetSettingsInt(root, "mode", (int)(AppManager.Instance.Config.SystemProxyItem?.SysProxyType ?? ESysProxyType.ForcedClear)),
-                        0,
-                        3);
-                    await SetSystemProxyModeAsync(requestedProxyMode);
-                    break;
-
-                case "toggle_system_proxy":
-                    await ToggleSystemProxyAsync();
-                    break;
-
-                case "test_proxy":
-                    await TestProxyAsync();
-                    break;
-
-                case "performance_sample":
-                    if (root.TryGetProperty("payload", out var performancePayload)
-                        && performancePayload.ValueKind == JsonValueKind.Object)
-                    {
-                        var perfJson = performancePayload.GetRawText();
-                        DiagLog.Write($"WEBVIEW_PERF {perfJson}");
-                    }
-                    break;
-
-                case "check_ip":
-                    await CheckIpAsync();
-                    break;
-
-                case "app_control":
-                    if (!TryGetStringProperty(root, "command", out var command))
-                    {
-                        return;
-                    }
-
-                    HandleAppControl(command);
-                    break;
-
-                case "set_window_behavior":
-                    // Dashboard window-behaviour toggles (minimize-to-tray /
-                    // hide-to-tray-on-close) apply immediately on change, so the
-                    // shown switch always matches what X / minimize actually do —
-                    // the close and minimize paths read this same live config
-                    // object, and the queued save persists the new value to disk.
-                    var trayConfig = AppManager.Instance.Config;
-                    var requestedHideOnClose = GetSettingsBool(root, "hide2TrayWhenClose", trayConfig.UiItem.Hide2TrayWhenClose);
-                    var requestedMinimize2Tray = GetSettingsBool(root, "minimize2Tray", trayConfig.UiItem.Minimize2Tray);
-                    if (requestedHideOnClose != trayConfig.UiItem.Hide2TrayWhenClose
-                        || requestedMinimize2Tray != trayConfig.UiItem.Minimize2Tray)
-                    {
-                        trayConfig.UiItem.Hide2TrayWhenClose = requestedHideOnClose;
-                        trayConfig.UiItem.Minimize2Tray = requestedMinimize2Tray;
-                        ConfigSaveQueue.RequestSave(trayConfig);
-                        Logging.VerboseIf(
-                            requestedHideOnClose || requestedMinimize2Tray,
-                            "UI", "window_behavior",
-                            $"hideOnClose={requestedHideOnClose} minimize2Tray={requestedMinimize2Tray}");
-                        // Reflect the persisted truth back so the form cannot drift
-                        // from the real window behaviour.
-                        await PushSettingsAsync();
-                    }
-                    break;
-
-                case "get_settings":
-                    await PushSettingsAsync();
-                    break;
-
-                case "save_settings":
-                    await SaveSettingsAsync(root);
-                    break;
-            }
-        }
-        catch (JsonException)
-        {
-            // Invalid JSON is untrusted renderer input; do not let it reach application
-            // logic and do not turn repeated malformed messages into log noise.
-        }
-        catch (Exception ex)
-        {
-            // Keep renderer failures contained even if WebView2 is closing concurrently.
-            if (!_isClosing)
-            {
-                Logging.SaveLog("AoGPN WebView2 message handling failed", ex);
-            }
-        }
-    }
-
-    private static bool TryGetStringProperty(
-        JsonElement objectElement,
-        string propertyName,
-        out string value)
-    {
-        value = string.Empty;
-        if (!objectElement.TryGetProperty(propertyName, out var property)
-            || property.ValueKind != JsonValueKind.String)
-        {
-            return false;
-        }
-
-        var candidate = property.GetString();
-        if (string.IsNullOrWhiteSpace(candidate) || candidate.Length > 64)
-        {
-            return false;
-        }
-
-        value = candidate;
-        return true;
-    }
-
-    private static bool TryGetInt64Property(JsonElement objectElement, string propertyName, out long value)
-    {
-        value = 0;
-        return objectElement.TryGetProperty(propertyName, out var property)
-            && property.TryGetInt64(out value)
-            && value > 0;
-    }
-
-    private static bool TryGetBooleanProperty(JsonElement objectElement, string propertyName, out bool value)
-    {
-        value = false;
-        if (!objectElement.TryGetProperty(propertyName, out var property))
-        {
-            return false;
-        }
-
-        if (property.ValueKind == JsonValueKind.True)
-        {
-            value = true;
-            return true;
-        }
-        if (property.ValueKind == JsonValueKind.False)
-        {
-            value = false;
-            return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// .conf metni gibi uzun payload'lar için: 64 karakterlik kısa-string limiti
-    /// conf bloğunu keserdi, bu yüzden ayrı bir okuma yolu (128 KB renderer limiti
-    /// içinde). Yalnızca güvenilen eylemler (gpn_server_add) kullanır.
-    /// </summary>
-    private static bool TryGetLongStringProperty(
-        JsonElement objectElement,
-        string propertyName,
-        out string value)
-    {
-        value = string.Empty;
-        if (!objectElement.TryGetProperty(propertyName, out var property)
-            || property.ValueKind != JsonValueKind.String)
-        {
-            return false;
-        }
-
-        var candidate = property.GetString();
-        if (string.IsNullOrWhiteSpace(candidate) || candidate.Length > 128 * 1024)
-        {
-            return false;
-        }
-
-        value = candidate;
-        return true;
-    }
-
-    private static bool TryGetStringArrayProperty(
-        JsonElement objectElement,
-        string propertyName,
-        out string[] values)
-    {
-        values = [];
-        if (!objectElement.TryGetProperty(propertyName, out var property)
-            || property.ValueKind != JsonValueKind.Array)
-        {
-            return false;
-        }
-
-        var result = new List<string>();
-        foreach (var item in property.EnumerateArray())
-        {
-            if (item.ValueKind != JsonValueKind.String)
-            {
-                continue;
-            }
-
-            var candidate = item.GetString();
-            if (!string.IsNullOrWhiteSpace(candidate) && candidate.Length <= 64)
-            {
-                result.Add(candidate);
-            }
-        }
-
-        values = result.ToArray();
-        return values.Length > 0;
-    }
-/// <summary>
-    /// Extracts a two-letter country code from common v2ray node remark patterns.
-    /// Matches known codes surrounded by separators like [TR], TR-, (TR), TR·.
-    /// Returns empty string when no country hint is found.
-    /// </summary>
-    private static string ExtractCountryFromRemarks(string? remarks)
-    {
-        if (string.IsNullOrWhiteSpace(remarks))
-            return string.Empty;
-
-        var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "TR", "US", "DE", "FR", "GB", "NL", "JP", "KR", "SG", "HK",
-            "CA", "AU", "RU", "IR", "AE", "BR", "IN", "CN", "TW", "IT",
-            "ES", "SE", "CH", "PL", "CZ", "UA", "KZ", "VN", "TH", "ID",
-            "MY", "PH", "AR", "CL", "CO", "MX", "ZA", "NG", "EG",
-        };
-
-        var remarkUpper = remarks.ToUpperInvariant();
-        foreach (var code in codes)
-        {
-            var idx = remarkUpper.IndexOf(code, StringComparison.Ordinal);
-            while (idx >= 0)
-            {
-                var before = idx > 0 ? remarkUpper[idx - 1] : '.';
-                var after = idx + 2 < remarkUpper.Length ? remarkUpper[idx + 2] : '.';
-                if (!char.IsLetterOrDigit(before) && !char.IsLetterOrDigit(after))
-                    return code;
-                idx = remarkUpper.IndexOf(code, idx + 1, StringComparison.Ordinal);
-            }
-        }
-
-        return string.Empty;
-    }
-
-    /// <summary>
-    /// Best-effort country code for a node: a two-letter code in the remarks wins;
-    /// otherwise the node address is resolved through GeoIP when it is a plain IP.
-    /// </summary>
-    private static string ResolveNodeCountry(string? remarks, string? address)
-    {
-        var fromRemarks = ExtractCountryFromRemarks(remarks);
-        if (fromRemarks.IsNotEmpty())
-        {
-            return fromRemarks;
-        }
-
-        var normalizedAddress = NormalizeNodeAddress(address);
-        if (normalizedAddress.IsNotEmpty()
-            && IPAddress.TryParse(normalizedAddress, out var ip)
-            && !IsNonPublicAddress(ip))
-        {
-            var geo = GeoIpLookupService.Lookup(ip);
-            return geo.CountryCode?.Trim().ToUpperInvariant() ?? string.Empty;
-        }
-
-        return string.Empty;
-    }
-
-    private static string NormalizeNodeAddress(string? address)
-    {
-        if (string.IsNullOrWhiteSpace(address)) return string.Empty;
-        var value = address.Trim();
-        if (value.StartsWith('[') && value.IndexOf(']') is var end && end > 1)
-            return value[1..end];
-        if (value.Count(c => c == ':') == 1 && value.LastIndexOf(':') is var colon && IPAddress.TryParse(value[..colon], out _))
-            return value[..colon];
-        return value.TrimEnd('.');
-    }
-
-    private static bool IsNonPublicAddress(IPAddress ip)
-    {
-        return GeoIpLookupService.Lookup(ip).IsPrivate;
-    }
-
-
-    /// <summary>
     /// Applies the same mode transition used by the native ConnectionView. The command
     /// is serialized so repeated clicks cannot overlap rule writes or core reloads.
     /// </summary>
-    private async Task ToggleConnectionAsync(string requestedMode, string transport)
+    public async Task ToggleConnectionAsync(string requestedMode, string transport)
     {
         if (!await _connectionToggleGate.WaitAsync(0))
         {
@@ -1841,7 +907,7 @@ public partial class MainWindow
     /// ViewModel koordinatörünü kullanır). Bağlantı kesme, çekirdek geçişini
     /// temizler.
     /// </summary>
-    private async Task RunGpnConnectAsync()
+    public async Task RunGpnConnectAsync()
     {
         if (!await _connectionToggleGate.WaitAsync(0))
         {
@@ -2001,7 +1067,7 @@ public partial class MainWindow
     /// Changes between the real VPN and GPN routing modes while already connected.
     /// When disconnected, the frontend keeps the selected mode locally for the next connect.
     /// </summary>
-    private async Task SetConnectionModeAsync(string mode)
+    public async Task SetConnectionModeAsync(string mode)
     {
         if (!await _connectionToggleGate.WaitAsync(0))
         {
@@ -2038,7 +1104,7 @@ public partial class MainWindow
     /// Unlike the legacy mode switch, this also accepts "off" while disconnected so
     /// the dashboard can stage a complete routing policy before connecting.
     /// </summary>
-    private async Task SetDashboardModeAsync(string mode)
+    public async Task SetDashboardModeAsync(string mode)
     {
         if (mode is not ("off" or "vpn" or "manual"))
         {
@@ -2096,7 +1162,7 @@ public partial class MainWindow
     /// native status bar's EnableTun + SysProxyType toggles. While connected the change
     /// is applied immediately; while disconnected it is remembered for the next connect.
     /// </summary>
-    private async Task SetTransportAsync(string transport)
+    public async Task SetTransportAsync(string transport)
     {
         if (!await _connectionToggleGate.WaitAsync(0))
         {
@@ -2111,7 +1177,7 @@ public partial class MainWindow
                 return;
             }
 
-            if (transport == "tun" && !AllowEnableTun())
+            if (transport == "tun" && !DashboardSettingsService.AllowEnableTun())
             {
                 await NotifyConnectionErrorAsync(
                     "TUN mode requires administrator privileges. Relaunch as administrator to enable TUN.");
@@ -2211,7 +1277,7 @@ public partial class MainWindow
     /// The value is applied when the connection is (re)established rather than forcing
     /// a core restart for a preference-only change.
     /// </summary>
-    private async Task SetProtocolPreferenceAsync(string preference)
+    public async Task SetProtocolPreferenceAsync(string preference)
     {
         var config = AppManager.Instance.Config;
         config.ConnectionItem ??= new();
@@ -2231,7 +1297,7 @@ public partial class MainWindow
     /// (gvisor / system / mixed). The same field is editable from the settings
     /// form; this keeps the quick selector and the settings form in sync.
     /// </summary>
-    private async Task SetTunStackAsync(string stack)
+    public async Task SetTunStackAsync(string stack)
     {
         var config = AppManager.Instance.Config;
         config.TunModeItem ??= new();
@@ -2248,7 +1314,7 @@ public partial class MainWindow
     /// <summary>
     /// Persists the bounded core/tunnel recovery preference shown in the quick panel.
     /// </summary>
-    private async Task SetAutoReconnectAsync(bool enabled)
+    public async Task SetAutoReconnectAsync(bool enabled)
     {
         var config = AppManager.Instance.Config;
         config.ConnectionItem ??= new();
@@ -2257,7 +1323,7 @@ public partial class MainWindow
         await PushSettingsAsync();
     }
 
-    private async Task SetGpnRecoveryWatchAsync(bool enabled)
+    public async Task SetGpnRecoveryWatchAsync(bool enabled)
     {
         var config = AppManager.Instance.Config;
         config.GuiItem ??= new();
@@ -2271,7 +1337,7 @@ public partial class MainWindow
     /// Kapalıyken (varsayılan) GPN bağlantısı seçilen sunucuya takılı kalır — en stabil,
     /// kesintisiz deneyim için otomatik sunucu geçişi, V2rayTCP düşüşü ve kurtarma kapalıdır.
     /// </summary>
-    private async Task SetGpnFailoverAsync(bool enabled)
+    public async Task SetGpnFailoverAsync(bool enabled)
     {
         var config = AppManager.Instance.Config;
         config.GuiItem ??= new();
@@ -2290,7 +1356,7 @@ public partial class MainWindow
     /// WARP SOCKS5 zinciri yerine o düğüme gider. Alanlar 64 karakterle sınırlı genel
     /// alıcılardan geçirilmez (Reality public key daha uzundur) — ham JSON'dan okunur.
     /// </summary>
-    private async Task SetVlessBypassNodeAsync(JsonElement root)
+    public async Task SetVlessBypassNodeAsync(JsonElement root)
     {
         string ReadString(string name) =>
             root.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.String
@@ -2340,7 +1406,7 @@ public partial class MainWindow
     /// GuiItem.VlessBypassNodeJson'a yazılır. Boş URI gönderilirse ayar temizlenir —
     /// legacy WARP davranışı geri gelir (Çift Bağlantı kapalı).
     /// </summary>
-    private async Task SetVlessBypassFromUriAsync(JsonElement root)
+    public async Task SetVlessBypassFromUriAsync(JsonElement root)
     {
         var uri = root.TryGetProperty("uri", out var el) && el.ValueKind == JsonValueKind.String
             ? (el.GetString() ?? string.Empty).Trim()
@@ -2400,7 +1466,7 @@ public partial class MainWindow
     /// (window.setVlessBypassNode). Ayar boş ya da geçersizse null iletilir — renderer
     /// alanları boş duruma getirir (Çift Bağlantı kapalı = legacy WARP davranışı).
     /// </summary>
-    private async Task PushVlessBypassNodeAsync()
+    public async Task PushVlessBypassNodeAsync()
     {
         if (!_webViewReady)
         {
@@ -2439,7 +1505,7 @@ public partial class MainWindow
     /// Mevcut GpnCaptureItem ayarlarını dashboard "WinDivert kuyruk" kartına gönderir
     /// (tüm alanlar — yalnızca kullanıcı ayarları, özel veri yok).
     /// </summary>
-    private async Task PushGpnCaptureSettingsAsync()
+    public async Task PushGpnCaptureSettingsAsync()
     {
         if (!_webViewReady)
         {
@@ -2474,15 +1540,15 @@ public partial class MainWindow
     /// ServiceLib'de, test edilebilir) ve config'e yazar. Sonraki yakalama başlangıcı
     /// (GpnCaptureLoop) bu değerleri kullanır.
     /// </summary>
-    private async Task SetGpnCaptureSettingsAsync(JsonElement root)
+    public async Task SetGpnCaptureSettingsAsync(JsonElement root)
     {
         var patch = new GpnCaptureSettingsPatch(
             QueueLen: ToUintOrNull(TryGetIntProperty(root, "queueLen")),
             QueueTime: ToUintOrNull(TryGetIntProperty(root, "queueTime")),
             QueueSize: ToUintOrNull(TryGetIntProperty(root, "queueSize")),
-            EnableQueueLen: TryGetBooleanProperty(root, "enableQueueLen", out var enableLen) ? enableLen : null,
-            EnableQueueTime: TryGetBooleanProperty(root, "enableQueueTime", out var enableTime) ? enableTime : null,
-            EnableQueueSize: TryGetBooleanProperty(root, "enableQueueSize", out var enableSize) ? enableSize : null,
+            EnableQueueLen: DashboardMessageDispatcher.TryGetBooleanProperty(root, "enableQueueLen", out var enableLen) ? enableLen : null,
+            EnableQueueTime: DashboardMessageDispatcher.TryGetBooleanProperty(root, "enableQueueTime", out var enableTime) ? enableTime : null,
+            EnableQueueSize: DashboardMessageDispatcher.TryGetBooleanProperty(root, "enableQueueSize", out var enableSize) ? enableSize : null,
             Layer: TryGetIntProperty(root, "layer"),
             Direction: TryGetIntProperty(root, "direction"));
 
@@ -2498,7 +1564,7 @@ public partial class MainWindow
     /// (adapter ad ön eki + halka tampon kapasitesi). Bir sonraki WireGuard
     /// bağlantısında köprü bu değerlerle açılır.
     /// </summary>
-    private async Task PushGpnWintunSettingsAsync()
+    public async Task PushGpnWintunSettingsAsync()
     {
         if (!_webViewReady)
         {
@@ -2528,10 +1594,10 @@ public partial class MainWindow
     /// yazar. Sonraki WireGuard bağlantısında (GpnCaptureBridge köprü açılışı)
     /// bu değerler uygulanır.
     /// </summary>
-    private async Task SetGpnWintunSettingsAsync(JsonElement root)
+    public async Task SetGpnWintunSettingsAsync(JsonElement root)
     {
         var patch = new GpnWintunSettingsPatch(
-            AdapterName: TryGetStringProperty(root, "adapterName", out var adapterName) ? adapterName : null,
+            AdapterName: DashboardMessageDispatcher.TryGetStringProperty(root, "adapterName", out var adapterName) ? adapterName : null,
             RingCapacity: ToUintOrNull(TryGetIntProperty(root, "ringCapacity")));
 
         var config = AppManager.Instance.Config;
@@ -2561,7 +1627,7 @@ public partial class MainWindow
 
     private static uint? ToUintOrNull(int? value) => value is >= 0 ? (uint?)value : null;
 
-    private async Task SetSystemProxyModeAsync(ESysProxyType requestedType)
+    public async Task SetSystemProxyModeAsync(ESysProxyType requestedType)
     {
         if (!await _connectionToggleGate.WaitAsync(0))
         {
@@ -2606,7 +1672,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task ToggleSystemProxyAsync()
+    public async Task ToggleSystemProxyAsync()
     {
         var current = AppManager.Instance.Config.SystemProxyItem?.SysProxyType
             ?? ESysProxyType.ForcedClear;
@@ -2974,7 +2040,7 @@ public partial class MainWindow
         }
     }
 
-    private void HandleAppControl(string command)
+    public void HandleAppControl(string command)
     {
         switch (command)
         {
@@ -3054,7 +2120,6 @@ public partial class MainWindow
 
     private bool _lastMaximizedState;
     private bool _windowStatePublished;
-    private string _lastSystemProxySignature = "";
 
     /// <summary>
     /// Publishes the maximized state only when it changed, so external transitions
@@ -3078,7 +2143,7 @@ public partial class MainWindow
     /// Pushes the current WPF theme mapping to the WebView2 dashboard so its CSS
     /// variable palette (nebula/inferno/venom/…) stays in sync with the WPF theme.
     /// </summary>
-    private static bool TryMapWebThemeToWpf(string webTheme, out string wpfTheme)
+    internal static bool TryMapWebThemeToWpf(string webTheme, out string wpfTheme)
     {
         wpfTheme = webTheme switch
         {
@@ -3104,42 +2169,8 @@ public partial class MainWindow
             $"if(typeof applyTheme==='function'){{applyTheme('{webViewThemeId}',false)}}");
     }
 
-    /// <summary>
-    /// Pushes the visual-effects tier (full / balanced / reduced) to the
-    /// dashboard. Legacy configs (empty EffectsMode plus the old ReduceEffects
-    /// switch) are normalized and persisted so the file self-migrates; the tier
-    /// applies immediately on the renderer side, no restart needed. The host
-    /// config is authoritative — the renderer never persists it.
-    /// </summary>
-    private async Task PushEffectsTierAsync()
-    {
-        var config = AppManager.Instance.Config;
-        var tier = NormalizeEffectsMode(config.GuiItem.EffectsMode);
-        config.GuiItem.ReduceEffects = tier == "reduced";
-        if (!string.Equals(config.GuiItem.EffectsMode, tier, StringComparison.Ordinal))
-        {
-            config.GuiItem.EffectsMode = tier;
-            ConfigSaveQueue.RequestSave(config);
-        }
-        await ExecuteScriptSafelyAsync(
-            $"if(typeof setEffectsTier==='function'){{setEffectsTier({JsonSerializer.Serialize(tier)},false)}}");
-    }
-
-    /// <summary>
-    /// Accepts "full", "balanced" or "reduced"; anything else falls back to
-    /// "full" (or "reduced" when the legacy ReduceEffects switch was on and the
-    /// mode was never set) — a null/empty mode from an older config file migrates
-    /// without losing the user's previous choice.
-    /// </summary>
-    private static string NormalizeEffectsMode(string? mode)
-    {
-        if (mode is "balanced" or "reduced")
-        {
-            return mode;
-        }
-        return AppManager.Instance.Config.GuiItem.ReduceEffects ? "reduced" : "full";
-    }
-
+    /// <summary>Wave 2: <see cref="DashboardSettingsService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushEffectsTierAsync() => _settingsService.PushEffectsTierAsync();
     /// <summary>
     /// One-shot explanation when the startup guard auto-disabled hardware
     /// acceleration (no usable GPU path, or the crash budget was exceeded):
@@ -3163,38 +2194,15 @@ public partial class MainWindow
         await Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Pushes the current WPF UI language to the dashboard so the language dropdown
-    /// and any future localised strings in the WebView stay in sync.
-    /// </summary>
-    private async Task PushLanguageAsync()
-    {
-        var lang = AppManager.Instance.Config.UiItem.CurrentLanguage ?? "en";
-        await ExecuteScriptSafelyAsync(
-            $"if(typeof applyLanguage==='function'){{applyLanguage('{lang}')}}");
-    }
-
-    /// <summary>
-    /// Pushes the running build/version to the dashboard so the About &amp; Help
-    /// page always reports the real application version (it lifts it straight out
-    /// of the assembly, exactly like the window title and splash screen).
-    /// </summary>
-    private async Task PushAppInfoAsync()
-    {
-        var payload = System.Text.Json.JsonSerializer.Serialize(new
-        {
-            version = Utils.GetVersionInfo(),
-            appName = "AO GPN Desktop",
-            arch = RuntimeInformation.ProcessArchitecture.ToString()
-        });
-        await ExecuteScriptSafelyAsync($"window.setAppInfo?.({payload});");
-    }
-
+    /// <summary>Wave 2: <see cref="DashboardSettingsService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushLanguageAsync() => _settingsService.PushLanguageAsync();
+    /// <summary>Wave 2: <see cref="DashboardSettingsService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushAppInfoAsync() => _settingsService.PushAppInfoAsync();
     /// <summary>
     /// Resolves EXE file names dropped onto the Game Boost page to full paths.
     /// Checks running processes first, then falls back to common install locations.
     /// </summary>
-    private static async Task<string[]> ResolveDropFilePathsAsync(string[] exeNames)
+    internal static async Task<string[]> ResolveDropFilePathsAsync(string[] exeNames)
     {
         var resolved = new List<string>();
         foreach (var name in exeNames)
@@ -3552,7 +2560,7 @@ public partial class MainWindow
     /// dashboard can confirm the proxy is reachable. Runs in under a second and
     /// does not modify any system settings.
     /// </summary>
-    private async Task TestProxyAsync()
+    public async Task TestProxyAsync()
     {
         if (!_webViewReady)
         {
@@ -3625,7 +2633,7 @@ public partial class MainWindow
     /// compares direct vs SOCKS5-routed IP to verify the tunnel is active;
     /// when connected via TUN a single direct check suffices.
     /// </summary>
-    private async Task CheckIpAsync()
+    public async Task CheckIpAsync()
     {
         if (!_webViewReady)
         {
@@ -3798,33 +2806,8 @@ public partial class MainWindow
         return null;
     }
 
-    /// <summary>
-    /// Publishes both the persisted independent preference and the effective OS mode.
-    /// A connection using proxy transport can temporarily force the effective mode;
-    /// showing both values prevents the quick-toggle from appearing to lose its choice.
-    /// </summary>
-    private async Task PushSystemProxyStateAsync(bool force = false)
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        var config = AppManager.Instance.Config;
-        var desired = config.SystemProxyItem?.SysProxyType ?? ESysProxyType.ForcedClear;
-        var effective = SystemProxyPolicy.ResolveEffectiveType(config);
-        var connectionOwns = SystemProxyPolicy.ConnectionNeedsSystemProxy(config);
-        var signature = $"{(int)desired}:{(int)effective}:{connectionOwns}";
-        if (!force && signature == _lastSystemProxySignature)
-        {
-            return;
-        }
-
-        _lastSystemProxySignature = signature;
-        await ExecuteScriptSafelyAsync(
-            $"window.setSystemProxyState({JsonSerializer.Serialize((int)desired)}, {JsonSerializer.Serialize((int)effective)}, {JsonSerializer.Serialize(connectionOwns)});");
-    }
-
+    /// <summary>Wave 2: <see cref="DashboardSettingsService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushSystemProxyStateAsync(bool force = false) => _settingsService.PushSystemProxyStateAsync(force);
     /// <summary>
     /// Sends the currently selected AoGPN profile to the dashboard node card.
     /// The signature check suppresses repeats so the 2 s poll only touches the
@@ -3874,7 +2857,7 @@ public partial class MainWindow
     /// read-only snapshot; all mutations return through SplitTunnelViewModel so the
     /// native routing/config persistence path remains authoritative.
     /// </summary>
-    private static bool IsProtectedProcessPath(string path)
+    internal static bool IsProtectedProcessPath(string path)
     {
         var name = ProcessCatalogService.NormalizeProcessName(path);
         return name is "aogpn.exe" or "xray.exe" or "sing-box.exe" or "mihomo.exe" or "v2ray.exe" or "openvpn.exe";
@@ -3885,7 +2868,7 @@ public partial class MainWindow
     /// the dashboard. The test rebuilds the sing-box config the core would use right
     /// now and simulates rule matching — no traffic is sent and no DNS is resolved.
     /// </summary>
-    private async Task RunRouteTestAsync(
+    public async Task RunRouteTestAsync(
         string exeName,
         string destination,
         string port,
@@ -3934,7 +2917,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task PushGpnTelemetryAsync()
+    public async Task PushGpnTelemetryAsync()
     {
         if (!_webViewReady)
         {
@@ -3958,7 +2941,7 @@ public partial class MainWindow
     /// AppEvents.GpnCaptureStatsChanged'den gelir; bu yöntem son görüntüyü
     /// dashboard açılışı / get_gpn_telemetry / failover olaylarında yeniden basar.
     /// </summary>
-    private async Task PushGpnCaptureStatsAsync()
+    public async Task PushGpnCaptureStatsAsync()
     {
         if (!_webViewReady)
         {
@@ -3996,7 +2979,7 @@ public partial class MainWindow
     }
 
     /// <summary>PID havuzu anlık görüntüsünü dashboard'a gönderir (özel veri taşınmaz).</summary>
-    private async Task PushGpnPidPoolAsync()
+    public async Task PushGpnPidPoolAsync()
     {
         if (!_webViewReady)
         {
@@ -4063,7 +3046,7 @@ public partial class MainWindow
         await ExecuteScriptSafelyAsync($"window.setWinDivertHealth?.({json});");
     }
 
-    private async Task PushGpnResilienceLogAsync()
+    public async Task PushGpnResilienceLogAsync()
     {
         if (!_webViewReady)
         {
@@ -4197,356 +3180,29 @@ public partial class MainWindow
 
     // ── GPN Sunucu Yönetimi (Faz 3 ekranı) ───────────────────────────────
 
-    /// <summary>
-    /// gpn_servers tablosunun meta verisini (özel anahtar HARİÇ — şifreli blob
-    /// dahi renderer'a gönderilmez) dashboard Sunucu Yönetimi ekranına gönderir.
-    /// </summary>
-    private async Task PushGpnServersAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        var items = await WireGuardServerCatalog.GetItemsAsync();
-        var view = (items ?? []).Select(item => new
-        {
-            ServerId = item.ServerId,
-            Name = item.Name,
-            EndpointHost = item.EndpointHost,
-            EndpointPort = item.EndpointPort,
-            ClientAddress = item.ClientAddress,
-            Mtu = item.Mtu,
-            Dns = item.Dns,
-            Keepalive = item.Keepalive,
-            IsEnabled = item.IsEnabled,
-            KeyProtected = item.ClientPrivateKeyEnc.IsNotEmpty(),
-            UpdatedAt = item.UpdatedAt,
-        }).ToList();
-
-        try
-        {
-            var json = JsonSerializer.Serialize(view, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnServers?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-servers push failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// gpn_servers'taki etkin sunuculara canlı ölçüm yapar ve sonucu dashboard'a
-    /// gönderir: <see cref="GpnServerSelectionService.ProbeAllAsync"/> (paralel ICMP
-    /// ping → gecikme/kayıp) + <see cref="UdpHealthChecker"/> (51820/udp yolu).
-    /// Ölçüm yalnızca okuma amaçlıdır — tünel başlatılmaz. Özel anahtar renderer'a
-    /// hiç gönderilmez.
-    /// </summary>
-    private async Task ProbeGpnServersAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var servers = await WireGuardServerCatalog.LoadAsync();
-            var enabled = servers.Where(s => s.IsEnabled).ToList();
-
-            // Ölçüm, tek/önbellekli GpnServerSelectionService örneği üzerinden
-            // MainWindowViewModel.ProbeServersAsync ile yürütülür.
-            var probeResults = await ViewModel!.ProbeServersAsync(
-                enabled,
-                new GpnProbeOptions
-                {
-                    Samples = 3,
-                    PerSampleTimeoutMs = 1000,
-
-                    // Tünel (TUN auto_route + strict_route) etkinken ölçümü FİZİKSEL
-                    // NIC üzerinden yap: ICMP atlanır (Ping arayüz bağlayamaz — tünel-içi
-                    // ping anlamsız), UDP/TCP probe soketleri ProbeEgressNic ile fiziksel
-                    // uplink'e bağlanır → kendi tünelinin içine yakalanmaz, gerçek sunucu
-                    // erişilebilirliği ölçülür. Tünel yoksa no-op (normal ICMP + ölçüm).
-                    EscapeTunnelForProbes = true,
-                });
-
-            // UDP sağlık testi — seçim/failover ile AYNI kanıt zinciri (el sıkışma +
-            // junk): WireGuard sunucusu junk pakete yanıt vermediği için yalnızca
-            // geçerli el sıkışma Open + RTT üretir; panel gecikme fallback'ini ve
-            // gerçek UDP durumunu buradan besler.
-            var udpList = await ViewModel!.ProbeUdpAllAsync(
-                enabled,
-                new GpnProbeOptions
-                {
-                    // El sıkışma UDP'si hafif zaman aşımıyla — ölçüm paneli hızlı kalsın.
-                    HandshakeProbe = new WireGuardHandshakeProbeOptions(WaitTimeoutMs: 1500, MaxAttempts: 1),
-                    UdpCheck = new UdpHealthCheckOptions(WaitTimeoutMs: 1500),
-                    EscapeTunnelForProbes = true,
-                });
-            var udpResults = udpList.Select(u => (u.ServerId, Result: u)).ToList();
-
-            var view = probeResults.Select(p => new
-            {
-                ServerId = p.ServerId,
-                DelayMs = p.DelayMs,
-                AvgDelayMs = p.AvgDelayMs,
-                MaxDelayMs = p.MaxDelayMs,
-                LossPercent = p.LossPercent,
-                IsSuccess = p.IsSuccess,
-                // Tünel etkinken ölçüm fiziksel NIC üzerinden yapıldı (ICMP atlandı) —
-                // dashboard küme kartı bunu kullanıcıya ipucu olarak gösterir.
-                MeasuredOverPhysicalNic = p.MeasuredOverPhysicalNic,
-                UdpStatus = udpResults.FirstOrDefault(u => u.ServerId == p.ServerId).Result?.Status.ToString() ?? "unknown",
-                UdpRoundTripMs = udpResults.FirstOrDefault(u => u.ServerId == p.ServerId).Result?.RoundTripMs,
-                MeasuredAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            }).ToList();
-
-            var json = JsonSerializer.Serialize(view, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnServerProbes?.({json});");
-
-            // ── Failover matrisi: aynı ölçümü varsayılan + katı politika altında ──
-            // Aynı GpnServerSelectionService (saf DecideFailover) ile hesaplanır;
-            // dashboard yalnızca görüntüler. Aktif sunucu: bağlıysa o, değilse aday.
-            await PushGpnFailoverMatrixAsync(enabled, probeResults, udpResults);
-
-            // ── En iyi aday: GPN Bağlan'ın yapacağı otomatik seçim kararını önceden
-            // göster (saf DecideSelection — SelectBestServerAsync ile birebir).
-            await PushGpnSelectionPredictionAsync(enabled, probeResults, udpResults);
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-servers probe failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// Failover karar matrisini dashboard'a taşır: ping + UDP ölçümleri iki politika
-    /// altında (varsayılan / katı) GpnServerSelectionService.EvaluateFailoverMatrix ile
-    /// değerlendirilir ve setGpnFailoverMatrix olarak yayınlanır.
-    /// </summary>
-    private async Task PushGpnFailoverMatrixAsync(
-        IReadOnlyList<GpnServerProfile> enabled,
-        IReadOnlyList<GpnServerProbeResult> probeResults,
-        List<(string ServerId, UdpProbeResult Result)> udpResults)
-    {
-        if (!_webViewReady || enabled.Count == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            var udpMap = udpResults.ToDictionary(u => u.ServerId, u => u.Result);
-
-            // Aktif: bağlı sunucu; bağlı değilse en düşük ping'li aday (matris "eğer
-            // şu an bağlı olsaydık" senaryosunu gösterir).
-            var active = ViewModel!.CurrentGpnServer
-                ?? enabled.OrderBy(s => probeResults.FirstOrDefault(r => r.ServerId == s.ServerId)?.DelayMs ?? int.MaxValue)
-                    .First();
-
-            var matrix = ViewModel!.EvaluateFailoverMatrix(
-                active, enabled, probeResults, udpMap,
-                new GpnProbeOptions { Samples = 3, PerSampleTimeoutMs = 1000 });
-
-            var json = JsonSerializer.Serialize(matrix, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnFailoverMatrix?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-failover-matrix push failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// "En iyi aday" kartını dashboard'a taşır: aynı canlı ölçüm (ping + UDP) üzerinden
-    /// GpnServerSelectionService.EvaluateSelection (saf DecideSelection) ile GPN
-    /// Bağlan'ın yapacağı otomatik seçim kararı önceden gösterilir. Durum/mod adları
-    /// string olarak serileştirilir (enum numarası değil) — renderer bunları karşılaştırır.
-    /// </summary>
-    private async Task PushGpnSelectionPredictionAsync(
-        IReadOnlyList<GpnServerProfile> enabled,
-        IReadOnlyList<GpnServerProbeResult> probeResults,
-        List<(string ServerId, UdpProbeResult Result)> udpResults)
-    {
-        if (!_webViewReady || enabled.Count == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            var udpMap = udpResults.ToDictionary(u => u.ServerId, u => u.Result);
-            var prediction = ViewModel!.EvaluateSelection(
-                enabled, probeResults, udpMap,
-                new GpnProbeOptions { Samples = 3, PerSampleTimeoutMs = 1000 });
-
-            var json = JsonSerializer.Serialize(new
-            {
-                prediction.Best?.ServerId,
-                prediction.Best?.Name,
-                PingMs = probeResults.FirstOrDefault(r => r.ServerId == prediction.Best?.ServerId)?.DelayMs ?? -1,
-                LossPercent = probeResults.FirstOrDefault(r => r.ServerId == prediction.Best?.ServerId)?.LossPercent ?? 100,
-                UdpStatus = prediction.UdpProbe?.Status.ToString() ?? "unknown",
-                Mode = prediction.Mode.ToString(),
-                Reason = prediction.Reason,
-                Servers = enabled.Select(s => new
-                {
-                    s.ServerId,
-                    s.Name,
-                    DelayMs = probeResults.FirstOrDefault(r => r.ServerId == s.ServerId)?.DelayMs ?? -1,
-                    LossPercent = probeResults.FirstOrDefault(r => r.ServerId == s.ServerId)?.LossPercent ?? 100,
-                    UdpStatus = udpResults.FirstOrDefault(u => u.ServerId == s.ServerId).Result?.Status.ToString() ?? "unknown",
-                    Selected = s.ServerId == prediction.Best?.ServerId,
-                }).ToList(),
-                MeasuredAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            }, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnSelectionPrediction?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-selection-prediction push failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// "Varsayılanları geri yükle" aksiyonu: gömülü anahtarsız şablon alanlarını
-    /// (sunucu genel anahtarı, adres, MTU, DNS, keepalive) mevcut gpn_servers
-    /// kayıtlarına yeniden uygular — DPAPI'li istemci anahtarı, ad ve etkinlik
-    /// korunur. Sonrasında durum + sunucu listesi + kullanıcı bildirimi gönderilir.
-    /// </summary>
-    private async Task RestoreGpnDefaultsAsync()
-    {
-        var result = await WireGuardServerCatalog.RestoreDefaultsAsync();
-        await PushGpnDefaultsStatusAsync(result);
-        await PushGpnServersAsync();
-
-        var message = result.RestoredCount > 0
-            ? $"Varsayılanlar geri yüklendi ({result.RestoredCount} sunucu güncellendi)."
-            : "Varsayılanlar zaten güncel — güncelleme gerekmedi.";
-        await ExecuteScriptSafelyAsync($"window.gpnServersNotify?.({JsonSerializer.Serialize(message, RouteTestJsonOptions)});");
-    }
-
-    /// <summary>
-    /// Gömülü varsayılan şablonların durumunu dashboard'a gönderir: her şablon için
-    /// tohumlandı mı / anahtar var mı / güncel mi + farklı alan adları. Özel anahtar
-    /// içeriği asla gönderilmez (yalnızca KeyPresent bayrağı).
-    /// </summary>
-    private async Task PushGpnDefaultsStatusAsync(WireGuardServerCatalog.GpnDefaultsRestoreResult? restoreResult = null)
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            IReadOnlyList<WireGuardServerCatalog.GpnDefaultsStatus> statuses = restoreResult is not null
-                ? restoreResult.Statuses
-                : await WireGuardServerCatalog.GetDefaultsStatusAsync();
-
-            var json = JsonSerializer.Serialize(new
-            {
-                Servers = statuses.Select(s => new
-                {
-                    s.ServerId,
-                    s.EndpointHost,
-                    s.EndpointPort,
-                    s.ServerPublicKey,
-                    s.Seeded,
-                    s.KeyPresent,
-                    s.UpToDate,
-                    s.Differences,
-                }),
-                RestoredCount = restoreResult?.RestoredCount,
-                MeasuredAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            }, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnDefaultsStatus?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-defaults-status push failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// Kullanıcının Sunucu Yönetimi ekranına yapıştırdığı WireGuard .conf metnini
-    /// parse edip gpn_servers'a ekler (private key DPAPI ile şifrelenerek saklanır).
-    /// Her [Peer] bloğu ayrı bir sunucu satırı olur; aynı uç nokta yeniden içe
-    /// aktarılırsa satır çoğalmaz (upsert).
-    /// </summary>
-    private async Task ImportGpnServersAsync(string confText)
-    {
-        var peers = WireguardFmt.ResolveConfig(confText);
-        if (peers is null || peers.Count == 0)
-        {
-            await NotifyGpnServersOpAsync("GPN .conf çözümlenemedi — [Interface]/[Peer] bloğu bekleniyordu.");
-            return;
-        }
-
-        var imported = 0;
-        foreach (var peer in peers)
-        {
-            if (peer.ConfigType != EConfigType.WireGuard)
-            {
-                continue;
-            }
-            imported += await WireGuardServerCatalog.UpsertFromProfileAsync(peer);
-        }
-
-        await PushGpnServersAsync();
-        await NotifyGpnServersOpAsync(imported > 0
-            ? $"{imported} GPN sunucusu içe aktarıldı."
-            : "GPN .conf içe aktarılamadı — uç nokta/anahtar eksik.");
-    }
-
-    /// <summary>Sunucu Yönetimi ekranından tek bir GPN sunucusunu siler.</summary>
-    private async Task DeleteGpnServerAsync(string serverId)
-    {
-        var removed = await WireGuardServerCatalog.RemoveAsync(serverId);
-        await PushGpnServersAsync();
-        await NotifyGpnServersOpAsync(removed > 0
-            ? "GPN sunucusu silindi."
-            : "GPN sunucusu silinemedi.");
-    }
-
-    /// <summary>Sunucunun IsEnabled bayrağını değiştirir (otomatik seçimde adaylığı kapatır/açar).</summary>
-    private async Task ToggleGpnServerAsync(string serverId, bool enabled)
-    {
-        var items = await WireGuardServerCatalog.GetItemsAsync();
-        var item = (items ?? []).FirstOrDefault(i => i.ServerId == serverId);
-        if (item is null)
-        {
-            await NotifyGpnServersOpAsync("GPN sunucusu bulunamadı.");
-            return;
-        }
-
-        item.IsEnabled = enabled;
-        item.UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        await WireGuardServerCatalog.UpsertAsync(item);
-        await PushGpnServersAsync();
-        await NotifyGpnServersOpAsync(enabled ? "GPN sunucusu etkinleştirildi." : "GPN sunucusu devre dışı bırakıldı.");
-    }
-
-    private async Task NotifyGpnServersOpAsync(string message)
-    {
-        try
-        {
-            await ExecuteScriptSafelyAsync($"window.gpnServersNotify?.({JsonSerializer.Serialize(message)});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-servers notify failed", ex);
-        }
-    }
-
+    /// <summary>Wave 2: <see cref="DashboardGpnServerService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushGpnServersAsync() => _gpnServerService.PushGpnServersAsync();
+    /// <summary>Wave 2: <see cref="DashboardGpnServerService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task ProbeGpnServersAsync() => _gpnServerService.ProbeGpnServersAsync();
+    /// <summary>Wave 2: <see cref="DashboardGpnServerService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task RestoreGpnDefaultsAsync() => _gpnServerService.RestoreGpnDefaultsAsync();
+    /// <summary>Wave 2: <see cref="DashboardGpnServerService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushGpnDefaultsStatusAsync(WireGuardServerCatalog.GpnDefaultsRestoreResult? restoreResult = null) => _gpnServerService.PushGpnDefaultsStatusAsync(restoreResult);
+    /// <summary>Wave 2: <see cref="DashboardGpnServerService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task ImportGpnServersAsync(string confText) => _gpnServerService.ImportGpnServersAsync(confText);
+    /// <summary>Wave 2: <see cref="DashboardGpnServerService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task DeleteGpnServerAsync(string serverId) => _gpnServerService.DeleteGpnServerAsync(serverId);
+    /// <summary>Wave 2: <see cref="DashboardGpnServerService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task ToggleGpnServerAsync(string serverId, bool enabled) => _gpnServerService.ToggleGpnServerAsync(serverId, enabled);
+    /// <summary>Wave 2: <see cref="DashboardGpnServerService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task NotifyGpnServersOpAsync(string message) => _gpnServerService.NotifyGpnServersOpAsync(message);
     /// <summary>
     /// Sunucu Yönetimi ekranından WPF ekleme/düzenleme penceresini açar.
     /// <paramref name="existingServerId"/> verilirse o satır düzenlenir (özel anahtar
     /// DPAPI'den çözülür, alan boş bırakılırsa mevcut anahtar korunur). Kayıt başarılıysa
     /// katalog zaten güncellenmiştir; dashboard listesi tazelenir.
     /// </summary>
-    private async Task ShowGpnServerEditDialogAsync(string? existingServerId)
+    public async Task ShowGpnServerEditDialogAsync(string? existingServerId)
     {
         GpnServerEditViewModel? viewModel = null;
         if (existingServerId.IsNotEmpty())
@@ -4611,7 +3267,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task PushProcessCatalogAsync()
+    public async Task PushProcessCatalogAsync()
     {
         if (!_webViewReady)
         {
@@ -4641,7 +3297,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task PushMonitorSnapshotAsync(bool force = false)
+    public async Task PushMonitorSnapshotAsync(bool force = false)
     {
         if (!_webViewReady || ViewModel?.ConnectionViewModel is not { } connectionViewModel)
         {
@@ -4799,7 +3455,7 @@ public partial class MainWindow
     /// same persistence + core reload path as the native servers view, then pushes
     /// the switched profile and refreshed selection back to the renderer.
     /// </summary>
-    private async Task SelectNodeAsync(string indexId)
+    public async Task SelectNodeAsync(string indexId)
     {
         var profilesViewModel = ViewModel?.ProfilesViewModel;
         if (profilesViewModel is null)
@@ -4892,7 +3548,7 @@ public partial class MainWindow
     /// clipboard, mirroring the native servers view's Ctrl+C (Export2ShareUrl). An
     /// empty selection copies the active profile.
     /// </summary>
-    private async Task CopyNodesAsync(string[] indexIds)
+    public async Task CopyNodesAsync(string[] indexIds)
     {
         var ids = indexIds.Length > 0 ? indexIds : new[] { AppManager.Instance.Config.IndexId };
         var profiles = await LoadProfilesByIdsAsync(ids);
@@ -4926,7 +3582,7 @@ public partial class MainWindow
     /// Imports nodes from the clipboard into the current group, mirroring the native
     /// Ctrl+V (AddServerViaClipboard), then republishes the refreshed node list.
     /// </summary>
-    private async Task PasteNodesAsync()
+    public async Task PasteNodesAsync()
     {
         var clipboardData = WindowsUtils.GetClipboardData();
         if (clipboardData.IsNullOrEmpty())
@@ -4957,7 +3613,7 @@ public partial class MainWindow
     /// (ConfigHandler.RemoveServers), reloads the core if the active profile was
     /// among the removed ones, then republishes the list.
     /// </summary>
-    private async Task DeleteNodesAsync(string[] indexIds)
+    public async Task DeleteNodesAsync(string[] indexIds)
     {
         var profiles = await LoadProfilesByIdsAsync(indexIds);
         if (profiles.Count == 0)
@@ -4998,7 +3654,7 @@ public partial class MainWindow
     /// SpeedtestService the native servers view uses, so delays persist in
     /// ProfileEx and the "remove failed" cleanup matches native semantics.
     /// </summary>
-    private async Task StartNodeSpeedtestAsync(string[] indexIds, string? testType = null, long requestedRunId = 0)
+    public async Task StartNodeSpeedtestAsync(string[] indexIds, string? testType = null, long requestedRunId = 0)
     {
         if (_nodeTestRunning)
         {
@@ -5104,7 +3760,7 @@ public partial class MainWindow
     }
 
     /// <summary>Stops a running ping test; the service reports the stop back to the renderer.</summary>
-    private void StopNodeSpeedtest()
+    public void StopNodeSpeedtest()
     {
         Interlocked.Increment(ref _nodeTestRunId);
         _nodePingCancellation?.Cancel();
@@ -5116,7 +3772,7 @@ public partial class MainWindow
     /// Moves the given nodes into the dashboard's Disabled section (a config-level
     /// flag, not a DB move), hides them from the main list, and persists the change.
     /// </summary>
-    private async Task DisableNodesAsync(string[] indexIds)
+    public async Task DisableNodesAsync(string[] indexIds)
     {
         var profiles = await LoadProfilesByIdsAsync(indexIds);
         if (profiles.Count == 0)
@@ -5153,7 +3809,7 @@ public partial class MainWindow
     }
 
     /// <summary>Moves the given nodes back from the Disabled section into the main list.</summary>
-    private async Task RestoreNodesAsync(string[] indexIds)
+    public async Task RestoreNodesAsync(string[] indexIds)
     {
         try
         {
@@ -5192,7 +3848,7 @@ public partial class MainWindow
     /// failure (ProfileEx delay == -1) and either deletes them or moves them to
     /// the Disabled section, mirroring native RemoveInvalidServerResult.
     /// </summary>
-    private async Task CleanupFailedNodesAsync(string target)
+    public async Task CleanupFailedNodesAsync(string target)
     {
         try
         {
@@ -5271,7 +3927,7 @@ public partial class MainWindow
     /// Removes duplicate profiles from the current group using the same property-
     /// based comparison as the native servers view, keeping only one of each.
     /// </summary>
-    private async Task DedupNodesAsync()
+    public async Task DedupNodesAsync()
     {
         try
         {
@@ -5297,7 +3953,7 @@ public partial class MainWindow
     }
 
     /// <summary>Pushes the node-pool link list to the dashboard Nodes view.</summary>
-    private async Task PushNodePoolAsync()
+    public async Task PushNodePoolAsync()
     {
         if (!_webViewReady)
         {
@@ -5310,7 +3966,7 @@ public partial class MainWindow
     }
 
     /// <summary>Adds a raw .txt / subscription URL to the node pool.</summary>
-    private async Task AddNodePoolLinkAsync(string url)
+    public async Task AddNodePoolLinkAsync(string url)
     {
         url = url.Trim();
         if (!url.StartsWith(Global.HttpsProtocol, StringComparison.OrdinalIgnoreCase)
@@ -5332,7 +3988,7 @@ public partial class MainWindow
     }
 
     /// <summary>Replaces a pooled URL with an edited one (same validation as add).</summary>
-    private async Task EditNodePoolLinkAsync(string url, string newUrl)
+    public async Task EditNodePoolLinkAsync(string url, string newUrl)
     {
         url = url.Trim();
         newUrl = newUrl.Trim();
@@ -5365,7 +4021,7 @@ public partial class MainWindow
     }
 
     /// <summary>Removes a URL from the node pool.</summary>
-    private async Task RemoveNodePoolLinkAsync(string url)
+    public async Task RemoveNodePoolLinkAsync(string url)
     {
         var config = AppManager.Instance.Config;
         config.NodePoolLinks ??= [];
@@ -5381,7 +4037,7 @@ public partial class MainWindow
     /// touching existing entries. Reports per-link progress through the Nodes-view
     /// toast, then republishes the node list.
     /// </summary>
-    private async Task FetchNodePoolAsync()
+    public async Task FetchNodePoolAsync()
     {
         var config = AppManager.Instance.Config;
         var links = config.NodePoolLinks ?? [];
@@ -5526,7 +4182,7 @@ public partial class MainWindow
     }
 
     /// <summary>Flips the favorite star for a node and republishes the list.</summary>
-    private async Task ToggleNodeFavAsync(string indexId)
+    public async Task ToggleNodeFavAsync(string indexId)
     {
         var current = ProfileExManager.Instance.GetFav(indexId);
         ProfileExManager.Instance.SetFav(indexId, !current);
@@ -5536,7 +4192,7 @@ public partial class MainWindow
     }
 
     /// <summary>Shows a transient toast in the dashboard's Nodes view.</summary>
-    private async Task NotifyNodesOpAsync(string message)
+    public async Task NotifyNodesOpAsync(string message)
     {
         if (!_webViewReady)
         {
@@ -5607,7 +4263,7 @@ public partial class MainWindow
                 active = p.IndexId == activeIndexId,
                 // Prefer the explicit remark code, then resolve the address IP via
                 // GeoIP so plain-IP nodes still sort by country.
-                country = ResolveNodeCountry(p.Remarks, p.Address),
+                country = DashboardMessageDispatcher.ResolveNodeCountry(p.Remarks, p.Address),
                 fav = ex?.IsFav ?? false,
                 lastUsed = ex?.LastUsed ?? 0,
             };
@@ -5633,501 +4289,10 @@ public partial class MainWindow
         await ExecuteScriptSafelyAsync($"window.updateNodeListDone({activeJson});");
     }
 
-    /// <summary>
-    /// Pushes the full AoGPN option set (mirroring OptionSettingViewModel) plus the
-    /// Global.* combo lists to the dashboard Settings view. Called on navigation
-    /// completion and on demand via get_settings.
-    /// </summary>
-    private async Task PushSettingsAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        var config = AppManager.Instance.Config;
-        var inbound = config.Inbound.First();
-        var coreTypes = new Dictionary<int, string>();
-        foreach (var item in config.CoreTypeItem ?? [])
-        {
-            coreTypes[(int)item.ConfigType] = item.CoreType.ToString();
-        }
-
-        var payload = new
-        {
-            core = new
-            {
-                localPort = inbound.LocalPort,
-                secondLocalPortEnabled = inbound.SecondLocalPortEnabled,
-                udpEnabled = inbound.UdpEnabled,
-                sniffingEnabled = inbound.SniffingEnabled,
-                destOverride = inbound.DestOverride ?? [],
-                routeOnly = inbound.RouteOnly,
-                allowLANConn = inbound.AllowLANConn,
-                newPort4LAN = inbound.NewPort4LAN,
-                user = inbound.User ?? string.Empty,
-                pass = inbound.Pass ?? string.Empty,
-                logEnabled = config.CoreBasicItem.LogEnabled,
-                loglevel = config.CoreBasicItem.Loglevel ?? string.Empty,
-                defFingerprint = config.CoreBasicItem.DefFingerprint ?? string.Empty,
-                defUserAgent = config.CoreBasicItem.DefUserAgent ?? string.Empty,
-                sendThrough = config.CoreBasicItem.SendThrough ?? string.Empty,
-                bindInterface = config.CoreBasicItem.BindInterface ?? string.Empty,
-                mux4SboxProtocol = config.Mux4SboxItem.Protocol ?? string.Empty,
-                enableCacheFile4Sbox = config.CoreBasicItem.EnableCacheFile4Sbox,
-                hyUpMbps = config.HysteriaItem.UpMbps,
-                hyDownMbps = config.HysteriaItem.DownMbps,
-                enableFragment = config.CoreBasicItem.EnableFragment,
-                enableFinalFragment = config.CoreBasicItem.EnableFinalFragment,
-                fragmentPackets = config.Fragment4RayItem?.Packets ?? string.Empty,
-                fragmentLengths = Utils.List2String(config.Fragment4RayItem?.Lengths),
-                fragmentDelays = Utils.List2String(config.Fragment4RayItem?.Delays),
-                fragmentMaxSplit = config.Fragment4RayItem?.MaxSplit ?? string.Empty,
-            },
-            general = new
-            {
-                autoRun = config.GuiItem.AutoRun,
-                enableStatistics = config.GuiItem.EnableStatistics,
-                displayRealTimeSpeed = config.GuiItem.DisplayRealTimeSpeed,
-                keepOlderDedupl = config.GuiItem.KeepOlderDedupl,
-                enableAutoAdjustMainLvColWidth = config.UiItem.EnableAutoAdjustMainLvColWidth,
-                autoHideStartup = config.UiItem.AutoHideStartup,
-                hide2TrayWhenClose = config.UiItem.Hide2TrayWhenClose,
-                minimize2Tray = config.UiItem.Minimize2Tray,
-                enableDragDropSort = config.UiItem.EnableDragDropSort,
-                doubleClick2Activate = config.UiItem.DoubleClick2Activate,
-                enableHWA = config.GuiItem.EnableHWA,
-                verboseLogEnabled = config.GuiItem.EnableVerboseLog,
-                effectsMode = NormalizeEffectsMode(config.GuiItem.EffectsMode),
-                reduceEffects = config.GuiItem.ReduceEffects,
-                rootCertProvider = config.GuiItem.RootCertProvider ?? string.Empty,
-                autoUpdateInterval = config.GuiItem.AutoUpdateInterval,
-                trayMenuServersLimit = config.GuiItem.TrayMenuServersLimit,
-                currentFontFamily = config.UiItem.CurrentFontFamily ?? string.Empty,
-                mixedConcurrencyCount = config.SpeedTestItem.MixedConcurrencyCount,
-                speedTestTimeout = config.SpeedTestItem.SpeedTestTimeout,
-                speedTestUrl = config.SpeedTestItem.SpeedTestUrl ?? string.Empty,
-                speedPingTestUrl = config.SpeedTestItem.SpeedPingTestUrl ?? string.Empty,
-                udpTestTarget = config.SpeedTestItem.UdpTestTarget ?? string.Empty,
-                ipapiUrl = config.SpeedTestItem.IPAPIUrl ?? string.Empty,
-                subConvertUrl = config.ConstItem.SubConvertUrl ?? string.Empty,
-                geoFileSourceUrl = config.ConstItem.GeoSourceUrl ?? string.Empty,
-                srsFileSourceUrl = config.ConstItem.SrsSourceUrl ?? string.Empty,
-                routingRulesSourceUrl = config.ConstItem.RouteRulesTemplateSourceUrl ?? string.Empty,
-            },
-            connection = new
-            {
-                mode = config.ConnectionItem.Mode switch
-                {
-                    SplitTunnelViewModel.ModeManual => "manual",
-                    SplitTunnelViewModel.ModeVpn => "vpn",
-                    _ => "off",
-                },
-                transport = ReadTransport(),
-                protocolPreference = ConnectionProtocolPreference.Normalize(config.ConnectionItem.ProtocolPreference),
-                invertManualRouting = config.ConnectionItem.InvertManualRouting,
-                autoConnectOnGameStart = config.ConnectionItem.AutoConnectOnGameStart,
-                autoReconnectEnabled = config.ConnectionItem.AutoReconnectEnabled,
-                autoReconnectMaxAttempts = config.ConnectionItem.AutoReconnectMaxAttempts,
-                gpnEnableRecoveryWatch = config.GuiItem.GpnEnableRecoveryWatch,
-                gpnEnableWarpAutoRecover = config.GuiItem.GpnEnableWarpAutoRecover,
-                gpnEnableFailover = config.GuiItem.GpnEnableFailover,
-            },
-            systemProxy = new
-            {
-                sysProxyType = (int)config.SystemProxyItem.SysProxyType,
-                effectiveSysProxyType = (int)SystemProxyPolicy.ResolveEffectiveType(config),
-                connectionOwnsProxy = SystemProxyPolicy.ConnectionNeedsSystemProxy(config),
-                notProxyLocalAddress = config.SystemProxyItem.NotProxyLocalAddress,
-                systemProxyAdvancedProtocol = config.SystemProxyItem.SystemProxyAdvancedProtocol ?? string.Empty,
-                systemProxyExceptions = config.SystemProxyItem.SystemProxyExceptions ?? string.Empty,
-                customSystemProxyPacPath = config.SystemProxyItem.CustomSystemProxyPacPath ?? string.Empty,
-                customSystemProxyScriptPath = config.SystemProxyItem.CustomSystemProxyScriptPath ?? string.Empty,
-            },
-            tun = new
-            {
-                enableTun = config.TunModeItem.EnableTun,
-                tunAutoRoute = config.TunModeItem.AutoRoute,
-                tunStrictRoute = config.TunModeItem.StrictRoute,
-                tunStack = config.TunModeItem.Stack ?? string.Empty,
-                tunMtu = config.TunModeItem.Mtu,
-                tunEnableIPv6Address = config.TunModeItem.EnableIPv6Address,
-                tunIcmpRouting = config.TunModeItem.IcmpRouting ?? string.Empty,
-                tunEnableLegacyProtect = config.TunModeItem.EnableLegacyProtect,
-                tunRouteExcludeAddress = Utils.List2String(config.TunModeItem.RouteExcludeAddress, true),
-                tunIPv4Address = config.TunModeItem.IPv4Address ?? string.Empty,
-                tunIPv6Address = config.TunModeItem.IPv6Address ?? string.Empty,
-            },
-            coreType = new
-            {
-                coreType1 = coreTypes.GetValueOrDefault(1, string.Empty),
-                coreType2 = coreTypes.GetValueOrDefault(2, string.Empty),
-                coreType3 = coreTypes.GetValueOrDefault(3, string.Empty),
-                coreType4 = coreTypes.GetValueOrDefault(4, string.Empty),
-                coreType5 = coreTypes.GetValueOrDefault(5, string.Empty),
-                coreType6 = coreTypes.GetValueOrDefault(6, string.Empty),
-                coreType7 = coreTypes.GetValueOrDefault(7, string.Empty),
-                coreType9 = coreTypes.GetValueOrDefault(9, string.Empty),
-            },
-            options = new
-            {
-                destOverrideProtocols = Global.destOverrideProtocols,
-                logLevels = Global.LogLevels,
-                fingerprints = Global.Fingerprints,
-                userAgents = Global.UserAgent,
-                singboxMuxs = Global.SingboxMuxs,
-                tunMtus = Global.TunMtus.Select(t => t.ToString()).ToList(),
-                tunStacks = Global.TunStacks,
-                tunIcmpRoutingPolicies = Global.TunIcmpRoutingPolicies,
-                tunIPv4Addresses = Global.TunIPv4Address,
-                tunIPv6Addresses = Global.TunIPv6Address,
-                fragmentPacketsOptions = Global.FragmentPacketsOptions,
-                coreTypes = Global.CoreTypes,
-                speedTestUrls = Global.SpeedTestUrls,
-                speedPingTestUrls = Global.SpeedPingTestUrls,
-                udpTestTargets = Global.UdpTestTargets,
-                subConvertUrls = Global.SubConvertUrls,
-                geoFilesSources = Global.GeoFilesSources,
-                singboxRulesetSources = Global.SingboxRulesetSources,
-                routingRulesSources = Global.RoutingRulesSources,
-                ipapiUrls = Global.IPAPIUrls,
-                rootCertProviders = Global.RootCertProviders,
-                ieProxyProtocols = Global.IEProxyProtocols,
-                mixedConcurrencyCounts = Enumerable.Range(2, 7).Select(i => i.ToString()).ToList(),
-                speedTestTimeouts = Enumerable.Range(2, 5).Select(i => (i * 5).ToString()).ToList(),
-            },
-            platform = new
-            {
-                isWindows = Utils.IsWindows(),
-                isLinux = Utils.IsLinux(),
-                isMacOS = Utils.IsMacOS(),
-                isAdmin = Utils.IsAdministrator(),
-            },
-        };
-
-        var json = JsonSerializer.Serialize(payload);
-        await ExecuteScriptSafelyAsync($"window.applySettings({json});");
-        await PushSystemProxyStateAsync(force: true);
-    }
-
-    /// <summary>
-    /// Applies the dashboard Settings form to the config using the same validation and
-    /// persistence flow as the native OptionSettingViewModel, then performs the system
-    /// proxy / TUN side effects the native status bar would do on change.
-    /// </summary>
-    private async Task SaveSettingsAsync(JsonElement root)
-    {
-        try
-        {
-            await SaveSettingsCoreAsync(root);
-        }
-        catch (Exception ex)
-        {
-            // Ack the failure so the renderer can re-enable its Save button; a save
-            // that silently dies would leave the form stuck in the saving state.
-            Logging.SaveLog("AoGPN settings save failed", ex);
-            await NotifySettingsSaveAsync(false, "Failed to save settings");
-        }
-    }
-
-    private async Task SaveSettingsCoreAsync(JsonElement root)
-    {
-        if (!root.TryGetProperty("settings", out var settings)
-            || settings.ValueKind != JsonValueKind.Object)
-        {
-            await NotifySettingsSaveAsync(false, "Invalid settings payload");
-            return;
-        }
-
-        var config = AppManager.Instance.Config;
-
-        // Local SOCKS port validation mirrors OptionSettingViewModel.SaveSettingAsync.
-        var localPort = GetSettingsInt(settings, "localPort", 0);
-        if (localPort <= 0 || localPort >= Global.MaxPort)
-        {
-            await NotifySettingsSaveAsync(false, "Fill in the local listening port");
-            return;
-        }
-
-        var fragmentLengths = Utils.String2List(GetSettingsString(settings, "fragmentLengths")) ?? [];
-        var fragmentDelays = Utils.String2List(GetSettingsString(settings, "fragmentDelays")) ?? [];
-        var fragmentMaxSplit = GetSettingsString(settings, "fragmentMaxSplit");
-        if (fragmentLengths.Any(item => !Utils.TryParseRange(item, 0, int.MaxValue, out _, out _))
-            || fragmentDelays.Any(item => !Utils.TryParseRange(item, 0, int.MaxValue, out _, out _))
-            || (fragmentMaxSplit.IsNotEmpty() && !Utils.TryParseMaxSplit(fragmentMaxSplit, 0, 10000, out _, out _)))
-        {
-            await NotifySettingsSaveAsync(false, "Fragment parameter error");
-            return;
-        }
-
-        var oldEnableStatistics = config.GuiItem.EnableStatistics;
-        var oldDisplayRealTimeSpeed = config.GuiItem.DisplayRealTimeSpeed;
-        var oldEnableDragDropSort = config.UiItem.EnableDragDropSort;
-        var oldEnableHWA = config.GuiItem.EnableHWA;
-
-        var requestedEnableTun = GetSettingsBool(settings, "enableTun", config.TunModeItem.EnableTun);
-        var tunDenied = requestedEnableTun && !AllowEnableTun();
-        var tunChanged = requestedEnableTun != config.TunModeItem.EnableTun;
-
-        // Core
-        var inbound = config.Inbound.First();
-        inbound.LocalPort = localPort;
-        inbound.SecondLocalPortEnabled = GetSettingsBool(settings, "secondLocalPortEnabled", inbound.SecondLocalPortEnabled);
-        inbound.UdpEnabled = GetSettingsBool(settings, "udpEnabled", inbound.UdpEnabled);
-        inbound.SniffingEnabled = GetSettingsBool(settings, "sniffingEnabled", inbound.SniffingEnabled);
-        inbound.DestOverride = GetSettingsStringArray(settings, "destOverride");
-        inbound.RouteOnly = GetSettingsBool(settings, "routeOnly", inbound.RouteOnly);
-        inbound.AllowLANConn = GetSettingsBool(settings, "allowLANConn", inbound.AllowLANConn);
-        inbound.NewPort4LAN = GetSettingsBool(settings, "newPort4LAN", inbound.NewPort4LAN);
-        inbound.User = GetSettingsString(settings, "user", inbound.User);
-        inbound.Pass = GetSettingsString(settings, "pass", inbound.Pass);
-        if (config.Inbound.Count > 1)
-        {
-            config.Inbound.RemoveAt(1);
-        }
-        config.CoreBasicItem.LogEnabled = GetSettingsBool(settings, "logEnabled", config.CoreBasicItem.LogEnabled);
-        config.CoreBasicItem.Loglevel = GetSettingsString(settings, "loglevel", config.CoreBasicItem.Loglevel);
-        config.CoreBasicItem.DefFingerprint = GetSettingsString(settings, "defFingerprint", config.CoreBasicItem.DefFingerprint);
-        config.CoreBasicItem.DefUserAgent = GetSettingsString(settings, "defUserAgent", config.CoreBasicItem.DefUserAgent);
-        config.CoreBasicItem.SendThrough = GetSettingsString(settings, "sendThrough", config.CoreBasicItem.SendThrough ?? string.Empty).TrimEx();
-        config.CoreBasicItem.BindInterface = GetSettingsString(settings, "bindInterface", config.CoreBasicItem.BindInterface ?? string.Empty).TrimEx();
-        config.Mux4SboxItem.Protocol = GetSettingsString(settings, "mux4SboxProtocol", config.Mux4SboxItem.Protocol);
-        config.CoreBasicItem.EnableCacheFile4Sbox = GetSettingsBool(settings, "enableCacheFile4Sbox", config.CoreBasicItem.EnableCacheFile4Sbox);
-        config.HysteriaItem.UpMbps = GetSettingsInt(settings, "hyUpMbps", config.HysteriaItem.UpMbps);
-        config.HysteriaItem.DownMbps = GetSettingsInt(settings, "hyDownMbps", config.HysteriaItem.DownMbps);
-        config.CoreBasicItem.EnableFragment = GetSettingsBool(settings, "enableFragment", config.CoreBasicItem.EnableFragment);
-        config.CoreBasicItem.EnableFinalFragment = GetSettingsBool(settings, "enableFinalFragment", config.CoreBasicItem.EnableFinalFragment);
-        config.Fragment4RayItem ??= new();
-        config.Fragment4RayItem.Packets = GetSettingsString(settings, "fragmentPackets", config.Fragment4RayItem.Packets);
-        config.Fragment4RayItem.Lengths = fragmentLengths;
-        config.Fragment4RayItem.Delays = fragmentDelays;
-        config.Fragment4RayItem.MaxSplit = fragmentMaxSplit;
-
-        // General
-        config.GuiItem.AutoRun = GetSettingsBool(settings, "autoRun", config.GuiItem.AutoRun);
-        config.GuiItem.EnableStatistics = GetSettingsBool(settings, "enableStatistics", config.GuiItem.EnableStatistics);
-        config.GuiItem.DisplayRealTimeSpeed = GetSettingsBool(settings, "displayRealTimeSpeed", config.GuiItem.DisplayRealTimeSpeed);
-        config.GuiItem.KeepOlderDedupl = GetSettingsBool(settings, "keepOlderDedupl", config.GuiItem.KeepOlderDedupl);
-        config.UiItem.EnableAutoAdjustMainLvColWidth = GetSettingsBool(settings, "enableAutoAdjustMainLvColWidth", config.UiItem.EnableAutoAdjustMainLvColWidth);
-        config.UiItem.AutoHideStartup = GetSettingsBool(settings, "autoHideStartup", config.UiItem.AutoHideStartup);
-        config.UiItem.Hide2TrayWhenClose = GetSettingsBool(settings, "hide2TrayWhenClose", config.UiItem.Hide2TrayWhenClose);
-        config.UiItem.Minimize2Tray = GetSettingsBool(settings, "minimize2Tray", config.UiItem.Minimize2Tray);
-        config.UiItem.EnableDragDropSort = GetSettingsBool(settings, "enableDragDropSort", config.UiItem.EnableDragDropSort);
-        config.UiItem.DoubleClick2Activate = GetSettingsBool(settings, "doubleClick2Activate", config.UiItem.DoubleClick2Activate);
-        config.GuiItem.AutoUpdateInterval = GetSettingsInt(settings, "autoUpdateInterval", config.GuiItem.AutoUpdateInterval);
-        config.GuiItem.TrayMenuServersLimit = GetSettingsInt(settings, "trayMenuServersLimit", config.GuiItem.TrayMenuServersLimit);
-        config.UiItem.CurrentFontFamily = GetSettingsString(settings, "currentFontFamily", config.UiItem.CurrentFontFamily);
-        config.SpeedTestItem.SpeedTestTimeout = GetSettingsInt(settings, "speedTestTimeout", config.SpeedTestItem.SpeedTestTimeout);
-        config.SpeedTestItem.MixedConcurrencyCount = GetSettingsInt(settings, "mixedConcurrencyCount", config.SpeedTestItem.MixedConcurrencyCount);
-        config.SpeedTestItem.SpeedTestUrl = GetSettingsString(settings, "speedTestUrl", config.SpeedTestItem.SpeedTestUrl);
-        config.SpeedTestItem.SpeedPingTestUrl = GetSettingsString(settings, "speedPingTestUrl", config.SpeedTestItem.SpeedPingTestUrl);
-        config.SpeedTestItem.UdpTestTarget = GetSettingsString(settings, "udpTestTarget", config.SpeedTestItem.UdpTestTarget);
-        config.SpeedTestItem.IPAPIUrl = GetSettingsString(settings, "ipapiUrl", config.SpeedTestItem.IPAPIUrl);
-        var requestedHwa = GetSettingsBool(settings, "enableHWA", config.GuiItem.EnableHWA);
-        if (requestedHwa && !oldEnableHWA)
-        {
-            // Explicitly re-enabled after an auto-disable: give the GPU a
-            // fresh chance by resetting the crash budget instead of inheriting
-            // the auto-disabled state forever.
-            HardwareAccelerationGuard.OnUserReEnabled();
-        }
-        config.GuiItem.EnableHWA = requestedHwa;
-        config.GuiItem.EffectsMode = NormalizeEffectsMode(GetSettingsString(settings, "effectsMode", config.GuiItem.EffectsMode));
-        config.GuiItem.ReduceEffects = config.GuiItem.EffectsMode == "reduced";
-        config.ConstItem.SubConvertUrl = GetSettingsString(settings, "subConvertUrl", config.ConstItem.SubConvertUrl);
-        config.ConstItem.GeoSourceUrl = GetSettingsString(settings, "geoFileSourceUrl", config.ConstItem.GeoSourceUrl);
-        config.ConstItem.SrsSourceUrl = GetSettingsString(settings, "srsFileSourceUrl", config.ConstItem.SrsSourceUrl);
-        config.ConstItem.RouteRulesTemplateSourceUrl = GetSettingsString(settings, "routingRulesSourceUrl", config.ConstItem.RouteRulesTemplateSourceUrl);
-        config.GuiItem.RootCertProvider = GetSettingsString(settings, "rootCertProvider", config.GuiItem.RootCertProvider);
-
-        // System proxy
-        var requestedSysProxyType = (ESysProxyType)Math.Clamp(
-            GetSettingsInt(settings, "sysProxyType", (int)config.SystemProxyItem.SysProxyType), 0, 3);
-        config.SystemProxyItem.SystemProxyExceptions = GetSettingsString(settings, "systemProxyExceptions", config.SystemProxyItem.SystemProxyExceptions);
-        config.SystemProxyItem.NotProxyLocalAddress = GetSettingsBool(settings, "notProxyLocalAddress", config.SystemProxyItem.NotProxyLocalAddress);
-        config.SystemProxyItem.SystemProxyAdvancedProtocol = GetSettingsString(settings, "systemProxyAdvancedProtocol", config.SystemProxyItem.SystemProxyAdvancedProtocol);
-        config.SystemProxyItem.CustomSystemProxyPacPath = GetSettingsString(settings, "customSystemProxyPacPath", config.SystemProxyItem.CustomSystemProxyPacPath);
-        config.SystemProxyItem.CustomSystemProxyScriptPath = GetSettingsString(settings, "customSystemProxyScriptPath", config.SystemProxyItem.CustomSystemProxyScriptPath);
-        config.SystemProxyItem.SysProxyType = requestedSysProxyType;
-
-        // TUN mode
-        config.TunModeItem.AutoRoute = GetSettingsBool(settings, "tunAutoRoute", config.TunModeItem.AutoRoute);
-        config.TunModeItem.StrictRoute = GetSettingsBool(settings, "tunStrictRoute", config.TunModeItem.StrictRoute);
-        config.TunModeItem.Stack = GetSettingsString(settings, "tunStack", config.TunModeItem.Stack);
-        config.TunModeItem.Mtu = GetSettingsInt(settings, "tunMtu", config.TunModeItem.Mtu);
-        config.TunModeItem.EnableIPv6Address = GetSettingsBool(settings, "tunEnableIPv6Address", config.TunModeItem.EnableIPv6Address);
-        config.TunModeItem.IcmpRouting = GetSettingsString(settings, "tunIcmpRouting", config.TunModeItem.IcmpRouting);
-        config.TunModeItem.EnableLegacyProtect = GetSettingsBool(settings, "tunEnableLegacyProtect", config.TunModeItem.EnableLegacyProtect);
-        config.TunModeItem.RouteExcludeAddress = Utils.String2List(GetSettingsString(settings, "tunRouteExcludeAddress"));
-        config.TunModeItem.IPv4Address = GetSettingsString(settings, "tunIPv4Address", config.TunModeItem.IPv4Address);
-        config.TunModeItem.IPv6Address = GetSettingsString(settings, "tunIPv6Address", config.TunModeItem.IPv6Address);
-        config.TunModeItem.EnableTun = tunDenied ? false : requestedEnableTun;
-
-        // Re-assert the fail-safe route defaults after the settings form overwrites
-        // the TUN block. The stability policy is applied on every config load; this
-        // keeps AutoRoute / StrictRoute / EnableLegacyProtect pinned on even when
-        // the user saves a custom MTU or stack, so TUN stays leak-free.
-        if (Utils.IsWindows())
-        {
-            WindowsTunStabilityPolicy.Apply(config);
-        }
-        else
-        {
-            config.TunModeItem.Mtu = WindowsTunStabilityPolicy.NormalizeMtu(config.TunModeItem.Mtu);
-            config.TunModeItem.Stack = WindowsTunStabilityPolicy.NormalizeStack(config.TunModeItem.Stack);
-        }
-
-        // Core types
-        SaveSettingsCoreTypes(settings);
-
-        var needReboot = oldEnableStatistics != config.GuiItem.EnableStatistics
-            || oldDisplayRealTimeSpeed != config.GuiItem.DisplayRealTimeSpeed
-            || oldEnableDragDropSort != config.UiItem.EnableDragDropSort
-            || oldEnableHWA != config.GuiItem.EnableHWA;
-
-        var saved = await ConfigHandler.SaveConfig(config) == 0;
-        if (saved)
-        {
-            await AutoStartupHandler.UpdateTask(config);
-            AppManager.Instance.Reset();
-
-            // Apply the complete AoGPN system-proxy setting immediately, including
-            // exceptions and PAC/script changes even when the mode number is unchanged.
-            await SysProxyHandler.UpdateSysProxy(config, false, requestedSysProxyType);
-            // If the saved preference became Set/PAC while the connection is off,
-            // start the proxy-only core so the OS proxy points at a live listener
-            // (the same reconcile the dashboard and status-bar paths perform).
-            await _proxyOnlyService.ReconcileAsync(config);
-            StatusBarViewModel.Instance.SystemProxySelected = (int)requestedSysProxyType;
-            await PushSystemProxyStateAsync(force: true);
-
-            // TUN toggle changed: persist and reload the core (native status bar behaviour).
-            if (tunChanged && !tunDenied)
-            {
-                StatusBarViewModel.Instance.ReloadRequested.Publish();
-            }
-
-            // Resync the whole form with the persisted truth so the shown switches
-            // always match the config the close/minimize paths read (e.g. after the
-            // TUN admin denial reverted enableTun above).
-            await PushSettingsAsync();
-        }
-
-        // The effects tier applies immediately — push it even when the save
-        // itself failed so the renderer never drifts from what the user picked.
-        await PushEffectsTierAsync();
-
-        var message = tunDenied
-            ? "TUN mode requires administrator privileges — it was not enabled"
-            : needReboot ? "Settings saved — a restart is required for some changes" : "Settings saved";
-        await NotifySettingsSaveAsync(saved, message, needReboot, tunDenied);
-    }
-
-    private void SaveSettingsCoreTypes(JsonElement settings)
-    {
-        foreach (var item in AppManager.Instance.Config.CoreTypeItem ?? [])
-        {
-            var value = GetSettingsString(settings, $"coreType{(int)item.ConfigType}", item.CoreType.ToString());
-            if (Enum.TryParse<ECoreType>(value, true, out var parsed))
-            {
-                item.CoreType = parsed;
-            }
-        }
-    }
-
-    /// <summary>Sends the Settings save acknowledgement back to the renderer.</summary>
-    private async Task NotifySettingsSaveAsync(
-        bool ok,
-        string message,
-        bool needReboot = false,
-        bool tunDenied = false)
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-        var json = JsonSerializer.Serialize(new { ok, message, needReboot, tunDenied });
-        await ExecuteScriptSafelyAsync($"window.setSettingsSaveResult({json});");
-    }
-
-    private static bool GetSettingsBool(JsonElement settings, string name, bool fallback)
-    {
-        if (!settings.TryGetProperty(name, out var property))
-        {
-            return fallback;
-        }
-        return property.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.String => bool.TryParse(property.GetString(), out var parsed) ? parsed : fallback,
-            JsonValueKind.Number => property.GetInt32() != 0,
-            _ => fallback,
-        };
-    }
-
-    private static int GetSettingsInt(JsonElement settings, string name, int fallback)
-    {
-        if (!settings.TryGetProperty(name, out var property))
-        {
-            return fallback;
-        }
-        if (property.ValueKind == JsonValueKind.Number
-            && property.TryGetInt32(out var num))
-        {
-            return num;
-        }
-        if (property.ValueKind == JsonValueKind.String
-            && int.TryParse(property.GetString(), out var parsed))
-        {
-            return parsed;
-        }
-        return fallback;
-    }
-
-    private static string GetSettingsString(JsonElement settings, string name, string? fallback = "")
-    {
-        if (settings.TryGetProperty(name, out var property)
-            && property.ValueKind == JsonValueKind.String)
-        {
-            return property.GetString() ?? fallback ?? string.Empty;
-        }
-        return fallback ?? string.Empty;
-    }
-
-    private static List<string> GetSettingsStringArray(JsonElement settings, string name)
-    {
-        var result = new List<string>();
-        if (!settings.TryGetProperty(name, out var property)
-            || property.ValueKind != JsonValueKind.Array)
-        {
-            return result;
-        }
-        foreach (var item in property.EnumerateArray())
-        {
-            var value = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
-            if (value.IsNotEmpty())
-            {
-                result.Add(value);
-            }
-        }
-        return result;
-    }
-
-    /// <summary>Mirrors StatusBarViewModel.AllowEnableTun: TUN needs elevation everywhere.</summary>
-    private static bool AllowEnableTun()
-    {
-        if (Utils.IsWindows())
-        {
-            return Utils.IsAdministrator();
-        }
-        else if (Utils.IsLinux() || Utils.IsMacOS())
-        {
-            return AppManager.Instance.LinuxSudoPwd.IsNotEmpty();
-        }
-        return false;
-    }
-
+    /// <summary>Wave 2: <see cref="DashboardSettingsService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushSettingsAsync() => _settingsService.PushSettingsAsync();
+    /// <summary>Wave 2: <see cref="DashboardSettingsService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task SaveSettingsAsync(JsonElement root) => _settingsService.SaveSettingsAsync(root);
     /// <summary>
     /// Polls the effective routing/core state away from the UI thread. Real ping and
     /// packet-loss samples come from TelemetryDashboardViewModel, not this loop.
@@ -6423,7 +4588,7 @@ public partial class MainWindow
 
         _webViewLifetime.Cancel();
 
-        _dashboardHost.WebMessageReceived -= CoreWebView2_WebMessageReceived;
+        _dashboardHost.WebMessageReceived -= _dashboardMessageDispatcher.HandleWebMessageReceived;
         _dashboardHost.NavigationCompleted -= CoreWebView2_NavigationCompleted;
         _dashboardHost.DisposeAsync().GetAwaiter().GetResult();
         _webViewLifetime.Dispose();
@@ -7068,4 +5233,39 @@ public partial class MainWindow
     }
 
     #endregion UI
+
+    #region IDashboardBridge (window-owned operations exposed to the dashboard dispatcher)
+
+    bool IDashboardBridge.IsClosing => _isClosing;
+
+    string IDashboardBridge.ActiveView
+    {
+        get => _activeView;
+        set => _activeView = value;
+    }
+
+    long IDashboardBridge.NodeTestRunId => Volatile.Read(ref _nodeTestRunId);
+
+    GpnTargetResolverBridge IDashboardBridge.GpnPidBridge => GetGpnPidBridge();
+
+    void IDashboardBridge.ResetGpnTelemetry() => _gpnTelemetry.Reset();
+
+    void IDashboardBridge.ClearGpnResilienceLog() => _gpnResilienceLog.Clear();
+
+    bool IDashboardBridge.TryResolveExecutablePath(int pid, out string runningPath)
+        => _processCatalogService.TryResolveExecutablePath(pid, out runningPath);
+
+    bool IDashboardBridge.TryApplySidebarTheme(string wpfTheme)
+    {
+        if (_sidebarThemeVm is null)
+        {
+            return false;
+        }
+
+        _sidebarThemeVm.CurrentTheme = wpfTheme;
+        cmbSidebarTheme.SelectedValue = wpfTheme;
+        return true;
+    }
+
+    #endregion IDashboardBridge
 }

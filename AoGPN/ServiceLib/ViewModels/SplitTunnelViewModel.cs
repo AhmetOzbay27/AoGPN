@@ -119,25 +119,20 @@ public class SplitTunnelViewModel : MyReactiveObject
 
     // Game-trigger state: set when the trigger switches the mode itself (so the mode
     // subscription does not treat it as a user change and cancel the trigger). The
-    // trigger decisions themselves live in the pure GameTriggerStateMachine.
+    // trigger decisions themselves live in GameAutoTriggerService.
     private bool _settingModeProgrammatically;
-    private readonly GameTriggerStateMachine _gameTrigger = new();
-    private DateTime _lastProcessScan = DateTime.MinValue;
 
     /// <summary>Son GPN bağlantı modu (WireGuardUDP / V2rayTCP). WARP uyarısı buna göre verilir.</summary>
     private ConnectionMode? _activeGpnMode;
 
-    // GPN uygulamalarının gerçek sunucu uç noktalarını kaydeden mağaza ("gerçek
-    // ping" ölçümü): bağlantı monitöründe görülen uzak adresler buraya beslenir,
-    // program açılışında (önce) ve GPN bağlantısından sonra (sonra) ölçülür.
-    private readonly GpnAppEndpointStore _endpointStore = GpnAppEndpointStore.Instance;
+    // Alt servisler (P0 Faz 3): oyun tetikleyici (durum makinesi + süreç taraması)
+    // ve canlı telemetri izdüşümü bu servislerde yaşar; ViewModel bağlı durumu uygular.
+    private readonly GameAutoTriggerService _gameTriggerService = new();
+    private readonly GpnTelemetryMonitorService _telemetry = new();
+
 
     public SplitTunnelViewModel()
     {
-        // Periyodik flush döngüsünü başlat (idempotent) — gözlemler diske düzenli
-        // yazılır ve eski uç noktalar budanır.
-        _endpointStore.Start();
-
         _config = AppManager.Instance.Config;
 
         // Three real connection options. "proxy" and "vpn+proxy" were merged into
@@ -205,8 +200,8 @@ public class SplitTunnelViewModel : MyReactiveObject
             });
 
         // Keep the per-app traffic columns in sync with the live monitor.
-        Monitor.AppTrafficItems.CollectionChanged += (_, _) => ApplyTrafficToApps();
-        Apps.CollectionChanged += (_, _) => ApplyTrafficToApps();
+        Monitor.AppTrafficItems.CollectionChanged += (_, _) => _telemetry.ApplyTrafficToApps(Apps, Monitor.AppTrafficItems);
+        Apps.CollectionChanged += (_, _) => _telemetry.ApplyTrafficToApps(Apps, Monitor.AppTrafficItems);
         Apps.CollectionChanged += OnAppsCollectionChanged;
 
         // GPN bağlantı modunu takip et: WARP rotası yalnızca WireGuard modunda
@@ -323,8 +318,8 @@ public class SplitTunnelViewModel : MyReactiveObject
 
         foreach (var app in Apps)
         {
-            app.RouteTag = MapActionToOutbound(app.Action);
-            app.RouteText = RouteText(app.RouteTag);
+            app.RouteTag = GpnTelemetryMonitorService.MapActionToOutbound(app.Action);
+            app.RouteText = GpnTelemetryMonitorService.RouteText(app.RouteTag);
         }
 
         if (Mode != ModeManual)
@@ -359,7 +354,7 @@ public class SplitTunnelViewModel : MyReactiveObject
     {
         Logging.Verbose("GPN", "mode_changed",
             ("mode", Mode), ("transport", Transport), ("isManual", IsManual), ("isVpn", IsVpn),
-            ("triggerActive", _gameTrigger.TriggerActive));
+            ("triggerActive", _gameTriggerService.TriggerActive));
 
         if (!_initialized || _suppressAutoApply)
         {
@@ -433,43 +428,24 @@ public class SplitTunnelViewModel : MyReactiveObject
     private async Task RefreshLiveStatusAsync()
     {
         HashSet<string>? running = null;
-        if (ShouldScanProcesses())
+        if (_gameTriggerService.TryBeginScan(Mode, AutoConnectOnGameStart))
         {
-            _lastProcessScan = DateTime.UtcNow;
             var names = Apps
                 .Where(a => a.EntryType == "app")
                 .Select(a => Path.GetFileNameWithoutExtension(a.Value))
                 .Where(n => n.IsNotEmpty())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            running = await Task.Run(() => GetRunningProcessNames(names));
+            running = await _gameTriggerService.ScanRunningProcessesAsync(names);
         }
 
         RxSchedulers.MainThreadScheduler.Schedule(() =>
         {
-            UpdateLiveStatus(running);
+            AnyNeedsTun = _telemetry.UpdateLiveStatus(Apps, Monitor.Connections, running, InvertManualRouting);
             CheckGameTrigger(running);
         });
     }
 
-    /// <summary>
-    /// True when the per-process scan should run: the window is visible and either the
-    /// app is in Manuel mode, or it is Off with the game auto-connect trigger enabled
-    /// (the trigger needs the scan to detect a game starting). A minimum interval
-    /// avoids burst scans when the monitor refreshes frequently.
-    /// </summary>
-    private bool ShouldScanProcesses()
-    {
-        if (!AppManager.Instance.ShowInTaskbar)
-        {
-            return false;
-        }
-        if (Mode != ModeManual && !(Mode == ModeOff && AutoConnectOnGameStart))
-        {
-            return false;
-        }
-        return (DateTime.UtcNow - _lastProcessScan).TotalMilliseconds >= 1000;
-    }
 
     /// <summary>
     /// Auto-connect trigger: when a listed VPN-routed game starts running while the
@@ -492,7 +468,7 @@ public class SplitTunnelViewModel : MyReactiveObject
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         runningVpnApps.IntersectWith(running);
 
-        var decision = _gameTrigger.Tick(AutoConnectOnGameStart, Mode, runningVpnApps);
+        var decision = _gameTriggerService.Tick(AutoConnectOnGameStart, Mode, runningVpnApps);
 
         if (decision.Action != GameTriggerAction.None)
         {
@@ -520,7 +496,7 @@ public class SplitTunnelViewModel : MyReactiveObject
                 break;
         }
 
-        if (_gameTrigger.TriggerActive)
+        if (_gameTriggerService.TriggerActive)
         {
             // Keep the banner current as games start and stop.
             TriggerPending = true;
@@ -531,7 +507,7 @@ public class SplitTunnelViewModel : MyReactiveObject
     /// <summary>Forgets the pending mode restore after the user takes over.</summary>
     private void CancelGameTrigger()
     {
-        _gameTrigger.Reset(); // next snapshot re-seeds the baseline
+        _gameTriggerService.Reset(); // next snapshot re-seeds the baseline
         TriggerPending = false;
         TriggerPendingText = "";
     }
@@ -543,211 +519,12 @@ public class SplitTunnelViewModel : MyReactiveObject
         StatusText = ResUI.ManualGameTriggerCancelled;
     }
 
-    /// <summary>
-    /// Checks only the listed process names instead of enumerating the whole system,
-    /// so the periodic scan stays cheap.
-    /// </summary>
-    private static HashSet<string> GetRunningProcessNames(IReadOnlyCollection<string> processNames)
-    {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var name in processNames)
-        {
-            if (name.IsNullOrEmpty())
-            {
-                continue;
-            }
-            try
-            {
-                var processes = Process.GetProcessesByName(name);
-                if (processes.Length > 0)
-                {
-                    set.Add(name);
-                }
-                foreach (var p in processes)
-                {
-                    try
-                    {
-                        p.Dispose();
-                    }
-                    catch
-                    {
-                    }
-                }
-            }
-            catch
-            {
-                // Invalid process name or access denied — treat as not running.
-            }
-        }
-        return set;
-    }
 
-    private void UpdateLiveStatus(HashSet<string>? running)
-    {
-        var byProcess = new Dictionary<string, List<ConnectionMonitorItem>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var c in Monitor.Connections)
-        {
-            if (c.ProcessName.IsNullOrEmpty())
-            {
-                continue;
-            }
-            if (!byProcess.TryGetValue(c.ProcessName, out var list))
-            {
-                byProcess[c.ProcessName] = list = new List<ConnectionMonitorItem>();
-            }
-            list.Add(c);
-        }
 
-        var tunOnForList = Apps.Any(a => a.Action is "vpn" or "vpn+proxy" or "warp");
-        foreach (var app in Apps)
-        {
-            if (app.EntryType != "app")
-            {
-                app.IsRunning = false;
-                app.RunStatusText = "—";
-                app.LiveRouteTag = "";
-                app.LiveRouteText = "—";
-                app.LiveConnectionCount = 0;
-                app.NeedsTun = false;
-                app.ExeMissing = false;
-                continue;
-            }
 
-            // Running status and missing-exe detection need the process scan; when the
-            // scan is gated off (hidden window / non-manual mode) keep the last values.
-            if (running is not null)
-            {
-                var processName = Path.GetFileNameWithoutExtension(app.Value);
-                var isRunning = processName.IsNotEmpty() && running.Contains(processName);
-                app.IsRunning = isRunning;
-                app.RunStatusText = isRunning ? ResUI.ManualRunning : ResUI.ManualNotRunning;
-                app.ExeMissing = IsExeMissing(app);
-            }
 
-            var live = byProcess.TryGetValue(app.Value, out var list) ? list : null;
-            if (live is { Count: > 0 })
-            {
-                var tag = live
-                    .GroupBy(x => x.RouteTag)
-                    .OrderByDescending(g => g.Count())
-                    .First()
-                    .Key;
-                app.LiveRouteTag = tag.IsNullOrEmpty() ? Global.DirectTag : tag;
-                app.LiveRouteText = live.Count > 1
-                    ? $"{RouteText(app.LiveRouteTag)} · {live.Count}"
-                    : RouteText(app.LiveRouteTag);
-                app.LiveConnectionCount = live.Count;
-            }
-            else
-            {
-                app.LiveRouteTag = "";
-                app.LiveRouteText = "—";
-                app.LiveConnectionCount = 0;
-            }
 
-            // When the process scan is gated off (hidden window / Global VPN / Off
-            // mode) the live connection list is the source of truth: a row with active
-            // connections is running — never show "Not running" next to live traffic.
-            if (running is null && live is { Count: > 0 })
-            {
-                app.IsRunning = true;
-                app.RunStatusText = ResUI.ManualRunning;
-            }
 
-            // GPN kullanımında eklenen uygulamanın GERÇEK sunucu uç noktalarını
-            // kaydet: uygulama (efektif olarak tünellenen kümede) çalışıp genel bir
-            // adrese bağlandığında uzak uç nokta gpn_app_endpoints'e gözlem olarak
-            // düşer. Kayıt bellekte yapılır; periyodik flush diske yazar. Aynı uç
-            // nokta seti program açılışında (doğrudan yol = önce) ve GPN bağlantısı
-            // kurulunca (tünel yolu = sonra) ölçülerek öncesi/sonrası üretilir.
-            if (IsTunneledApp(app) && live is { Count: > 0 })
-            {
-                RecordAppEndpoints(app.Value, live);
-            }
-
-            // Proxy-only apps whose live connections go to public addresses are bypassing
-            // the system proxy; they need the TUN (VPN) option to be captured.
-            app.NeedsTun = app.Action == "proxy"
-                && !tunOnForList
-                && live is { Count: > 0 }
-                && live.Any(c => RemoteIsPublicDirect(c.RemoteAddress));
-        }
-        AnyNeedsTun = Apps.Any(a => a.NeedsTun);
-    }
-
-    /// <summary>True when an app entry points to an executable that no longer exists.</summary>
-    private static bool IsExeMissing(SplitTunnelAppItem app)
-    {
-        return app.EntryType == "app" && app.ExePath.IsNotEmpty() && !File.Exists(app.ExePath);
-    }
-
-    /// <summary>True when the remote address is a public (routable) destination.</summary>
-    private static bool RemoteIsPublicDirect(string? remoteAddress)
-    {
-        var host = ExtractHost(remoteAddress);
-        if (host is null)
-        {
-            return false;
-        }
-        if (IPAddress.TryParse(host, out _))
-        {
-            return !Utils.IsPrivateNetwork(host);
-        }
-        return true; // hostname remote → a direct connection, not the local proxy
-    }
-
-    /// <summary>Extracts the host part of a "host:port", "[v6]:port" or "*" address.</summary>
-    private static string? ExtractHost(string? address)
-    {
-        if (address.IsNullOrEmpty() || address == "*")
-        {
-            return null;
-        }
-        if (address![0] == '[')
-        {
-            var end = address.IndexOf(']');
-            return end > 1 ? address[1..end] : null;
-        }
-        var idx = address.LastIndexOf(':');
-        return idx > 0 ? address[..idx] : address;
-    }
-
-    /// <summary>
-    /// Uygulama, GPN yakalama köprüsünün hedef kümesinde mi (efektif tünellenen)?
-    /// GpnTargetResolverBridge.ExtractTargetNames ile AYNI kural: beyaz listede
-    /// "vpn" eylemli, kara listede (dışlama) kuralların tünele çevirdiği "direct"
-    /// eylemli girişler. Kayıt yalnızca bu kümeye yapılır — kullanıcının GPN için
-    /// eklediği uygulamaların bağlantıları veritabanına düşer.
-    /// </summary>
-    private bool IsTunneledApp(SplitTunnelAppItem app)
-    {
-        if (app.EntryType != "app")
-        {
-            return false;
-        }
-        var tunneledAction = InvertManualRouting ? "direct" : "vpn";
-        return string.Equals(app.Action, tunneledAction, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Uygulamanın canlı bağlantılarından genel (public) uzak uç noktaları gerçek
-    /// ping mağazasına gözlem olarak kaydeder. Özel/yerel adresler ve "*" gibi
-    /// sahte uç noktalar atlanır — ölçüm yalnızca gerçek internet sunucularına
-    /// yapılmalıdır.
-    /// </summary>
-    private void RecordAppEndpoints(string processName, List<ConnectionMonitorItem> live)
-    {
-        foreach (var connection in live)
-        {
-            if (connection.IsPrivate
-                || connection.RemoteAddress.IsNullOrEmpty()
-                || connection.RemoteAddress is "*" or "*:0" or "0.0.0.0")
-            {
-                continue;
-            }
-            _endpointStore.Observe(processName, connection.RemoteAddress, connection.Protocol);
-        }
-    }
 
     private async Task LoadAsync()
     {
@@ -769,9 +546,9 @@ public class SplitTunnelViewModel : MyReactiveObject
                     continue;
                 }
                 var item = CreateItem(r);
-                item.RouteTag = MapActionToOutbound(item.Action);
-                item.RouteText = RouteText(item.RouteTag);
-                item.ExeMissing = IsExeMissing(item);
+                item.RouteTag = GpnTelemetryMonitorService.MapActionToOutbound(item.Action);
+                item.RouteText = GpnTelemetryMonitorService.RouteText(item.RouteTag);
+                item.ExeMissing = GpnTelemetryMonitorService.IsExeMissing(item);
                 Apps.Add(item);
             }
         }
@@ -862,8 +639,8 @@ public class SplitTunnelViewModel : MyReactiveObject
     private SplitTunnelAppItem AddManualRoute(ManualRouteSetting setting)
     {
         var item = CreateItem(setting);
-        item.RouteTag = MapActionToOutbound(item.Action);
-        item.RouteText = RouteText(item.RouteTag);
+        item.RouteTag = GpnTelemetryMonitorService.MapActionToOutbound(item.Action);
+        item.RouteText = GpnTelemetryMonitorService.RouteText(item.RouteTag);
         Apps.Add(item); // CollectionChanged → OnListChanged persists + auto-applies
         SelectedApp = item;
         return item;
@@ -1030,8 +807,8 @@ public class SplitTunnelViewModel : MyReactiveObject
             var oldAction = item.Action;
             item.Action = action;
             item.UpdateSuggested();
-            item.RouteTag = MapActionToOutbound(item.Action);
-            item.RouteText = RouteText(item.RouteTag);
+            item.RouteTag = GpnTelemetryMonitorService.MapActionToOutbound(item.Action);
+            item.RouteText = GpnTelemetryMonitorService.RouteText(item.RouteTag);
             OnListChanged();
             Logging.Verbose("GPN", "set_route_changed",
                 ("processName", value), ("old", oldAction), ("new", action));
@@ -1114,9 +891,9 @@ public class SplitTunnelViewModel : MyReactiveObject
             }
         }
 
-        item.RouteTag = MapActionToOutbound(item.Action);
-        item.RouteText = RouteText(item.RouteTag);
-        item.ExeMissing = IsExeMissing(item);
+        item.RouteTag = GpnTelemetryMonitorService.MapActionToOutbound(item.Action);
+        item.RouteText = GpnTelemetryMonitorService.RouteText(item.RouteTag);
+        item.ExeMissing = GpnTelemetryMonitorService.IsExeMissing(item);
 
         OnListChanged(); // persists + auto-applies (Manuel mode)
         await RefreshLiveStatusAsync();
@@ -1177,9 +954,9 @@ public class SplitTunnelViewModel : MyReactiveObject
                 SuggestedAction = suggested != "proxy" ? suggested : "",
             };
             var item = CreateItem(setting);
-            item.RouteTag = MapActionToOutbound(item.Action);
-            item.RouteText = RouteText(item.RouteTag);
-            item.ExeMissing = IsExeMissing(item);
+            item.RouteTag = GpnTelemetryMonitorService.MapActionToOutbound(item.Action);
+            item.RouteText = GpnTelemetryMonitorService.RouteText(item.RouteTag);
+            item.ExeMissing = GpnTelemetryMonitorService.IsExeMissing(item);
             batch.Add(item);
             added++;
         }
@@ -1234,9 +1011,9 @@ public class SplitTunnelViewModel : MyReactiveObject
             }
 
             var item = CreateItem(setting);
-            item.RouteTag = MapActionToOutbound(item.Action);
-            item.RouteText = RouteText(item.RouteTag);
-            item.ExeMissing = IsExeMissing(item);
+            item.RouteTag = GpnTelemetryMonitorService.MapActionToOutbound(item.Action);
+            item.RouteText = GpnTelemetryMonitorService.RouteText(item.RouteTag);
+            item.ExeMissing = GpnTelemetryMonitorService.IsExeMissing(item);
             batch.Add(item);
             added++;
         }
@@ -1623,19 +1400,7 @@ public class SplitTunnelViewModel : MyReactiveObject
         };
     }
 
-    private static string MapActionToOutbound(string action) => ManualRoutingRules.MapActionToOutbound(action);
 
-    private static string RouteText(string tag)
-    {
-        return tag switch
-        {
-            Global.ProxyTag => ResUI.ManualActionProxy,
-            Global.DirectTag => ResUI.ManualActionDirect,
-            Global.BlockTag => ResUI.ManualActionBlock,
-            Global.WarpTag => ResUI.ManualActionWarp,
-            _ => ResUI.ManualActionProxy,
-        };
-    }
 
     /// <summary>
     /// WARP rotası seçiliyken aktif bağlantı V2ray TCP ise kullanıcıyı uyar:
@@ -1671,97 +1436,6 @@ public class SplitTunnelViewModel : MyReactiveObject
         }
     }
 
-    /// <summary>
-    /// Copies the live per-app traffic (from sing-box, when running) onto the app list.
-    /// The traffic items are indexed once by process name and executable path, so each
-    /// app resolves with O(1) lookups instead of scanning the whole list (O(A×T) → O(A+T)).
-    /// Name matching keeps priority over path matching, exactly like the previous per-item
-    /// scan, so a traffic item is never counted twice for the same app.
-    /// </summary>
-    private void ApplyTrafficToApps()
-    {
-        var byName = new Dictionary<string, (long Download, long Upload, string Ips)>(StringComparer.OrdinalIgnoreCase);
-        var byPath = new Dictionary<string, (long Download, long Upload, string Ips)>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var t in Monitor.AppTrafficItems)
-        {
-            if (t.AppName.IsNotEmpty())
-            {
-                AddTraffic(byName, t.AppName + ".exe", t.Download, t.Upload, t.ActiveIps);
-            }
-            if (t.ExePath.IsNotEmpty())
-            {
-                AddTraffic(byPath, t.ExePath, t.Download, t.Upload, t.ActiveIps);
-            }
-        }
 
-        foreach (var app in Apps)
-        {
-            long download = 0;
-            long upload = 0;
-            var ips = "";
-
-            if (app.ProcessName.IsNotEmpty() && byName.TryGetValue(app.ProcessName, out var nameHit))
-            {
-                download = nameHit.Download;
-                upload = nameHit.Upload;
-                ips = nameHit.Ips;
-            }
-            else if (app.ExePath.IsNotEmpty() && byPath.TryGetValue(app.ExePath, out var pathHit))
-            {
-                download = pathHit.Download;
-                upload = pathHit.Upload;
-                ips = pathHit.Ips;
-            }
-
-            app.Download = download;
-            app.Upload = upload;
-            app.ActiveIps = ips;
-            app.DownloadText = download > 0 ? Utils.HumanFy(download) : "";
-            app.UploadText = upload > 0 ? Utils.HumanFy(upload) : "";
-        }
-    }
-
-    private static void AddTraffic(
-        Dictionary<string, (long Download, long Upload, string Ips)> map,
-        string key,
-        long download,
-        long upload,
-        string ips)
-    {
-        if (map.TryGetValue(key, out var existing))
-        {
-            map[key] = (
-                existing.Download > long.MaxValue - download ? long.MaxValue : existing.Download + download,
-                existing.Upload > long.MaxValue - upload ? long.MaxValue : existing.Upload + upload,
-                MergeIps(existing.Ips, ips));
-        }
-        else
-        {
-            map[key] = (download, upload, ips);
-        }
-    }
-
-    /// <summary>Joins two comma-separated IP lists, collapsing duplicates.</summary>
-    private static string MergeIps(string existing, string add)
-    {
-        if (add.IsNullOrEmpty())
-        {
-            return existing;
-        }
-        if (existing.IsNullOrEmpty())
-        {
-            return add;
-        }
-        var merged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var part in existing.Split(',').Concat(add.Split(',')))
-        {
-            var ip = part.Trim();
-            if (ip.IsNotEmpty())
-            {
-                merged.Add(ip);
-            }
-        }
-        return string.Join(", ", merged);
-    }
 }

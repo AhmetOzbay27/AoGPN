@@ -1,12 +1,15 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using AwesomeAssertions;
 using ServiceLib.Enums;
 using ServiceLib.Handler;
 using ServiceLib.Handler.Builder;
+using ServiceLib.Helper;
 using ServiceLib.Manager;
 using ServiceLib.Models;
 using ServiceLib.Models.Configs;
+using ServiceLib.Models.Entities;
 using ServiceLib.Services;
 using ServiceLib.Tests.CoreConfig;
 using Xunit;
@@ -51,6 +54,7 @@ public class GpnCaptureBridgeTests
 
         started.Should().BeTrue();
         bridge.IsRunning.Should().BeTrue();
+        bridge.LastIdleCause.Should().Be(GpnBridgeIdleCause.None, "canlıya alınan deneme bekleme nedeni taşımaz");
         await WaitUntilAsync(() => bridge.TunnelSnapshot.Sent == 2, TimeSpan.FromSeconds(5));
         bridge.TunnelSnapshot.Sent.Should().Be(2, "yakalanan her paket UDP veri yolundan sunucuya gönderilir (Faz 2d)");
         noopTransport.SentCount.Should().Be(2);
@@ -85,6 +89,9 @@ public class GpnCaptureBridgeTests
         bridge.IsRunning.Should().BeFalse();
         tunnel.IsOpen.Should().BeFalse();
         engine.IsOpen.Should().BeFalse();
+        // Tier 2 — kontrollü Ready-idle: neden kayıtlıdır (uyarı basılmaz), çekirdek
+        // bağlantısı etkilenmez.
+        bridge.LastIdleCause.Should().Be(GpnBridgeIdleCause.TargetNotRunning);
     }
 
     [Fact]
@@ -105,6 +112,7 @@ public class GpnCaptureBridgeTests
         started.Should().BeFalse();
         bridge.IsRunning.Should().BeFalse();
         tunnel.IsOpen.Should().BeFalse();
+        bridge.LastIdleCause.Should().Be(GpnBridgeIdleCause.NoTargetsConfigured);
     }
 
     [Fact]
@@ -449,6 +457,9 @@ public class GpnCaptureBridgeTests
         var config = CoreConfigTestFactory.CreateConfig(ECoreType.sing_box);
         config.TunModeItem.EnableTun = false; // pre-socks yolu yok — BuildAll tek sonuç
         BindConfig(config);
+        // RoutingItem tablosu test host'unda InitApp tarafından oluşturulmaz; launcher
+        // GetDefaultRouting üzerinden okur — sorgudan önce yarat (idempotent).
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
 
         var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
         using var engine = new WinDivertEngine(api);
@@ -476,7 +487,18 @@ public class GpnCaptureBridgeTests
             binaryRegistry: new CoreBinaryRegistry(tempRoot.Path, () => true));
         var launcher = new GpnCoreLauncher(config, (_, _) => Task.CompletedTask, host, bridge);
 
-        await launcher.LaunchAsync(ConnectionMode.WireGuardUDP, Server(), TestContext.Current.CancellationToken);
+        // Bu test mihomo ürün kararını kodlar: politika kapalıyken köprü DEVREDE
+        // DEĞİLDİR. Derlenmiş varsayılandan (NativeGpnEnginePolicy.IsEnabled =
+        // true — Tier 1 flip) bağımsız olmak için anahtar açıkça pinlenir.
+        NativeGpnEnginePolicy.IsEnabled = false;
+        try
+        {
+            await launcher.LaunchAsync(ConnectionMode.WireGuardUDP, Server(), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            NativeGpnEnginePolicy.IsEnabled = false;
+        }
 
         bridge.IsRunning.Should().BeFalse("mihomo kendi PROCESS-NAME ayırımını yapar — köprü kullanılmaz");
         tunnel.IsOpen.Should().BeFalse();
@@ -485,6 +507,349 @@ public class GpnCaptureBridgeTests
         await launcher.StopAsync(TestContext.Current.CancellationToken);
 
         bridge.IsRunning.Should().BeFalse("zaten kapalı — Stop idempotent");
+        tunnel.IsOpen.Should().BeFalse();
+        engine.IsOpen.Should().BeFalse();
+    }
+
+    // ── Tier 1 — NativeGpnStartStrategy: in-process motor entegrasyonu ───
+
+    private static CoreConfigContext NativeContext() => new()
+    {
+        Node = GpnCoreLauncher.BuildWireGuardProfile(Server()),
+        RunCoreType = ECoreType.mihomo,
+        UseNativeGpnEngine = true,
+    };
+
+    [Fact]
+    public async Task Strategy_StartAsync_StartsEngineInProcess_ReturnsNullProcess()
+    {
+        var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
+        using var engine = new WinDivertEngine(api);
+        using var session = new RecordingSession();
+        var noopTransport = new NoopWireGuardTransport();
+        var tunnel = new WireGuardTunnelService(session: session);
+        var bridge = new GpnCaptureBridge(
+            () => ["Game.exe"],
+            engine,
+            tunnel,
+            settings: StubSettingsProvider.Direct(),
+            source: new FakeProcessTreeSource(new ProcessInfo(100, 0, "Game.exe")),
+            transportFactory: _ => noopTransport);
+        var strategy = new NativeGpnStartStrategy(bridge);
+
+        var process = await strategy.StartAsync(NativeContext(),
+            launcher: (_, _, _, _, _, _) => Task.FromResult<ProcessService?>(null),
+            onExited: () => { });
+
+        process.Should().BeNull("in-process motor harici süreç üretmez — null OLAĞANDIR");
+        bridge.IsRunning.Should().BeTrue("köprü strateji üzerinden canlıya alındı (harici exe değil)");
+        tunnel.IsOpen.Should().BeTrue();
+        engine.IsOpen.Should().BeTrue();
+        bridge.DynamicReArmEnabled.Should().BeTrue("native oturum dinamik re-arm otonomisi kazanır");
+
+        await strategy.AfterStopAsync();
+
+        bridge.IsRunning.Should().BeFalse("temiz kapanış — WinDivert + kuyruklar + Wintun");
+        bridge.DynamicReArmEnabled.Should().BeFalse("oturum kapanınca dinamik otonomi bırakılır");
+        tunnel.IsOpen.Should().BeFalse();
+        engine.IsOpen.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Strategy_MidSessionFault_NotifiesCoreManagerViaOnExited()
+    {
+        var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
+        using var engine = new WinDivertEngine(api);
+        using var session = new RecordingSession();
+        var tunnel = new WireGuardTunnelService(session: session);
+        var bridge = new GpnCaptureBridge(
+            () => ["Game.exe"],
+            engine,
+            tunnel,
+            settings: StubSettingsProvider.Direct(),
+            source: new FakeProcessTreeSource(new ProcessInfo(100, 0, "Game.exe")),
+            transportFactory: _ => new FaultingEncryptTransport());
+        var onExitedCount = 0;
+        var strategy = new NativeGpnStartStrategy(bridge);
+        await strategy.StartAsync(NativeContext(),
+            launcher: (_, _, _, _, _, _) => Task.FromResult<ProcessService?>(null),
+            onExited: () => Interlocked.Increment(ref onExitedCount));
+
+        // Oturum-içi fault: yakalanan ilk paketin tünel enjeksiyonu (Encrypt) hata
+        // verir → yakalama döngüsü görevi fault → GpnCaptureBridge.EngineFailed →
+        // strateji → CoreManager onExited (çökme kurtarma döngüsü tetiklenir).
+        var notified = await WaitUntilAsync(() => Volatile.Read(ref onExitedCount) > 0, TimeSpan.FromSeconds(5));
+
+        notified.Should().BeTrue("engine fault, harici process-exit olmadan CoreManager kurtarmasını tetiklemeli");
+        await strategy.AfterStopAsync();
+    }
+
+    [Fact]
+    public async Task Strategy_AfterStop_ClearHook_DoesNotTriggerRecovery()
+    {
+        var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
+        using var engine = new WinDivertEngine(api);
+        using var session = new RecordingSession();
+        var noopTransport = new NoopWireGuardTransport();
+        var tunnel = new WireGuardTunnelService(session: session);
+        var bridge = new GpnCaptureBridge(
+            () => ["Game.exe"],
+            engine,
+            tunnel,
+            settings: StubSettingsProvider.Direct(),
+            source: new FakeProcessTreeSource(new ProcessInfo(100, 0, "Game.exe")),
+            transportFactory: _ => noopTransport);
+        var onExitedCount = 0;
+        var strategy = new NativeGpnStartStrategy(bridge);
+        await strategy.StartAsync(NativeContext(),
+            launcher: (_, _, _, _, _, _) => Task.FromResult<ProcessService?>(null),
+            onExited: () => Interlocked.Increment(ref onExitedCount));
+        strategy.IsEngineFailureHookAttached.Should().BeTrue("oturum canlıyken fault köprüsü takılı olmalı");
+        await strategy.AfterStopAsync();
+
+        // BİLİNÇLİ duruş: EngineFailed aboneliği ve onExited bağı koparıldı —
+        // oturum-içi fault mekanizması artık kurtarma TETİKLEYEMEZ.
+        strategy.IsEngineFailureHookAttached.Should().BeFalse("bilinçli duruş sonrası fault köprüsü kopuk olmalı");
+        onExitedCount.Should().Be(0);
+    }
+
+    // ── Tier 1 — The Live Flip: NativeGpnEnginePolicy → bağlam bayrağı ───
+
+    [Fact]
+    public async Task Launcher_WireGuardLaunch_PolicyOff_KeepsMihomoContext()
+    {
+        var config = CoreConfigTestFactory.CreateConfig(ECoreType.sing_box);
+        config.TunModeItem.EnableTun = false;
+        BindConfig(config);
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
+
+        var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
+        using var engine = new WinDivertEngine(api);
+        using var session = new RecordingSession();
+        var noopTransport = new NoopWireGuardTransport();
+        var tunnel = new WireGuardTunnelService(session: session);
+        var bridge = new GpnCaptureBridge(
+            () => ["Game.exe"],
+            engine,
+            tunnel,
+            settings: StubSettingsProvider.Direct(),
+            source: new FakeProcessTreeSource(new ProcessInfo(100, 0, "Game.exe")),
+            transportFactory: _ => noopTransport);
+        using var tempRoot = new TempDir();
+        var mihomoDir = Path.Combine(tempRoot.Path, "mihomo");
+        Directory.CreateDirectory(mihomoDir);
+        File.WriteAllText(Path.Combine(mihomoDir, "mihomo-windows-amd64-v1.exe"), "dummy");
+        var runtime = new FakeRuntime();
+        var host = new CoreEngineHost(
+            config,
+            (_, _) => Task.CompletedTask,
+            runtime: runtime,
+            binaryRegistry: new CoreBinaryRegistry(tempRoot.Path, () => true));
+        var launcher = new GpnCoreLauncher(config, (_, _) => Task.CompletedTask, host, bridge);
+
+        NativeGpnEnginePolicy.IsEnabled = false; // varsayılan — dormant
+        try
+        {
+            await launcher.LaunchAsync(ConnectionMode.WireGuardUDP, Server(), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            NativeGpnEnginePolicy.IsEnabled = false;
+        }
+
+        runtime.LastMainContext.Should().NotBeNull();
+        runtime.LastMainContext!.UseNativeGpnEngine.Should().BeFalse("politika kapalıyken mihomo yolu birebir aynen kalır");
+        bridge.IsRunning.Should().BeFalse("mihomo yolunda köprü kullanılmaz (çakışma koruması)");
+    }
+
+    [Fact]
+    public async Task Launcher_WireGuardLaunch_PolicyOn_FlagsNativeEngine_LauncherDoesNotStartBridge()
+    {
+        var config = CoreConfigTestFactory.CreateConfig(ECoreType.sing_box);
+        config.TunModeItem.EnableTun = false;
+        BindConfig(config);
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
+
+        var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
+        using var engine = new WinDivertEngine(api);
+        using var session = new RecordingSession();
+        var noopTransport = new NoopWireGuardTransport();
+        var tunnel = new WireGuardTunnelService(session: session);
+        var bridge = new GpnCaptureBridge(
+            () => ["Game.exe"],
+            engine,
+            tunnel,
+            settings: StubSettingsProvider.Direct(),
+            source: new FakeProcessTreeSource(new ProcessInfo(100, 0, "Game.exe")),
+            transportFactory: _ => noopTransport);
+        using var tempRoot = new TempDir();
+        var mihomoDir = Path.Combine(tempRoot.Path, "mihomo");
+        Directory.CreateDirectory(mihomoDir);
+        File.WriteAllText(Path.Combine(mihomoDir, "mihomo-windows-amd64-v1.exe"), "dummy");
+        var runtime = new FakeRuntime();
+        var host = new CoreEngineHost(
+            config,
+            (_, _) => Task.CompletedTask,
+            runtime: runtime,
+            binaryRegistry: new CoreBinaryRegistry(tempRoot.Path, () => true));
+        var launcher = new GpnCoreLauncher(config, (_, _) => Task.CompletedTask, host, bridge);
+
+        NativeGpnEnginePolicy.IsEnabled = true;
+        try
+        {
+            await launcher.LaunchAsync(ConnectionMode.WireGuardUDP, Server(), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            NativeGpnEnginePolicy.IsEnabled = false;
+        }
+
+        runtime.LastMainContext.Should().NotBeNull();
+        runtime.LastMainContext!.UseNativeGpnEngine.Should().BeTrue("flip: bağlam yerel motoru ister");
+        bridge.IsRunning.Should().BeFalse("köprüyü launcher DEĞİL, strateji (CoreManager) başlatır — çift başlatma yok");
+        tunnel.IsOpen.Should().BeFalse();
+    }
+
+    // ── Tier 3 — Dinamik yeniden kurma (dynamic re-arm) ─────────────────
+
+    [Fact]
+    public void DynamicReArm_DefaultsOff_OnlyNativeEngineGainsAutonomy()
+    {
+        // Koruma kuralı: dinamik otonomi KAPALI doğar — legacy yol / harici çekirdekler
+        // köprüyü kullanıyorsa davranış zerre değişmez. Açan tek taraf NativeGpnStartStrategy.
+        using var engine = new WinDivertEngine(new FakeDivertApi());
+        var bridge = new GpnCaptureBridge(
+            () => ["Game.exe"],
+            engine,
+            new WireGuardTunnelService(session: new RecordingSession()),
+            settings: StubSettingsProvider.Direct(),
+            source: new FakeProcessTreeSource());
+
+        bridge.DynamicReArmEnabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DynamicReArm_Disabled_GameStartingLater_DoesNotStartBridge()
+    {
+        // Anahtar KAPALIYSA (varsayılan) Ready-idle kalıcıdır: oyun sonradan başlasa
+        // bile köprü kendiliğinden canlanmaz (legacy davranış birebir korunur).
+        var source = new MutableProcessTreeSource();
+        using var engine = new WinDivertEngine(new FakeDivertApi());
+        using var session = new RecordingSession();
+        var noopTransport = new NoopWireGuardTransport();
+        var tunnel = new WireGuardTunnelService(session: session);
+        var bridge = new GpnCaptureBridge(
+            () => ["Game.exe"],
+            engine,
+            tunnel,
+            settings: StubSettingsProvider.Direct(),
+            source: source,
+            transportFactory: _ => noopTransport);
+
+        var started = await bridge.StartAsync(Server(), TestContext.Current.CancellationToken);
+        started.Should().BeFalse("oyun kapalı — Ready-idle");
+        bridge.LastIdleCause.Should().Be(GpnBridgeIdleCause.TargetNotRunning);
+
+        source.Set(new ProcessInfo(100, 0, "Game.exe"));
+        await Task.Delay(400, TestContext.Current.CancellationToken);
+
+        bridge.IsRunning.Should().BeFalse("re-arm kapalıyken oyun başlasa da köprü başlamaz");
+        tunnel.IsOpen.Should().BeFalse();
+        engine.IsOpen.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DynamicReArm_ReadyIdle_GameStartsLater_BridgeComesUpLive()
+    {
+        // Tier 3 çekirdek senaryosu: bağlantı anında oyun kapalı (Ready-idle) → oyun
+        // sonradan başlayınca Ready-idle denetçisi köprüyü kendiliğinden canlıya alır.
+        var source = new MutableProcessTreeSource();
+        using var engine = new WinDivertEngine(new FakeDivertApi());
+        using var session = new RecordingSession();
+        var noopTransport = new NoopWireGuardTransport();
+        var tunnel = new WireGuardTunnelService(session: session);
+        var bridge = new GpnCaptureBridge(
+            () => ["Game.exe"],
+            engine,
+            tunnel,
+            settings: StubSettingsProvider.Direct(),
+            source: source,
+            transportFactory: _ => noopTransport);
+        bridge.DynamicReArmEnabled = true; // native oturum — yalnızca bu anahtarla
+        var oldPoll = GpnCaptureBridge.ReadyIdlePollInterval;
+        GpnCaptureBridge.ReadyIdlePollInterval = TimeSpan.FromMilliseconds(120);
+        try
+        {
+            var started = await bridge.StartAsync(Server(), TestContext.Current.CancellationToken);
+            started.Should().BeFalse("oyun kapalı — Ready-idle");
+            bridge.LastIdleCause.Should().Be(GpnBridgeIdleCause.TargetNotRunning);
+
+            // Oyun başlar → denetçi yakalar ve köprüyü canlıya alır (yeniden bağlanma YOK).
+            source.Set(new ProcessInfo(100, 0, "Game.exe"));
+            var live = await WaitUntilAsync(() => bridge.IsRunning && tunnel.IsOpen && engine.IsOpen, TimeSpan.FromSeconds(10));
+
+            live.Should().BeTrue("oyun başlayınca köprü kendiliğinden canlanır");
+            bridge.IsRunning.Should().BeTrue();
+            tunnel.IsOpen.Should().BeTrue();
+            engine.IsOpen.Should().BeTrue();
+        }
+        finally
+        {
+            GpnCaptureBridge.ReadyIdlePollInterval = oldPoll;
+            await bridge.StopAsync();
+        }
+        bridge.IsRunning.Should().BeFalse("Stop denetçiyi de kapatır — köprü durur");
+        tunnel.IsOpen.Should().BeFalse();
+        engine.IsOpen.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DynamicReArm_Live_GameCloses_BridgeReturnsToIdle_AndReArmsOnRelaunch()
+    {
+        // Tam uyku/uyanma döngüsü: canlı oyun kapanır → köprü Ready-idle'a döner
+        // (veri düzlemi kapanır, oturum korunur) → oyun yeniden başlar → köprü canlanır.
+        var source = new MutableProcessTreeSource(new ProcessInfo(100, 0, "Game.exe"));
+        using var engine = new WinDivertEngine(new FakeDivertApi());
+        var noopTransport = new NoopWireGuardTransport();
+        // Session FACTORY: gerçek yol her Open'da taze natif session üretir — re-arm
+        // (Close→Open) döngüsünü sahteyle doğrulamak için her Open taze açık sahte
+        // session vermelidir (tek-örnek sahte Close sonrası kalıcı kapanırdı).
+        var tunnel = new WireGuardTunnelService(sessionFactory: () => new RecordingSession());
+        var bridge = new GpnCaptureBridge(
+            () => ["Game.exe"],
+            engine,
+            tunnel,
+            settings: StubSettingsProvider.Direct(),
+            source: source,
+            transportFactory: _ => noopTransport);
+        bridge.DynamicReArmEnabled = true;
+        var oldPoll = GpnCaptureBridge.ReadyIdlePollInterval;
+        GpnCaptureBridge.ReadyIdlePollInterval = TimeSpan.FromMilliseconds(120);
+        try
+        {
+            var started = await bridge.StartAsync(Server(), TestContext.Current.CancellationToken);
+            started.Should().BeTrue("oyun çalışıyor — canlı");
+
+            // Oyun kapanır → denetçi veri düzlemini kapatır (Ready-idle). "İzleme" durumu
+            // (_cts null) önce düşer; kapama (_tunnel/_engine) onu izler — son hale bak.
+            source.Set();
+            var idle = await WaitUntilAsync(() => !bridge.IsRunning && !tunnel.IsOpen && !engine.IsOpen, TimeSpan.FromSeconds(10));
+            idle.Should().BeTrue("oyun kapanınca köprü Ready-idle'a döner (veri düzlemi kapanır)");
+
+            // Oyun yeniden başlar → köprü canlanır (re-arm).
+            source.Set(new ProcessInfo(200, 0, "Game.exe"));
+            var live = await WaitUntilAsync(() => bridge.IsRunning && tunnel.IsOpen && engine.IsOpen, TimeSpan.FromSeconds(10));
+            live.Should().BeTrue("oyun yeniden başlayınca köprü yeniden canlanır");
+            bridge.IsRunning.Should().BeTrue();
+            tunnel.IsOpen.Should().BeTrue();
+            engine.IsOpen.Should().BeTrue();
+        }
+        finally
+        {
+            GpnCaptureBridge.ReadyIdlePollInterval = oldPoll;
+            await bridge.StopAsync();
+        }
+        bridge.IsRunning.Should().BeFalse();
         tunnel.IsOpen.Should().BeFalse();
         engine.IsOpen.Should().BeFalse();
     }
@@ -540,6 +905,19 @@ public class GpnCaptureBridgeTests
 
         public IEnumerable<ProcessInfo> Enumerate(CancellationToken cancellationToken = default)
             => _processes.ToArray();
+    }
+
+    /// <summary>Oyun açılıp/kapanma senaryoları için canlı değiştirilebilir süreç kaynağı.</summary>
+    private sealed class MutableProcessTreeSource : IProcessTreeSource
+    {
+        private volatile ProcessInfo[] _current;
+
+        public MutableProcessTreeSource(params ProcessInfo[] processes) => _current = processes;
+
+        public void Set(params ProcessInfo[] processes) => _current = processes;
+
+        public IEnumerable<ProcessInfo> Enumerate(CancellationToken cancellationToken = default)
+            => _current;
     }
 
     private sealed class FakeDivertApi : IWinDivertApi
@@ -662,6 +1040,35 @@ public class GpnCaptureBridgeTests
         }
     }
 
+    /// <summary>
+    /// Oturum-içi fault senaryosu: Encrypt her çağrıda fırlatır — yakalama
+    /// döngüsünün tünel enjeksiyon hattı (PumpAsync → _inject) hata verir ve
+    /// görev fault olur (EngineFailed → onExited köprüsünü tetikler).
+    /// </summary>
+    private sealed class FaultingEncryptTransport : IWireGuardTransport
+    {
+        public long EncryptedCount => 0;
+        public long DecryptedCount => 0;
+        public long DecryptFailedCount => 0;
+        public long SentCount => 0;
+        public long SendFailedCount => 0;
+        public bool IsDataPathActive => true;
+
+        public byte[]? Encrypt(ReadOnlySpan<byte> packet)
+            => throw new InvalidOperationException("transport fault (Encrypt)");
+
+        public byte[]? Decrypt(ReadOnlySpan<byte> packet) => packet.ToArray();
+
+        public ValueTask<bool> SendAsync(byte[] wirePacket, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(true);
+
+        public Task RunReceiveLoopAsync(
+            Func<byte[], CancellationToken, ValueTask> consumer,
+            TimeSpan idleTimeout,
+            CancellationToken cancellationToken)
+            => Task.Delay(Timeout.Infinite, cancellationToken);
+    }
+
     /// <summary>CoreEngineHost'u gerçek çekirdek süreci başlatmadan sürebilen sahte runtime.</summary>
     private sealed class FakeRuntime : ICoreRuntime
     {
@@ -673,7 +1080,13 @@ public class GpnCaptureBridgeTests
 
         public Task InitializeAsync(Config config, Func<bool, string, Task> update) => Task.CompletedTask;
 
-        public Task StartAsync(CoreConfigContext? mainContext, CoreConfigContext? preContext) => Task.CompletedTask;
+        public CoreConfigContext? LastMainContext { get; private set; }
+
+        public Task StartAsync(CoreConfigContext? mainContext, CoreConfigContext? preContext)
+        {
+            LastMainContext = mainContext;
+            return Task.CompletedTask;
+        }
 
         public Task StopAsync() => Task.CompletedTask;
     }

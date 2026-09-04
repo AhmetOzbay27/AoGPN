@@ -106,49 +106,17 @@ public sealed class CoreEngineHost : IAsyncDisposable
         {
             await EnsureInitializedAsync(cancellationToken);
 
-            var requiredCore = _binaryRegistry.Validate(
-                requireSingBox: mainContext.RunCoreType == ECoreType.sing_box,
-                requireXray: mainContext.RunCoreType == ECoreType.Xray,
-                requireTun: mainContext.IsTunEnabled || preContext?.IsTunEnabled == true,
-                requiredCore: mainContext.RunCoreType);
-            LastValidation = requiredCore;
-
-            // mihomo eksik → kullanıcıdan hiçbir adım istemeden indir ("GPN Bağlan"
-            // ölü binary yüzünden ölmesin). Başarılıysa doğrulama yeniden çalışır;
-            // başarısızsa mevcut hata yolu aynen korunur.
-            if (!requiredCore.IsValid && mainContext.RunCoreType == ECoreType.mihomo)
+            // Tier 2 — native motor izolasyonu: seçilen strateji SÜREÇ İÇİ bir motor
+            // ise (UseNativeGpnEngine + WireGuard → NativeGpnStartStrategy) harici
+            // çekirdek .exe'si YOKTUR — motor saf C#'tır (WinDivert + WireGuard +
+            // Wintun) ve uygulamanın kendi sürecinde koşar. Bu bağlamda mihomo.exe
+            // doğrulaması + otomatik indirme GEREKSİZDİR (dolayısıyla engel değildir):
+            // baypas edilir. Şalter KAPALIYKEN (dormant — üretimdeki mihomo yolu) bu
+            // dal hiç girilmez; harici çekirdeklerin binary doğrulama/indirme süreci
+            // birebir aynen korunur.
+            if (!CoreStartStrategyFactory.For(mainContext).IsInProcessEngine)
             {
-                await _update(false, "mihomo çekirdeği bulunamadı — indiriliyor…").ConfigureAwait(false);
-                var installed = false;
-                try
-                {
-                    installed = await _autoCoreInstaller(ECoreType.mihomo, _update, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    Logging.SaveLog("[CoreEngineHost] mihomo auto-install failed", ex);
-                }
-
-                if (installed)
-                {
-                    await _update(false, "mihomo çekirdeği kuruldu ✓").ConfigureAwait(false);
-                    requiredCore = _binaryRegistry.Validate(
-                        requireSingBox: mainContext.RunCoreType == ECoreType.sing_box,
-                        requireXray: mainContext.RunCoreType == ECoreType.Xray,
-                        requireTun: mainContext.IsTunEnabled || preContext?.IsTunEnabled == true,
-                        requiredCore: mainContext.RunCoreType);
-                    LastValidation = requiredCore;
-                }
-            }
-
-            if (!requiredCore.IsValid)
-            {
-                var message = requiredCore.ErrorSummary.IsNullOrEmpty()
-                    ? "Core executable missing"
-                    : requiredCore.ErrorSummary;
-                await _update(true, message);
-                throw new InvalidOperationException(message);
+                await ValidateAndInstallExternalCoreAsync(mainContext, preContext, cancellationToken);
             }
 
             await _update(false, "Connecting...");
@@ -207,6 +175,62 @@ public sealed class CoreEngineHost : IAsyncDisposable
         _disposed = true;
         _initializationGate.Dispose();
         _lifecycleGate.Dispose();
+    }
+
+    /// <summary>
+    /// Harici (süreç tabanlı) çekirdekler için binary doğrulama + mihomo eksikse
+    /// otomatik indirme. Tier 2'den beri yalnızca süreç tabanlı strateji seçildiğinde
+    /// çağrılır; native in-process motor (NativeGpnStartStrategy) bu yola girmez.
+    /// </summary>
+    private async Task ValidateAndInstallExternalCoreAsync(
+        CoreConfigContext mainContext,
+        CoreConfigContext? preContext,
+        CancellationToken cancellationToken)
+    {
+        var requiredCore = _binaryRegistry.Validate(
+            requireSingBox: mainContext.RunCoreType == ECoreType.sing_box,
+            requireXray: mainContext.RunCoreType == ECoreType.Xray,
+            requireTun: mainContext.IsTunEnabled || preContext?.IsTunEnabled == true,
+            requiredCore: mainContext.RunCoreType);
+        LastValidation = requiredCore;
+
+        // mihomo eksik → kullanıcıdan hiçbir adım istemeden indir ("GPN Bağlan"
+        // ölü binary yüzünden ölmesin). Başarılıysa doğrulama yeniden çalışır;
+        // başarısızsa mevcut hata yolu aynen korunur.
+        if (!requiredCore.IsValid && mainContext.RunCoreType == ECoreType.mihomo)
+        {
+            await _update(false, "mihomo çekirdeği bulunamadı — indiriliyor…").ConfigureAwait(false);
+            var installed = false;
+            try
+            {
+                installed = await _autoCoreInstaller(ECoreType.mihomo, _update, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog("[CoreEngineHost] mihomo auto-install failed", ex);
+            }
+
+            if (installed)
+            {
+                await _update(false, "mihomo çekirdeği kuruldu ✓").ConfigureAwait(false);
+                requiredCore = _binaryRegistry.Validate(
+                    requireSingBox: mainContext.RunCoreType == ECoreType.sing_box,
+                    requireXray: mainContext.RunCoreType == ECoreType.Xray,
+                    requireTun: mainContext.IsTunEnabled || preContext?.IsTunEnabled == true,
+                    requiredCore: mainContext.RunCoreType);
+                LastValidation = requiredCore;
+            }
+        }
+
+        if (!requiredCore.IsValid)
+        {
+            var message = requiredCore.ErrorSummary.IsNullOrEmpty()
+                ? "Core executable missing"
+                : requiredCore.ErrorSummary;
+            await _update(true, message);
+            throw new InvalidOperationException(message);
+        }
     }
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)

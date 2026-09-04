@@ -25,14 +25,14 @@ public class GpnServerSelectionServiceTests
     public void DecideMode_Open_ReturnsWireGuardUdp()
     {
         var probe = new UdpProbeResult("it", UdpProbeStatus.Open, 12, true);
-        GpnServerSelectionService.DecideMode(probe).Should().Be(ConnectionMode.WireGuardUDP);
+        GpnDecision.DecideMode(probe).Should().Be(ConnectionMode.WireGuardUDP);
     }
 
     [Fact]
     public void DecideMode_Blocked_ReturnsV2rayTcp()
     {
         var probe = new UdpProbeResult("it", UdpProbeStatus.Blocked, 3, false, "ConnectionReset");
-        GpnServerSelectionService.DecideMode(probe).Should().Be(ConnectionMode.V2rayTCP);
+        GpnDecision.DecideMode(probe).Should().Be(ConnectionMode.V2rayTCP);
     }
 
     [Fact]
@@ -41,7 +41,7 @@ public class GpnServerSelectionServiceTests
         // Varsayılan politika: WireGuard junk pakete yanıt vermez, sessizlik
         // sağlıklı UDP yolu demektir → Tier 2 korunur.
         var probe = new UdpProbeResult("it", UdpProbeStatus.NoResponse, -1, false, "timeout");
-        GpnServerSelectionService.DecideMode(probe).Should().Be(ConnectionMode.WireGuardUDP);
+        GpnDecision.DecideMode(probe).Should().Be(ConnectionMode.WireGuardUDP);
     }
 
     [Fact]
@@ -50,7 +50,7 @@ public class GpnServerSelectionServiceTests
         // Katı politika (zaman aşımı → fallback) istenirse V2rayTCP'ye düşer.
         var probe = new UdpProbeResult("it", UdpProbeStatus.NoResponse, -1, false, "timeout");
         var options = new UdpHealthCheckOptions(TreatNoResponseAsBlocked: true);
-        GpnServerSelectionService.DecideMode(probe, options).Should().Be(ConnectionMode.V2rayTCP);
+        GpnDecision.DecideMode(probe, options).Should().Be(ConnectionMode.V2rayTCP);
     }
 
     // ── DecideMode — HandshakeNoResponse (canlı testte gözlenen senaryo) ──
@@ -62,7 +62,7 @@ public class GpnServerSelectionServiceTests
         // yok (Blocked'tan farklı) ama yine de güçlü bozukluk işareti → varsayılan
         // politika (TreatHandshakeNoResponseAsBlocked=true) V2rayTCP düşüşü yapar.
         var probe = new UdpProbeResult("it", UdpProbeStatus.HandshakeNoResponse, -1, false, "timeout");
-        GpnServerSelectionService.DecideMode(probe).Should().Be(ConnectionMode.V2rayTCP);
+        GpnDecision.DecideMode(probe).Should().Be(ConnectionMode.V2rayTCP);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class GpnServerSelectionServiceTests
         // WireGuardUDP'yi korur.
         var probe = new UdpProbeResult("it", UdpProbeStatus.HandshakeNoResponse, -1, false, "timeout");
         var options = new UdpHealthCheckOptions(TreatHandshakeNoResponseAsBlocked: false);
-        GpnServerSelectionService.DecideMode(probe, options).Should().Be(ConnectionMode.WireGuardUDP);
+        GpnDecision.DecideMode(probe, options).Should().Be(ConnectionMode.WireGuardUDP);
     }
 
     [Fact]
@@ -84,8 +84,8 @@ public class GpnServerSelectionServiceTests
         // kovada değerlendiriliyordu.
         var junk = new UdpProbeResult("it", UdpProbeStatus.NoResponse, -1, false, "timeout");
         var hs = new UdpProbeResult("it", UdpProbeStatus.HandshakeNoResponse, -1, false, "timeout");
-        GpnServerSelectionService.DecideMode(junk).Should().Be(ConnectionMode.WireGuardUDP);
-        GpnServerSelectionService.DecideMode(hs).Should().Be(ConnectionMode.V2rayTCP);
+        GpnDecision.DecideMode(junk).Should().Be(ConnectionMode.WireGuardUDP);
+        GpnDecision.DecideMode(hs).Should().Be(ConnectionMode.V2rayTCP);
     }
 
     // ── DecideFailover (UDP destekli failover kararı) ────────────────────
@@ -96,13 +96,13 @@ public class GpnServerSelectionServiceTests
         var active = Server("it", "İtalya");
         var other = Server("de", "Almanya");
 
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 40), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.NoResponse), Udp("de", UdpProbeStatus.NoResponse)),
             new GpnProbeOptions());
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.None);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.None);
     }
 
     [Fact]
@@ -112,13 +112,13 @@ public class GpnServerSelectionServiceTests
         var other = Server("de", "Almanya");
 
         // de 30ms vs it 80ms — fark 50ms > hysteresis 15ms
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 80), Ping("de", 30)],
             UdpMap(Udp("it", UdpProbeStatus.NoResponse), Udp("de", UdpProbeStatus.NoResponse)),
             new GpnProbeOptions());
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.SwitchServer);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.SwitchServer);
         decision.Target!.ServerId.Should().Be("de");
     }
 
@@ -129,13 +129,13 @@ public class GpnServerSelectionServiceTests
         var other = Server("de", "Almanya");
 
         // de 70ms vs it 80ms — fark 10ms < hysteresis 15ms → salınımı önle
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 80), Ping("de", 70)],
             UdpMap(Udp("it", UdpProbeStatus.NoResponse), Udp("de", UdpProbeStatus.NoResponse)),
             new GpnProbeOptions());
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.None);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.None);
     }
 
     [Fact]
@@ -145,13 +145,13 @@ public class GpnServerSelectionServiceTests
         var other = Server("de", "Almanya");
 
         // Aktif tünel öldü (Blocked) → UDP'si sağlıklı de'ye geç
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 40), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.Blocked), Udp("de", UdpProbeStatus.NoResponse)),
             new GpnProbeOptions());
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.SwitchServer);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.SwitchServer);
         decision.Target!.ServerId.Should().Be("de");
         decision.Reason.Should().Contain("UDP ölü");
     }
@@ -163,13 +163,13 @@ public class GpnServerSelectionServiceTests
         var other = Server("de", "Almanya");
 
         // Her iki sunucuda da UDP ölü → Tier 3 düşüşü
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 40), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.Blocked), Udp("de", UdpProbeStatus.Blocked)),
             new GpnProbeOptions());
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.FallbackToV2ray);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.FallbackToV2ray);
     }
 
     [Fact]
@@ -180,13 +180,13 @@ public class GpnServerSelectionServiceTests
         var options = new GpnProbeOptions { UdpCheck = new UdpHealthCheckOptions(TreatNoResponseAsBlocked: true) };
 
         // Katı politika: NoResponse = ölü → de'nin Open yanıtına geç
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 40), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.NoResponse), Udp("de", UdpProbeStatus.Open)),
             options);
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.SwitchServer);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.SwitchServer);
         decision.Target!.ServerId.Should().Be("de");
     }
 
@@ -197,13 +197,13 @@ public class GpnServerSelectionServiceTests
         var other = Server("de", "Almanya");
 
         // de ping olarak çok daha iyi AMA UDP'si Blocked → ölü tünele geçilmez
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 80), Ping("de", 20)],
             UdpMap(Udp("it", UdpProbeStatus.NoResponse), Udp("de", UdpProbeStatus.Blocked)),
             new GpnProbeOptions());
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.None);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.None);
     }
 
     [Fact]
@@ -214,13 +214,13 @@ public class GpnServerSelectionServiceTests
 
         // Aktif UDP sağlıklı ama ICMP ölçülemiyor (ISP engeli) — ping tabanı yok,
         // geçiş kararı verilemez (salınım riski).
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("de", 30)], // it için ping sonucu yok
             UdpMap(Udp("it", UdpProbeStatus.NoResponse), Udp("de", UdpProbeStatus.NoResponse)),
             new GpnProbeOptions());
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.None);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.None);
     }
 
     // ── DecideRecovery (V2rayTCP sonrası Tier-2 kurtarma kararı) ───────────
@@ -232,7 +232,7 @@ public class GpnServerSelectionServiceTests
         var de = Server("de", "Almanya");
 
         // de'nin UDP'si Open → kurtarma hedefi de.
-        var target = GpnServerSelectionService.DecideRecovery(
+        var target = GpnDecision.DecideRecovery(
             [it, de],
             [Ping("it", 40), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.Blocked), Udp("de", UdpProbeStatus.Open)),
@@ -249,7 +249,7 @@ public class GpnServerSelectionServiceTests
         var de = Server("de", "Almanya");
 
         // Her ikisi de Blocked → kurtarma hedefi yok, Tier-3'te kal.
-        var target = GpnServerSelectionService.DecideRecovery(
+        var target = GpnDecision.DecideRecovery(
             [it, de],
             [Ping("it", 40), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.Blocked), Udp("de", UdpProbeStatus.Blocked)),
@@ -266,7 +266,7 @@ public class GpnServerSelectionServiceTests
 
         // Varsayılan politika: WireGuard junk pakete yanıt vermez → NoResponse
         // sağlıklı yoldur; it NoResponse ise kurtarma hedefi it olur.
-        var target = GpnServerSelectionService.DecideRecovery(
+        var target = GpnDecision.DecideRecovery(
             [it, de],
             [Ping("it", 30), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.NoResponse), Udp("de", UdpProbeStatus.Blocked)),
@@ -282,7 +282,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya") with { IsEnabled = false };
         var de = Server("de", "Almanya");
 
-        var target = GpnServerSelectionService.DecideRecovery(
+        var target = GpnDecision.DecideRecovery(
             [it, de],
             [Ping("it", 20), Ping("de", 60)],
             UdpMap(Udp("it", UdpProbeStatus.Open), Udp("de", UdpProbeStatus.Open)),
@@ -300,7 +300,7 @@ public class GpnServerSelectionServiceTests
         var options = new GpnProbeOptions { EnableUdpHealth = false };
 
         // UDP kapalı → tüm sunucular sağlıklı; en düşük ping'li seçilir.
-        var target = GpnServerSelectionService.DecideRecovery(
+        var target = GpnDecision.DecideRecovery(
             [it, de],
             [Ping("it", 30), Ping("de", 45)],
             new Dictionary<string, UdpProbeResult>(),
@@ -319,7 +319,7 @@ public class GpnServerSelectionServiceTests
         // A'ya geri dönüş ENGELENMELİ (probe fluke'u — tüneli yırtma).
         var now = new DateTime(2026, 8, 30, 12, 0, 0);
         var lastSwitchUtc = now.AddSeconds(-10); // FailoverSwitchCooldownSeconds=45 içinde
-        GpnServerSelectionService.IsPingPongSwitchSuppressed(
+        GpnDecision.IsPingPongSwitchSuppressed(
                 "it", "it", lastSwitchUtc, now, cooldownSeconds: 45)
             .Should().BeTrue();
     }
@@ -331,7 +331,7 @@ public class GpnServerSelectionServiceTests
         // (gerçek failover/ölüm senaryosu).
         var now = new DateTime(2026, 8, 30, 12, 0, 0);
         var lastSwitchUtc = now.AddSeconds(-60);
-        GpnServerSelectionService.IsPingPongSwitchSuppressed(
+        GpnDecision.IsPingPongSwitchSuppressed(
                 "it", "it", lastSwitchUtc, now, cooldownSeconds: 45)
             .Should().BeFalse();
     }
@@ -343,7 +343,7 @@ public class GpnServerSelectionServiceTests
         // geçiş engellenmez — sağlıklı yeni adaya geçmek istenir.
         var now = new DateTime(2026, 8, 30, 12, 0, 0);
         var lastSwitchUtc = now.AddSeconds(-5);
-        GpnServerSelectionService.IsPingPongSwitchSuppressed(
+        GpnDecision.IsPingPongSwitchSuppressed(
                 "it", "de", lastSwitchUtc, now, cooldownSeconds: 45)
             .Should().BeFalse();
     }
@@ -354,7 +354,7 @@ public class GpnServerSelectionServiceTests
         // FailoverSwitchCooldownSeconds=0 → koruma kapalı (eski davranış).
         var now = new DateTime(2026, 8, 30, 12, 0, 0);
         var lastSwitchUtc = now.AddSeconds(-5);
-        GpnServerSelectionService.IsPingPongSwitchSuppressed(
+        GpnDecision.IsPingPongSwitchSuppressed(
                 "it", "it", lastSwitchUtc, now, cooldownSeconds: 0)
             .Should().BeFalse();
     }
@@ -364,7 +364,7 @@ public class GpnServerSelectionServiceTests
     {
         // Henüz değişim yok (abandoned=null) → ilk geçiş serbest.
         var now = new DateTime(2026, 8, 30, 12, 0, 0);
-        GpnServerSelectionService.IsPingPongSwitchSuppressed(
+        GpnDecision.IsPingPongSwitchSuppressed(
                 null, "it", DateTime.MinValue, now, cooldownSeconds: 45)
             .Should().BeFalse();
     }
@@ -518,14 +518,14 @@ public class GpnServerSelectionServiceTests
         var other = Server("de", "Almanya");
         var options = new GpnProbeOptions(); // TreatHandshakeNoResponseAsBlocked=true varsayılan
 
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 30), Ping("de", 31)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse), Udp("de", UdpProbeStatus.Open)),
             options);
 
         // Aktif el sıkışma yanıtsız → ölü; Open aday var → geç.
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.SwitchServer);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.SwitchServer);
         decision.Target!.ServerId.Should().Be("de");
     }
 
@@ -539,7 +539,7 @@ public class GpnServerSelectionServiceTests
             UdpCheck = new UdpHealthCheckOptions(TreatHandshakeNoResponseAsBlocked: false),
         };
 
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 30), Ping("de", 31)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse), Udp("de", UdpProbeStatus.Open)),
@@ -547,7 +547,7 @@ public class GpnServerSelectionServiceTests
 
         // Yumuşak politika: el sıkışma yanıtsızlığı sağlıklı → aktif korunur
         // (de 31ms, hysteresis 15ms: 31 < 30-15=15 değil).
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.None);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.None);
     }
 
     [Fact]
@@ -557,13 +557,13 @@ public class GpnServerSelectionServiceTests
         var other = Server("de", "Almanya");
         var options = new GpnProbeOptions();
 
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 30), Ping("de", 31)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse), Udp("de", UdpProbeStatus.HandshakeNoResponse)),
             options);
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.FallbackToV2ray);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.FallbackToV2ray);
     }
 
     [Fact]
@@ -574,7 +574,7 @@ public class GpnServerSelectionServiceTests
         var options = new GpnProbeOptions();
 
         // it el sıkışma yanıtsız (ölü) + de Blocked → sağlıklı aday yok → null.
-        var target = GpnServerSelectionService.DecideRecovery(
+        var target = GpnDecision.DecideRecovery(
             [it, de],
             [Ping("it", 30), Ping("de", 40)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse), Udp("de", UdpProbeStatus.Blocked)),
@@ -582,7 +582,7 @@ public class GpnServerSelectionServiceTests
         target.Should().BeNull();
 
         // de Open olsaydı kurtarma hedefi de olurdu.
-        var target2 = GpnServerSelectionService.DecideRecovery(
+        var target2 = GpnDecision.DecideRecovery(
             [it, de],
             [Ping("it", 30), Ping("de", 40)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse), Udp("de", UdpProbeStatus.Open)),
@@ -598,13 +598,13 @@ public class GpnServerSelectionServiceTests
         var options = new GpnProbeOptions { EnableUdpHealth = false };
 
         // UDP kapalı → eski ping-tabanlı davranış: fark hysteresis'i aşarsa geç
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             active, [active, other],
             [Ping("it", 80), Ping("de", 30)],
             new Dictionary<string, UdpProbeResult>(),
             options);
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.SwitchServer);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.SwitchServer);
         decision.Target!.ServerId.Should().Be("de");
     }
 
@@ -628,7 +628,7 @@ public class GpnServerSelectionServiceTests
         probe.Status.Should().Be(UdpProbeStatus.HandshakeNoResponse);
         probe.Detail.Should().Contain("ICMP kanıtı yok");
         probe.Detail.Should().Contain("el sıkışma yanıtsız");
-        GpnServerSelectionService.DecideMode(probe).Should().Be(ConnectionMode.V2rayTCP);
+        GpnDecision.DecideMode(probe).Should().Be(ConnectionMode.V2rayTCP);
     }
 
     [Fact]
@@ -648,7 +648,7 @@ public class GpnServerSelectionServiceTests
         probe.Status.Should().Be(UdpProbeStatus.Blocked);
         probe.Detail.Should().Contain("ConnectionReset");
         probe.Detail.Should().Contain("el sıkışma da yanıtsızdı");
-        GpnServerSelectionService.DecideMode(probe).Should().Be(ConnectionMode.V2rayTCP);
+        GpnDecision.DecideMode(probe).Should().Be(ConnectionMode.V2rayTCP);
     }
 
     [Fact]
@@ -665,7 +665,7 @@ public class GpnServerSelectionServiceTests
         var probe = await service.ProbeUdpAsync(it, new GpnProbeOptions(), TestContext.Current.CancellationToken);
 
         probe.Status.Should().Be(UdpProbeStatus.Open);
-        GpnServerSelectionService.DecideMode(probe).Should().Be(ConnectionMode.WireGuardUDP);
+        GpnDecision.DecideMode(probe).Should().Be(ConnectionMode.WireGuardUDP);
     }
 
     [Fact]
@@ -869,7 +869,7 @@ public class GpnServerSelectionServiceTests
 
         // Ham hairpin kontrolü bu IP'yi hairpin OLARAK işaretlerdi — guard olmadan
         // tercih edilen sunucu atlanırdı. Guard'ın devreye girdiğini kanıtlar.
-        GpnServerSelectionService.IsHairpin(it, ownIp).Should().BeTrue();
+        GpnHairpinDetector.IsHairpin(it, ownIp).Should().BeTrue();
 
         var junkCalls = 0;
         var service = new GpnServerSelectionService(
@@ -899,8 +899,8 @@ public class GpnServerSelectionServiceTests
         var ownIp = "127.0.0.2";
 
         // Ham kontrol de'yi hairpin işaretlerdi — guard olmadan de atlanırdı.
-        GpnServerSelectionService.IsHairpin(de, ownIp).Should().BeTrue();
-        GpnServerSelectionService.IsHairpin(it, ownIp).Should().BeFalse();
+        GpnHairpinDetector.IsHairpin(de, ownIp).Should().BeTrue();
+        GpnHairpinDetector.IsHairpin(it, ownIp).Should().BeFalse();
 
         var batch = new List<UdpProbeResult> { Udp("it", UdpProbeStatus.Blocked), Udp("de", UdpProbeStatus.Open) };
         var service = new GpnServerSelectionService(
@@ -1014,7 +1014,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 25), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.Open), Udp("de", UdpProbeStatus.Open)));
@@ -1034,7 +1034,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 25), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.Blocked), Udp("de", UdpProbeStatus.Open)));
@@ -1053,7 +1053,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 25), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.Blocked), Udp("de", UdpProbeStatus.Blocked)));
@@ -1071,7 +1071,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", -1), Ping("de", -1)],
             UdpMap(Udp("it", UdpProbeStatus.NoResponse), Udp("de", UdpProbeStatus.Open)));
@@ -1088,7 +1088,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", -1), Ping("de", -1)],
             UdpMap(Udp("it", UdpProbeStatus.Blocked), Udp("de", UdpProbeStatus.Blocked)));
@@ -1107,14 +1107,14 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var strict = GpnServerSelectionService.DecideSelection(
+        var strict = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 25), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse), Udp("de", UdpProbeStatus.Open)));
         strict.Best.Should().Be(de);
         strict.Mode.Should().Be(ConnectionMode.WireGuardUDP);
 
-        var lenient = GpnServerSelectionService.DecideSelection(
+        var lenient = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 25), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse), Udp("de", UdpProbeStatus.Open)),
@@ -1134,14 +1134,14 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var strict = GpnServerSelectionService.DecideSelection(
+        var strict = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 25), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse), Udp("de", UdpProbeStatus.HandshakeNoResponse)));
         strict.Best.Should().BeNull();
         strict.Mode.Should().Be(ConnectionMode.V2rayTCP);
 
-        var lenient = GpnServerSelectionService.DecideSelection(
+        var lenient = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 25), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse), Udp("de", UdpProbeStatus.HandshakeNoResponse)),
@@ -1160,7 +1160,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya") with { IsEnabled = false };
 
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 80), Ping("de", 10)],
             UdpMap(Udp("it", UdpProbeStatus.Open), Udp("de", UdpProbeStatus.Open)));
@@ -1178,7 +1178,7 @@ public class GpnServerSelectionServiceTests
         // kendi genel IP'siyle aynı → hairpin. (Canlı gözlenen senaryo: makine İtalya
         // tünelinin içindeyken İtalya sunucusuna ulaşmaya çalışmak.)
         var server = Server("it", "İtalya") with { EndpointHost = "92.4.220.236" };
-        GpnServerSelectionService.IsHairpin(server, "92.4.220.236").Should().BeTrue();
+        GpnHairpinDetector.IsHairpin(server, "92.4.220.236").Should().BeTrue();
     }
 
     [Theory]
@@ -1191,7 +1191,7 @@ public class GpnServerSelectionServiceTests
     public void IsHairpin_NoMatch_ReturnsFalse(string endpoint, string? ownIp)
     {
         var server = Server("it", "İtalya") with { EndpointHost = endpoint };
-        GpnServerSelectionService.IsHairpin(server, ownIp).Should().BeFalse();
+        GpnHairpinDetector.IsHairpin(server, ownIp).Should().BeFalse();
     }
 
     [Fact]
@@ -1202,7 +1202,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var ordered = GpnServerSelectionService.OrderCandidates(
+        var ordered = GpnDecision.OrderCandidates(
             [it, de],
             [Ping("it", 10), Ping("de", 45)],
             new HashSet<string> { "it" }).ToArray();
@@ -1218,7 +1218,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var ordered = GpnServerSelectionService.OrderCandidates(
+        var ordered = GpnDecision.OrderCandidates(
             [it, de],
             [Ping("it", 45), Ping("de", 10)],
             new HashSet<string>()).ToArray();
@@ -1236,7 +1236,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var de = Server("de", "Almanya");
 
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 10), Ping("de", 45)],
             UdpMap(Udp("it", UdpProbeStatus.Open), Udp("de", UdpProbeStatus.Open)),
@@ -1254,7 +1254,7 @@ public class GpnServerSelectionServiceTests
         // (son umut) — hairpin sıralamayı etkiler, seçimi imkânsızlaştırmaz.
         var it = Server("it", "İtalya");
 
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it],
             [Ping("it", 10)],
             UdpMap(Udp("it", UdpProbeStatus.Open)),
@@ -1275,7 +1275,7 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya"); // hairpin — UDP "Open" görünüyor (yanıltıcı)
         var de = Server("de", "Almanya"); // non-hairpin — UDP ölü
 
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it, de],
             [Ping("it", 5), Ping("de", 40)],
             UdpMap(Udp("it", UdpProbeStatus.Open), Udp("de", UdpProbeStatus.Blocked)),
@@ -1304,14 +1304,14 @@ public class GpnServerSelectionServiceTests
                 TreatHandshakeNoResponseAsBlocked = true,
             },
         };
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             de, [de, it],
             [Ping("de", 40), Ping("it", 5)],
             UdpMap(Udp("de", UdpProbeStatus.Blocked), Udp("it", UdpProbeStatus.Open)),
             options,
             hairpinServerIds: new HashSet<string> { "it" });
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.FallbackToV2ray,
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.FallbackToV2ray,
             "active ölü + yalnızca hairpin sağlıklı → hairpin'e geçilmez, V2rayTCP'ye düşülür");
         decision.Target.Should().BeNull();
     }
@@ -1335,14 +1335,14 @@ public class GpnServerSelectionServiceTests
                 TreatHandshakeNoResponseAsBlocked = true,
             },
         };
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             fr, [fr, de, it],
             [Ping("fr", 30), Ping("de", 10), Ping("it", 5)],
             UdpMap(Udp("fr", UdpProbeStatus.Blocked), Udp("de", UdpProbeStatus.Open), Udp("it", UdpProbeStatus.Open)),
             options,
             hairpinServerIds: new HashSet<string> { "it" });
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.SwitchServer);
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.SwitchServer);
         decision.Target!.ServerId.Should().Be("de", "non-hairpin (Almanya) hairpin'e (İtalya) tercih edilir");
     }
 
@@ -1363,7 +1363,7 @@ public class GpnServerSelectionServiceTests
                 TreatHandshakeNoResponseAsBlocked = true,
             },
         };
-        var target = GpnServerSelectionService.DecideRecovery(
+        var target = GpnDecision.DecideRecovery(
             [de, it],
             [Ping("de", 40), Ping("it", 5)],
             UdpMap(Udp("de", UdpProbeStatus.Blocked), Udp("it", UdpProbeStatus.Open)),
@@ -1384,13 +1384,13 @@ public class GpnServerSelectionServiceTests
         var it = Server("it", "İtalya");
         var options = new GpnProbeOptions { SlowServerToleranceMs = 400 };
 
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             it, [it],
             [Ping("it", 600)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse)),
             options);
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.None,
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.None,
             "yüksek ping + HandshakeNoResponse 'ölü' sayılmamalı — false-failover engellenir");
     }
 
@@ -1400,13 +1400,13 @@ public class GpnServerSelectionServiceTests
         // Ping toleransın ALTINDA (100 < 400) → HandshakeNoResponse YİNE ölü sayılır
         // (tolerans yalnızca gerçekten yüksek gecikme için; varsayılan katı davranış korunur).
         var it = Server("it", "İtalya");
-        var decision = GpnServerSelectionService.DecideFailover(
+        var decision = GpnDecision.DecideFailover(
             it, [it],
             [Ping("it", 100)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse)),
             new GpnProbeOptions { SlowServerToleranceMs = 400 });
 
-        decision.Action.Should().Be(GpnServerSelectionService.FailoverActionType.FallbackToV2ray,
+        decision.Action.Should().Be(GpnDecision.FailoverActionType.FallbackToV2ray,
             "düşük ping + HandshakeNoResponse hâlâ ölü → V2rayTCP düşüşü");
     }
 
@@ -1416,7 +1416,7 @@ public class GpnServerSelectionServiceTests
         // Tek aday yüksek ping'li ve HandshakeNoResponse — tolerans devrede olduğundan
         // seçim yanlış V2rayTCP'ye düşmez, WireGuardUDP kalır.
         var it = Server("it", "İtalya");
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it],
             [Ping("it", 600)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse)),
@@ -1431,7 +1431,7 @@ public class GpnServerSelectionServiceTests
     public void DecideSelection_LowPingHandshakeNoResponse_StillDropsToV2ray()
     {
         var it = Server("it", "İtalya");
-        var prediction = GpnServerSelectionService.DecideSelection(
+        var prediction = GpnDecision.DecideSelection(
             [it],
             [Ping("it", 100)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse)),
@@ -1447,7 +1447,7 @@ public class GpnServerSelectionServiceTests
         // Kurtarma: yüksek ping'li adayın HandshakeNoResponse'u toleransla sağlıklı sayılarak
         // Tier-2 (WireGuard) dönüşü kaçırılmaz.
         var it = Server("it", "İtalya");
-        var target = GpnServerSelectionService.DecideRecovery(
+        var target = GpnDecision.DecideRecovery(
             [it],
             [Ping("it", 600)],
             UdpMap(Udp("it", UdpProbeStatus.HandshakeNoResponse)),

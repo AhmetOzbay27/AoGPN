@@ -1,7 +1,6 @@
 namespace ServiceLib.Manager;
 
 using System.Threading;
-using ServiceLib.Services.CoreConfig.Mihomo;
 
 /// <summary>
 /// Core process processing class
@@ -33,6 +32,7 @@ public class CoreManager
     private CoreConfigContext? _activeMainContext;
     private CoreConfigContext? _activePreContext;
     private int _mainCrashAttempts;
+    private ICoreStartStrategy? _activeMainStrategy;
 
     private readonly object _healthLock = new();
     private readonly Dictionary<CoreHealthRole, CoreHealthSnapshot> _health = new()
@@ -129,10 +129,16 @@ public class CoreManager
         }
 
         var node = mainContext.Node;
-        var isNativeTunnelCore = mainContext.RunCoreType == ECoreType.openvpn;
+        // Başlatma stratejisi: TUN sahipliği / native-tunnel politikası çekirdek
+        // tipine göre CoreStartStrategyFactory'den gelir (mihomo own-TUN + host
+        // rotası, openvpn native tunnel, diğerleri varsayılan). Bağlam duyarlı
+        // çözüm: UseNativeGpnEngine bayrağı yerel motoru (NativeGpnStartStrategy)
+        // seçer — bayrak şu an hiçbir çağıranda yok, davranış birebir aynı.
+        var startStrategy = CoreStartStrategyFactory.For(mainContext);
         // mihomo kendi Wintun adaptörünü + rotalarını yönetir (own TUN): uygulamanın
         // TunLifecycleManager'ı ve host rotası mihomo için ayrı çalışır.
-        var mihomoOwnsTun = mainContext.RunCoreType == ECoreType.mihomo;
+        var mihomoOwnsTun = startStrategy.OwnsTun;
+        var isNativeTunnelCore = startStrategy.IsNativeTunnelCore;
         var generation = BeginLifecycle(mainContext, preContext);
         PublishHealth(CoreHealthRole.Main, CoreHealthState.Starting, mainContext.RunCoreType, AppManager.Instance.GetLocalPort(EInboundProtocol.socks));
         if (preContext != null)
@@ -166,24 +172,37 @@ public class CoreManager
         // Rota, kapanışta StopProcessesOnly içinde kaldırılır.
         if (mihomoOwnsTun)
         {
-            MihomoTunSupport.EnsureHostRoute(node.Address);
+            await startStrategy.BeforeStartAsync(mainContext);
         }
 
-        await CoreStart(mainContext, generation);
+        await CoreStart(mainContext, generation, startStrategy);
         if (_processService is null)
         {
-            PublishHealth(CoreHealthRole.Main, CoreHealthState.Failed, mainContext.RunCoreType,
-                AppManager.Instance.GetLocalPort(EInboundProtocol.socks), "Core executable missing or process failed to start.");
-            return;
+            // Tier 1 — in-process motor (native GPN): HARİCİ süreç YOKTUR, null
+            // OLAĞANDIR (StartAsync gerçek hatalarda fırlatır — sessiz no-op yok).
+            // Harici çekirdekler (mihomo/sing-box/Xray/openvpn/...) için kural
+            // eskisi gibi KATIDIR: exe eksik → hata + dönüş.
+            if (!startStrategy.IsInProcessEngine)
+            {
+                PublishHealth(CoreHealthRole.Main, CoreHealthState.Failed, mainContext.RunCoreType,
+                    AppManager.Instance.GetLocalPort(EInboundProtocol.socks), "Core executable missing or process failed to start.");
+                return;
+            }
+            DiagLog.Write("CORE_INPROCESS native engine active — no external process (by design).");
         }
         // OpenVPN owns the OS tunnel and intentionally has no local SOCKS5
         // listener. Xray/sing-box keep the stricter listener + connectivity probes.
-        var mainReady = isNativeTunnelCore
-            ? _processService != null && CoreHealthProbe.IsProcessReady(_processService)
-            : _processService != null
-                && CoreHealthProbe.IsProcessReady(_processService)
-                && await CoreHealthProbe.WaitForSocks5Async(Global.Loopback, AppManager.Instance.GetLocalPort(EInboundProtocol.socks), TimeSpan.FromSeconds(5));
-        if (!isNativeTunnelCore)
+        // In-process motor (IsInProcessEngine): süreç/SOCKS5 yoklaması YAPILMAZ —
+        // StartAsync başarıyla döndüyse motor komutu aldı; oturum-içi hatalar
+        // EngineFailed → onExited kurtarma döngüsünden gelir.
+        var mainReady = startStrategy.IsInProcessEngine
+            ? true
+            : isNativeTunnelCore
+                ? _processService != null && CoreHealthProbe.IsProcessReady(_processService)
+                : _processService != null
+                    && CoreHealthProbe.IsProcessReady(_processService)
+                    && await CoreHealthProbe.WaitForSocks5Async(Global.Loopback, AppManager.Instance.GetLocalPort(EInboundProtocol.socks), TimeSpan.FromSeconds(5));
+        if (!isNativeTunnelCore && !startStrategy.IsInProcessEngine)
         {
             var mainProbe = await RuntimeConnectivityProbe.ProbeSocks5Async(
                 Global.Loopback,
@@ -281,7 +300,7 @@ public class CoreManager
                                     // Kill the old core that has the GPN config.
                                     await StopProcessesOnly();
                                     // Restart with the new Global VPN config.
-                                    await CoreStart(fallbackContext, generation);
+                                    await CoreStart(fallbackContext, generation, startStrategy);
                                     DiagLog.Write("CORE_FALLBACK core restarted with Global VPN config");
 
                                     // The normal reload completion path applies the
@@ -450,8 +469,12 @@ public class CoreManager
                 _tunTransaction = null;
             }
 
-            // mihomo WG host rotasını geri al (idempotent — kurulmamışsa no-op).
-            MihomoTunSupport.RemoveHostRoute();
+            // Aktif ana çekirdeğin stratejisi kapanış yan etkilerini geri alır
+            // (mihomo WG host rotası — idempotent, kurulmamışsa no-op).
+            if (_activeMainStrategy != null)
+            {
+                await _activeMainStrategy.AfterStopAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -588,6 +611,7 @@ public class CoreManager
             _lifecycleCts = new CancellationTokenSource();
             _activeMainContext = mainContext;
             _activePreContext = preContext;
+            _activeMainStrategy = CoreStartStrategyFactory.For(mainContext);
             _mainCrashAttempts = 0;
             return ++_lifecycleGeneration;
         }
@@ -678,15 +702,20 @@ public class CoreManager
             }
 
             await StopProcessesOnly();
-            await CoreStart(mainContext, generation);
-            var isNativeTunnelCore = mainContext.RunCoreType == ECoreType.openvpn;
-            var ready = isNativeTunnelCore
-                ? _processService != null && CoreHealthProbe.IsProcessReady(_processService)
-                : _processService != null
-                    && CoreHealthProbe.IsProcessReady(_processService)
-                    && await CoreHealthProbe.WaitForSocks5Async(Global.Loopback,
-                        AppManager.Instance.GetLocalPort(EInboundProtocol.socks), TimeSpan.FromSeconds(5), token);
-            if (ready && !isNativeTunnelCore)
+            var startStrategy = CoreStartStrategyFactory.For(mainContext);
+            await CoreStart(mainContext, generation, startStrategy);
+            var isNativeTunnelCore = startStrategy.IsNativeTunnelCore;
+            // In-process motor: süreç yoklaması yapılmaz (StartAsync fırlatmadıysa
+            // motor ayakta; oturum-içi hatalar EngineFailed → onExited ile gelir).
+            var ready = startStrategy.IsInProcessEngine
+                ? true
+                : isNativeTunnelCore
+                    ? _processService != null && CoreHealthProbe.IsProcessReady(_processService)
+                    : _processService != null
+                        && CoreHealthProbe.IsProcessReady(_processService)
+                        && await CoreHealthProbe.WaitForSocks5Async(Global.Loopback,
+                            AppManager.Instance.GetLocalPort(EInboundProtocol.socks), TimeSpan.FromSeconds(5), token);
+            if (ready && !isNativeTunnelCore && !startStrategy.IsInProcessEngine)
             {
                 var recoveryProbe = await RuntimeConnectivityProbe.ProbeSocks5Async(
                     Global.Loopback, AppManager.Instance.GetLocalPort(EInboundProtocol.socks), TimeSpan.FromSeconds(1), token);
@@ -714,21 +743,11 @@ public class CoreManager
         }
     }
 
-    private async Task CoreStart(CoreConfigContext context, int generation)
+    private async Task CoreStart(CoreConfigContext context, int generation, ICoreStartStrategy strategy)
     {
-        var node = context.Node;
-        // Use the same immutable core selection that produced the config.
-        var coreType = context.RunCoreType;
-        var coreInfo = CoreInfoManager.Instance.GetCoreInfo(coreType);
-
-        var displayLog = node.ConfigType != EConfigType.Custom || node.DisplayLog;
-        var proc = await RunProcess(
-            coreInfo,
-            Global.CoreConfigFileName,
-            displayLog,
-            true,
-            context.IsTunEnabled || coreType == ECoreType.openvpn,
-            () => OnMainProcessExited(generation));
+        // Çekirdeğe özgü başlatma kararları (ikili seçimi, displayLog, isTunLaunch)
+        // stratejide yaşar; ortak başlatma hattı (RunProcess) burada kalır.
+        var proc = await strategy.StartAsync(context, RunProcess, () => OnMainProcessExited(generation));
         if (proc is null)
         {
             return;

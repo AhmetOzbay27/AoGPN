@@ -234,6 +234,7 @@ public class CoreConfigContextBuilderTests
 
     private static void CreateTables()
     {
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
         SQLiteHelper.Instance.CreateTable<ProfileItem>();
         SQLiteHelper.Instance.CreateTable<FullConfigTemplateItem>();
         SQLiteHelper.Instance.CreateTable<DNSItem>();

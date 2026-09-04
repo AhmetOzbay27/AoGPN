@@ -4,6 +4,7 @@ using ServiceLib.Enums;
 using ServiceLib.Handler.Builder;
 using ServiceLib.Models;
 using ServiceLib.Models.CoreConfigs;
+using ServiceLib.Models.Entities;
 using ServiceLib.Services;
 using ServiceLib.Services.CoreConfig;
 using Xunit;
@@ -150,6 +151,9 @@ public sealed class ProxyOnlyVlessRealityXrayBinaryTests
 
     private static void CreateTables()
     {
+        // AppManager.InitApp RoutingItem'ı da yaratır; context builder (GetDefaultRouting)
+        // bu tabloyu okur — test host'unda açıkça yaratılmazsa sorgu düşer.
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
         SQLiteHelper.Instance.CreateTable<ProfileItem>();
         SQLiteHelper.Instance.CreateTable<FullConfigTemplateItem>();
         SQLiteHelper.Instance.CreateTable<DNSItem>();

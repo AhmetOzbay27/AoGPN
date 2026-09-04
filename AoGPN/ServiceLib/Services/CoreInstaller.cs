@@ -208,6 +208,13 @@ public static class CoreInstaller
             {
                 // Already current, unsupported, or check/download failed; the
                 // failure was already reported through updateFunc/Logging.
+                // A core that is still missing afterwards must be reported so
+                // --update-cores (and the MSBuild targets that run it) do not
+                // exit 0 as if everything had been installed.
+                if (!CoreExists(coreType))
+                {
+                    failures.Add($"{coreType}: no archive was produced and the core is still missing");
+                }
                 continue;
             }
 

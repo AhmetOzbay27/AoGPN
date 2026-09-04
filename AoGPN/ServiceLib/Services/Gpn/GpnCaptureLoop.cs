@@ -141,8 +141,15 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
         OpenAndStart(initial, GpnCaptureMode.RecvOnly, cancellationToken);
 
         _telemetry.Reset();
-        var refreshTask = RefreshLoopAsync(cancellationToken);
-        Task? telemetryTick = _options.EnableTelemetry ? TelemetryTickAsync(cancellationToken) : null;
+        // Oturum-içi yardımcı görevler (PID tazeleme + telemetri) iptale kadar
+        // SONSUZDUR. Pump fault'unda onları beklemek, görevin fault'unu maskeler
+        // (görev asla fault olmaz → ObserveFaultAsync → EngineFailed bildirimi
+        // yalnızca kapanışta tetiklenirdi). Ayrı bağlantılı iptal taşırlar: pump
+        // hatası loopCts'yi iptal eder → yardımcı görevler hızla biter → gerçek
+        // istisna yüzeye anında çıkar (Tier 1 — yaşam döngüsü köprüsü).
+        using var loopCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var refreshTask = RefreshLoopAsync(loopCts.Token);
+        Task? telemetryTick = _options.EnableTelemetry ? TelemetryTickAsync(loopCts.Token) : null;
         try
         {
             await PumpAsync(cancellationToken);
@@ -150,6 +157,13 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
         catch (OperationCanceledException)
         {
             // normal kapanış
+        }
+        catch (Exception)
+        {
+            // Pump fault: yardımcı döngüleri bitir — finally onları beklerken
+            // fault maskelenmesin (EngineFailed kapanışa kalmasın).
+            loopCts.Cancel();
+            throw;
         }
         finally
         {
@@ -228,6 +242,18 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
     }
 
     private async Task RefreshLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RefreshLoopCoreAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // normal kapanış (iptal — pump fault'unda loopCts iptali dahil)
+        }
+    }
+
+    private async Task RefreshLoopCoreAsync(CancellationToken cancellationToken)
     {
         await foreach (var snapshot in _resolver.RefreshLoopAsync(cancellationToken: cancellationToken))
         {

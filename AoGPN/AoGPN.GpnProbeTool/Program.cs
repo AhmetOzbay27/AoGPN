@@ -381,7 +381,7 @@ static string FormatPing(GpnServerProbeResult r)
 
 /// <summary>
 /// Failover karar matrisi: her adayı sırayla "aktif tünel" varsayıp
-/// GpnServerSelectionService.DecideFailover'ı çalıştırır ve hangi eylemi
+/// GpnDecision.DecideFailover'ı çalıştırır ve hangi eylemi
 /// (None/SwitchServer/FallbackToV2ray) önerdiğini yazdırır. Böylece canlı
 /// ping+UDP sonuçlarıyla aktif/ölü/hysteresis senaryolarının kararı görünür.
 /// </summary>
@@ -407,7 +407,7 @@ static void PrintDecisionMatrix(
     // sonra her satırda kararı hedef sütununa işaretle.
     var decisions = profiles.ToDictionary(
         active => active.ServerId,
-        active => GpnServerSelectionService.DecideFailover(active, profiles, pingResults, udpResults, matrixOptions));
+        active => GpnDecision.DecideFailover(active, profiles, pingResults, udpResults, matrixOptions));
 
     Console.WriteLine(new string('-', 74));
     Console.WriteLine($"{"Aktif",-10} | {"UDP",-10} | {"Ping",-8} | Karar");
@@ -422,8 +422,8 @@ static void PrintDecisionMatrix(
 
         var actionText = d.Action switch
         {
-            GpnServerSelectionService.FailoverActionType.SwitchServer => $"SUNUCU DEĞİŞ → {d.Target?.Name}",
-            GpnServerSelectionService.FailoverActionType.FallbackToV2ray => "V2RAYTCP DÜŞÜŞÜ",
+            GpnDecision.FailoverActionType.SwitchServer => $"SUNUCU DEĞİŞ → {d.Target?.Name}",
+            GpnDecision.FailoverActionType.FallbackToV2ray => "V2RAYTCP DÜŞÜŞÜ",
             _ => "DEĞİŞİM YOK",
         };
 

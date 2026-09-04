@@ -94,7 +94,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
             url = result.Url.ToString();
             var ext = url.Contains(".tar.gz") ? ".tar.gz" : Path.GetExtension(url);
-            fileName = Utils.GetTempPath(Utils.GetGuid() + ext);
+            // Stable per-type name so a transfer that dies mid-way can be RESUMED
+            // by the next attempt (DownloaderHelper keeps the resume state in the
+            // matching "<name>.download" file) instead of restarting from zero
+            // every retry cycle.
+            fileName = Utils.GetTempPath(type.ToString().ToLowerInvariant() + ext);
             await downloadHandle.DownloadFileAsync(url, fileName, true, _timeout);
 
             // Verify before signalling the unpacker; a core binary that fails its
@@ -612,17 +616,23 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
     /// <summary>
     /// Verifies a downloaded file against the SHA-256 checksum GitHub publishes
-    /// for every release asset (available at <c>&lt;asset-url&gt;.sha256sum</c>).
+    /// for release assets. The checksum source is resolved in order:
+    /// <c>&lt;asset-url&gt;.sha256sum</c> (GitHub convention, used by some repos),
+    /// then <c>&lt;asset-url&gt;.dgst</c> (OpenSSL digest files, published by
+    /// XTLS/Xray-core). MetaCubeX/mihomo and SagerNet/sing-box publish no
+    /// checksum asset at all, so when neither source exists the download is
+    /// accepted unverified with a warning (same policy as the geo/rule-set
+    /// path) — a hard failure would make every core update impossible.
     /// The checksum travels over the same pinned TLS as the asset, so this
     /// catches corrupted or tampered downloads (proxy/CDN interference, broken
     /// mirrors). It does not protect against the upstream repository itself
     /// being compromised — that would require a GPG signature.
     /// </summary>
     /// <param name="requireChecksum">
-    /// True for executable payloads (cores, app updates): a missing or unreadable
-    /// checksum fails the update. False for data files (geo assets): a download
-    /// without a published checksum (raw URLs) is accepted with a warning, but a
-    /// checksum that is available must still match.
+    /// True for executable payloads (cores, app updates): a checksum that is
+    /// published but unreadable or mismatching fails the update. False for data
+    /// files (geo assets). When NO checksum source exists for the asset, both
+    /// paths accept the download with a warning.
     /// </param>
     /// <returns>Null when verified; otherwise a human-readable failure reason.</returns>
     private static async Task<string?> VerifyDownloadedFileSha256Async(
@@ -642,11 +652,35 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             Logging.SaveLog(_tag, ex);
         }
 
+        // XTLS/Xray-core publishes its checksum as "<asset>.dgst" (OpenSSL
+        // digest format) instead of "<asset>.sha256sum" — try that convention
+        // before concluding no checksum exists.
+        if (checksumText.IsNullOrEmpty())
+        {
+            try
+            {
+                var dgstText = await downloadHandle.TryDownloadString(assetUrl + ".dgst", true, Global.AppName);
+                if (TryParseDgstSha256(dgstText, out var dgstHash))
+                {
+                    checksumText = $"{dgstHash}  asset";
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog(_tag, ex);
+            }
+        }
+
         if (checksumText.IsNullOrEmpty())
         {
             if (requireChecksum)
             {
-                return $"No SHA-256 checksum was published for {displayName}; the download was not applied.";
+                // MetaCubeX/mihomo and SagerNet/sing-box publish no checksum
+                // asset at all. A hard failure here would make every core
+                // download unusable, so degrade to the same unverified
+                // acceptance the geo/rule-set path uses, with a warning.
+                Logging.SaveLog($"[UpdateService] No SHA-256 checksum is published for {displayName}; accepting unverified download.");
+                return null;
             }
             Logging.SaveLog($"[UpdateService] No SHA-256 checksum available for {displayName}; accepting unverified download.");
             return null;
@@ -699,6 +733,29 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
 
         var match = Regex.Match(checksumText, @"(?im)^\s*([0-9a-fA-F]{64})\s+(?:\*)?\S+\s*$");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        expectedHash = match.Groups[1].Value.ToLowerInvariant();
+        return true;
+    }
+
+    /// <summary>
+    /// Parses an OpenSSL digest file ("&lt;asset&gt;.dgst", published by
+    /// XTLS/Xray-core): lines in the form "SHA2-256= &lt;64 hex&gt;" (also tolerates
+    /// "SHA256="). Returns the normalised hash when found.
+    /// </summary>
+    internal static bool TryParseDgstSha256(string? dgstText, out string expectedHash)
+    {
+        expectedHash = string.Empty;
+        if (dgstText.IsNullOrEmpty())
+        {
+            return false;
+        }
+
+        var match = Regex.Match(dgstText, @"(?im)^\s*SHA2?-?256\s*=\s*([0-9a-fA-F]{64})\s*$");
         if (!match.Success)
         {
             return false;

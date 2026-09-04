@@ -3,31 +3,46 @@ using System.Reactive.Concurrency;
 namespace ServiceLib.ViewModels;
 
 /// <summary>
-/// Powers the AoGPN "Connection Center" telemetry strip: live ping, packet-loss
-/// estimate and real proxy download/upload speeds with a 60-sample rolling history
-/// for the sparklines. Ping is measured through the local SOCKS proxy on a throttled
-/// loop; speeds come from the real-time statistics events the core already produces.
+/// AoGPN "Connection Center" telemetri şeridinin binding kabuğu (P0 Nihai Faz):
+/// tüm ölçüm ve hesaplama DashboardTrafficEngine'de yaşar; bu sınıf Changed
+/// olayını UI iş parçacığında reaktif özelliklere kopyalar ve sparkline'ları
+/// (SamplesChanged) tazeler. Durumun tek sahibi engine'dir.
 /// </summary>
 public class TelemetryDashboardViewModel : MyReactiveObject
 {
-    /// <summary>How many samples the sparklines keep (one per second ≈ 60 s).</summary>
-    public const int MaxSamples = 60;
-
     /// <summary>Raised after every sample is recorded so the view can redraw its sparklines.</summary>
     public event Action? SamplesChanged;
 
-    private readonly object _lock = new();
-    private readonly List<double> _pingSamples = [];
-    private readonly List<double> _downSamples = [];
-    private readonly List<double> _upSamples = [];
-    private readonly SemaphoreSlim _pingGate = new(1, 1);
+    private readonly DashboardTrafficEngine _engine = new();
 
-    private CancellationTokenSource? _cts;
-    private bool _active;
-    private const double KilobytesPerSecondToMegabitsPerSecond = 8.0 * 1024.0 / 1_000_000.0;
+    public TelemetryDashboardViewModel()
+    {
+        _engine.Changed += OnEngineChanged;
+    }
 
-    private int _pingTotal;
-    private int _pingMisses;
+    private void OnEngineChanged()
+    {
+        RxSchedulers.MainThreadScheduler.Schedule(() =>
+        {
+            IsConnected = _engine.IsConnected;
+            StatusText = _engine.StatusText;
+            PingValue = _engine.PingValue;
+            PingText = _engine.PingText;
+            PingQuality = _engine.PingQuality;
+            LossValue = _engine.LossValue;
+            LossText = _engine.LossText;
+            LossQuality = _engine.LossQuality;
+            DownValue = _engine.DownValue;
+            DownText = _engine.DownText;
+            UpValue = _engine.UpValue;
+            UpText = _engine.UpText;
+            DownFraction = _engine.DownFraction;
+            UpFraction = _engine.UpFraction;
+            DownGaugeMax = _engine.DownGaugeMax;
+            UpGaugeMax = _engine.UpGaugeMax;
+            SamplesChanged?.Invoke();
+        });
+    }
 
     [Reactive] public bool IsConnected { get; set; }
 
@@ -69,84 +84,22 @@ public class TelemetryDashboardViewModel : MyReactiveObject
     /// <summary>Full-scale Mbps value the upload gauge currently maps to.</summary>
     [Reactive] public double UpGaugeMax { get; set; } = 12;
 
-    /// <summary>
-    /// Nice round full-scale values for the adaptive gauges. The scale grows
-    /// instantly to the first value above the observed peak (15% headroom) so a
-    /// fast link never pegs the dial, and decays slowly back toward the floor
-    /// while the link is idle so a slow link stays legible.
-    /// </summary>
-    private static readonly double[] NiceGaugeScales = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
-
-    private static double NextNiceScale(double mbps, double floor)
-    {
-        foreach (var scale in NiceGaugeScales)
-        {
-            if (scale >= mbps * 1.15 && scale >= floor)
-            {
-                return scale;
-            }
-        }
-        return NiceGaugeScales[^1];
-    }
-
-    private static double CalibrateGauge(double currentScale, double mbps, double floor)
-    {
-        if (mbps >= currentScale * 0.85)
-        {
-            return NextNiceScale(mbps, floor);
-        }
-
-        // Shrink in nice steps, only when the link is meaningfully below the
-        // current full-scale — steady traffic keeps a stable scale instead of
-        // decaying every sample.
-        if (mbps < currentScale * 0.5 && currentScale > floor)
-        {
-            var candidate = floor;
-            foreach (var scale in NiceGaugeScales)
-            {
-                if (scale < currentScale && scale >= floor)
-                {
-                    candidate = scale;
-                }
-            }
-            return mbps < candidate * 0.85 ? candidate : currentScale;
-        }
-        return currentScale;
-    }
-
-    public TelemetryDashboardViewModel()
-    {
-        AppEvents.DispatcherStatisticsRequested
-            .AsObservable()
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(OnStatistics);
-    }
-
     /// <summary>Snapshot of the ping history (newest last). Doubles may be NaN = lost sample.</summary>
     public double[] GetPingSamples()
     {
-        lock (_lock)
-        {
-            return _pingSamples.ToArray();
-        }
+        return _engine.GetPingSamples();
     }
 
     /// <summary>Snapshot of the download history in Mbps.</summary>
     public double[] GetDownSamples()
     {
-        lock (_lock)
-        {
-            return _downSamples.ToArray();
-        }
+        return _engine.GetDownSamples();
     }
 
     /// <summary>Snapshot of the upload history in Mbps.</summary>
     public double[] GetUpSamples()
     {
-        lock (_lock)
-        {
-            return _upSamples.ToArray();
-        }
+        return _engine.GetUpSamples();
     }
 
     /// <summary>
@@ -155,229 +108,6 @@ public class TelemetryDashboardViewModel : MyReactiveObject
     /// </summary>
     public void SetActive(bool active)
     {
-        if (active == _active)
-        {
-            return;
-        }
-        _active = active;
-        if (active)
-        {
-            _cts?.Cancel();
-            _cts = new CancellationTokenSource();
-            _ = LoopAsync(_cts.Token);
-        }
-        else
-        {
-            _cts?.Cancel();
-            _cts = null;
-        }
-    }
-
-    private async Task LoopAsync(CancellationToken token)
-    {
-        while (!token.IsCancellationRequested)
-        {
-            try
-            {
-                var connected = AppManager.Instance.IsRunningCore(ECoreType.sing_box)
-                    || AppManager.Instance.IsRunningCore(ECoreType.Xray);
-                RxSchedulers.MainThreadScheduler.Schedule(() => ApplyConnectionState(connected));
-
-                if (connected)
-                {
-                    await MeasurePingAsync(token);
-                }
-            }
-            catch (Exception ex)
-            {
-                Logging.SaveLog("TelemetryDashboard.Loop", ex);
-            }
-
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(2), token);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-        }
-    }
-
-    private async Task MeasurePingAsync(CancellationToken token)
-    {
-        // The dashboard is only on screen while the main window is visible; skip
-        // measuring (and the network chatter) when the app sits in the tray.
-        if (!AppManager.Instance.ShowInTaskbar)
-        {
-            return;
-        }
-
-        // Never overlap pings — if the previous one is still running, skip this tick.
-        if (!await _pingGate.WaitAsync(0, token))
-        {
-            return;
-        }
-        try
-        {
-            var ping = -1;
-            try
-            {
-                var port = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
-                var proxy = new WebProxy($"socks5://{Global.Loopback}:{port}");
-                // Generous per-sample budget: a distant/slow tunnel round-trip
-                // routinely exceeds the tight 4s used elsewhere, and a miss here
-                // made the dashboard ping flicker to "--". The _pingGate already
-                // prevents overlapping probes, so extra headroom is cheap.
-                ping = await ConnectionHandler.GetRealPingTime(proxy, 8);
-            }
-            catch (Exception ex)
-            {
-                Logging.SaveLog("TelemetryDashboard.Ping", ex);
-                ping = -1;
-            }
-
-            if (token.IsCancellationRequested)
-            {
-                return;
-            }
-
-            var result = ping;
-            RxSchedulers.MainThreadScheduler.Schedule(() => RecordPing(result));
-        }
-        finally
-        {
-            _pingGate.Release();
-        }
-    }
-
-    private void RecordPing(int ping)
-    {
-        _pingTotal++;
-        if (ping <= 0)
-        {
-            _pingMisses++;
-            PushSample(_pingSamples, double.NaN);
-            PingValue = -1;
-            PingText = "--";
-            PingQuality = "zaman aşımı";
-        }
-        else
-        {
-            PingValue = ping;
-            PingText = ping.ToString();
-            PingQuality = ping switch
-            {
-                <= 10 => "mükemmel",
-                <= 30 => "iyi",
-                <= 60 => "orta",
-                _ => "yavaş",
-            };
-            PushSample(_pingSamples, ping);
-        }
-
-        UpdateLoss();
-        RaiseSamplesChanged();
-    }
-
-    private void OnStatistics(ServerSpeedItem update)
-    {
-        if (update is null)
-        {
-            return;
-        }
-
-        // StatisticsXray/Singbox normalize their byte counters to KB/s before
-        // publishing ServerSpeedItem; convert that shared unit to Mbps for the UI.
-        var downMbps = update.ProxyDown * KilobytesPerSecondToMegabitsPerSecond;
-        var upMbps = update.ProxyUp * KilobytesPerSecondToMegabitsPerSecond;
-
-        DownValue = Math.Max(0, downMbps);
-        UpValue = Math.Max(0, upMbps);
-        DownText = DownValue.ToString("0.0");
-        UpText = UpValue.ToString("0.0");
-        DownGaugeMax = CalibrateGauge(DownGaugeMax, DownValue, 25);
-        UpGaugeMax = CalibrateGauge(UpGaugeMax, UpValue, 12);
-        DownFraction = Math.Min(1.0, DownValue / DownGaugeMax);
-        UpFraction = Math.Min(1.0, UpValue / UpGaugeMax);
-        PushSample(_downSamples, DownValue);
-        PushSample(_upSamples, UpValue);
-        RaiseSamplesChanged();
-    }
-
-    private void UpdateLoss()
-    {
-        if (_pingTotal <= 0)
-        {
-            LossValue = -1;
-            LossText = "--";
-            LossQuality = "kararlı";
-            return;
-        }
-        var loss = _pingMisses * 100.0 / _pingTotal;
-        LossValue = loss;
-        LossText = loss.ToString("0.0");
-        LossQuality = loss switch
-        {
-            0 => "kararlı",
-            < 5 => "düşük",
-            < 20 => "dikkat",
-            _ => "yüksek",
-        };
-    }
-
-    private void ApplyConnectionState(bool connected)
-    {
-        if (connected == IsConnected)
-        {
-            return;
-        }
-        IsConnected = connected;
-        StatusText = connected ? "BAĞLI" : "ÇEVRİMDIŞI";
-
-        if (!connected)
-        {
-            // Fresh session look: reset the strip to the design's idle state.
-            PingValue = -1;
-            PingText = "--";
-            PingQuality = "ölçülüyor…";
-            LossValue = -1;
-            LossText = "--";
-            LossQuality = "kararlı";
-            DownValue = 0;
-            UpValue = 0;
-            DownText = "0.0";
-            UpText = "0.0";
-            DownFraction = 0;
-            UpFraction = 0;
-            DownGaugeMax = 25;
-            UpGaugeMax = 12;
-            _pingTotal = 0;
-            _pingMisses = 0;
-            lock (_lock)
-            {
-                _pingSamples.Clear();
-                _downSamples.Clear();
-                _upSamples.Clear();
-            }
-            RaiseSamplesChanged();
-        }
-    }
-
-    private void PushSample(List<double> samples, double value)
-    {
-        lock (_lock)
-        {
-            samples.Add(value);
-            if (samples.Count > MaxSamples)
-            {
-                samples.RemoveAt(0);
-            }
-        }
-    }
-
-    private void RaiseSamplesChanged()
-    {
-        SamplesChanged?.Invoke();
+        _engine.SetActive(active);
     }
 }

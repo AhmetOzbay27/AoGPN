@@ -232,6 +232,9 @@ public class RoutingDriftHealthCheckIntegrationTests
 {
     private static async Task CleanAsync()
     {
+        // Tabloları AppManager.InitApp yaratır ama test host'u onu hiç çalıştırmaz;
+        // temiz bir bin'de guiNDB.db tablosuzdur — temizlikten önce eksikleri yarat.
+        CreateTables();
         foreach (var r in await SQLiteHelper.Instance.TableAsync<RoutingItem>().ToListAsync())
         {
             await SQLiteHelper.Instance.DeleteAsync(r);

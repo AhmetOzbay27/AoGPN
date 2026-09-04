@@ -260,19 +260,24 @@ public sealed class GpnTargetResolverBridge : IDisposable
     public static string[] ExtractTargetNames(IEnumerable<SplitTunnelAppItem> apps, bool invertManual = false)
     {
         ArgumentNullException.ThrowIfNull(apps);
-        // Efektif tünellenen eylem: beyaz listede "vpn" (ve WARP egress "warp" —
-        // o da tünelden geçer); kara listede kurallar "direct" girişleri tünele
-        // çevirdiği için "direct" (warp kara listede istisna = direct olur).
-        var tunneledActions = invertManual
-            ? new[] { "direct" }
-            : new[] { "vpn", "warp" };
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var names = new List<string>();
         foreach (var app in apps)
         {
             if (app is null
                 || !string.Equals(app.EntryType, "app", StringComparison.OrdinalIgnoreCase)
-                || !tunneledActions.Contains(app.Action, StringComparer.OrdinalIgnoreCase))
+                || app.Action.IsNullOrEmpty())
+            {
+                continue;
+            }
+            // Yakalama kararı yönlendirme OTORİTESİNDEN gelir (Tier 2 — rota
+            // merkezileştirmesi): varışı tünel ya da WARP egress olan "app" girişleri
+            // yakalanır (beyaz listede vpn/warp; kara listede kuralların tünele
+            // çevirdiği "direct"). Kurallar ve yakalama köprüsü böylece AYNI karar
+            // kaynağını kullanır — iki ayrı eylem tablosu sürüklenemez. (Legacy
+            // "proxy"/"vpn+proxy" satırları da kuralların tünellediği gibi yakalanır.)
+            var destination = GpnRoutingRuleService.ResolveDestination(app.Action, invertManual);
+            if (!GpnRoutingRuleService.IsCapturedByNativeTunnel(destination))
             {
                 continue;
             }

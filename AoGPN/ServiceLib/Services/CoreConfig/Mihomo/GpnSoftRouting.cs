@@ -88,38 +88,28 @@ public static class GpnSoftRouting
     /// </summary>
     public static string MapActionToMember(string? action, bool invertManual, string? warpEgressProxy = null)
     {
-        if (invertManual)
+        // Eylem + yön kararı tek otoritede (GpnRoutingRuleService.ResolveDestination —
+        // kara liste çevirisi dahil); burada yalnızca Clash üye adına çevrilir.
+        var destination = GpnRoutingRuleService.ResolveDestination(action, invertManual);
+        return destination switch
         {
-            // Kara liste (dışlama): listelenen girişler istisnadır. Tünel-benzeri
-            // seçimler (vpn/warp) direct'e, açık "direct" tünele, block block'a kalır.
-            return action switch
-            {
-                "direct" => GpnMihomoConfigService.NodesGroupName,
-                "block" => ClashReject,
-                _ => ClashDirect,
-            };
-        }
-        return action switch
-        {
-            "direct" => ClashDirect,
-            "block" => ClashReject,
+            GpnRoutingDestination.Direct => ClashDirect,
+            GpnRoutingDestination.Block => ClashReject,
             // Çift Bağlantıda "warp" (temiz/auth egress) vless-launcher'a gider;
             // bypass yoksa legacy WARP SOCKS zinciri (warp-socks) kullanılır.
-            "warp" => !string.IsNullOrEmpty(warpEgressProxy) ? warpEgressProxy : GpnMihomoConfigService.WarpProxyName,
-            _ => GpnMihomoConfigService.NodesGroupName, // vpn / proxy / vpn+proxy / bilinmeyen → tünel
+            GpnRoutingDestination.WarpEgress => !string.IsNullOrEmpty(warpEgressProxy) ? warpEgressProxy! : GpnMihomoConfigService.WarpProxyName,
+            _ => GpnMihomoConfigService.NodesGroupName, // Tunnel → düğüm grubu
         };
     }
 
     /// <summary>Yakalayıcı (unlisted) hedefi: mod + yön → DIRECT ya da tünel grubu.</summary>
     public static string ModeTarget(int mode, bool invertManual)
-    {
-        return mode switch
+        => GpnRoutingRuleService.ResolveCatchAll(mode, invertManual) switch
         {
-            GameTriggerModes.Vpn => GpnMihomoConfigService.NodesGroupName,
-            GameTriggerModes.Manual when invertManual => GpnMihomoConfigService.NodesGroupName,
+            // Yakalayıcı yalnızca DIRECT ya da tünele gider (WarpEgress/Block olamaz).
+            GpnRoutingDestination.Tunnel => GpnMihomoConfigService.NodesGroupName,
             _ => ClashDirect,
         };
-    }
 
     /// <summary>
     /// İstenen politika için tam seçim vektörü (mod hedefi + her girişin hedefi).
@@ -158,13 +148,10 @@ public static class GpnSoftRouting
         var ci = config.ConnectionItem;
         var mode = ci?.Mode ?? GameTriggerModes.Off;
         var invert = ci?.InvertManualRouting ?? false;
-        var entries = (ci?.ManualRoutes ?? [])
-            .Where(r => r.Value.IsNotEmpty())
-            .Select(r => new GpnSoftRoutingEntry(
-                r.EntryType,
-                r.Value,
-                r.Port ?? "",
-                r.Action ?? "vpn"))
+        // Girişlerin normalize edilmesi tek otoritededir (boş değer atlama + port/eylem
+        // varsayılanları) — uygulama listesi aşırı yüklemesiyle aynı kod yolu.
+        var entries = GpnRoutingRuleService.NormalizeEntries((ci?.ManualRoutes ?? []).Select(GpnRouteEntry.From))
+            .Select(e => new GpnSoftRoutingEntry(e.EntryType, e.Value, e.Port, e.Action))
             .ToList();
         return new GpnSoftRoutingPolicy(mode, invert, entries, ResolveWarpEgressProxy(config));
     }
@@ -180,13 +167,8 @@ public static class GpnSoftRouting
         IEnumerable<SplitTunnelAppItem> apps,
         Config? config = null)
     {
-        var entries = apps
-            .Where(a => a.Value.IsNotEmpty())
-            .Select(a => new GpnSoftRoutingEntry(
-                a.EntryType,
-                a.Value,
-                a.Port ?? "",
-                a.Action ?? "vpn"))
+        var entries = GpnRoutingRuleService.NormalizeEntries(apps.Select(GpnRouteEntry.From))
+            .Select(e => new GpnSoftRoutingEntry(e.EntryType, e.Value, e.Port, e.Action))
             .ToList();
         return new GpnSoftRoutingPolicy(mode, invertManualRouting, entries, ResolveWarpEgressProxy(config));
     }

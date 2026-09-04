@@ -421,3 +421,10 @@ AoGPN/CyberPunk.html
 AoGPN/dns-user-check.yaml
 AoGPN/tmp-cleanup.ps1
 AoGPN/tmp-mihomo/
+
+# Core bundle builder output (make-core-bundles.ps1)
+out-core-bundles/
+
+# P1 dead/residual files quarantine (2026-09-03) — deleted-file graveyard, never commit
+.icon-inspect/
+Silinecekler_Yedek/

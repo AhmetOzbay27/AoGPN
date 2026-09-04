@@ -55,6 +55,22 @@ public record CoreConfigContext
     /// </summary>
     public VlessProfileItem? GpnVlessBypass { get; init; }
 
+    /// <summary>
+    /// True: bu bağlam HARİCİ bir çekirdek süreci yerine uygulama-içi YEREL GPN
+    /// motorunu (WinDivert yakalama + WireGuard veri düzlemi + Wintun adaptörü —
+    /// ServiceLib/Services/Gpn) ister. CoreStartStrategyFactory.For(context) bu
+    /// bayrağı gördüğünde süreç tabanlı strateji yerine NativeGpnStartStrategy'yi
+    /// seçer; bayrak yalnızca WireGuard düğümleriyle anlamlıdır.
+    ///
+    /// DORMANT YUVA (P0 — Native GPN Motoru): şu an hiçbir çağıran bu bayrağı
+    /// kurmaz — CoreConfigContextBuilder/koordinatör/launcher mihomo yolunu
+    /// üretir ve mevcut akış birebir aynı çalışır. Tier 1'de koordinatör bu
+    /// bayrağı kurup köprüyü stratejiye bağlayınca motor birincil tünel olur
+    /// (CoreManager'ın süreçsiz-çekirdek dalıyla birlikte — şu an süreçsiz bir
+    /// strateji LoadCore'un süreç-hazır yoluna girmez).
+    /// </summary>
+    public bool UseNativeGpnEngine { get; init; } = false;
+
     public HashSet<string> ProtectDomainList { get; init; } = [];
     // Typically, it is the core of the outbound chain
     public HashSet<ECoreType> ProtectCoreTypeList { get; init; } = [];

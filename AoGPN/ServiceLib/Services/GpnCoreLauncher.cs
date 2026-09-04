@@ -105,6 +105,18 @@ public sealed class GpnCoreLauncher : IGpnConnectionLauncher
             var mainContext = allResult.MainResult.Context;
             if (mode == ConnectionMode.WireGuardUDP)
             {
+                // Tier 1 — The Live Flip: native motor aktivasyon anahtarı. Açıkken
+                // bağlam UseNativeGpnEngine taşır → CoreManager (strateji fabrikası)
+                // yerel in-process motoru (WinDivert + WireGuard + Wintun) seçer;
+                // kapalıyken (varsayılan — mihomo canlı doğrulanmıştır) mevcut yolu
+                // birebir korur. Açılış tek satır: NativeGpnEnginePolicy.IsEnabled = true
+                // (kompozisyon kökü; sürücülü ortamda doğrulandıktan sonra).
+                if (NativeGpnEnginePolicy.IsEnabled)
+                {
+                    mainContext = mainContext with { UseNativeGpnEngine = true };
+                    DiagLog.Write("GPN_LAUNCH native engine policy ENABLED — in-process engine selected");
+                }
+
                 var softContext = mainContext with
                 {
                     GpnSoftPolicy = GpnSoftRouting.BuildPolicy(_config),

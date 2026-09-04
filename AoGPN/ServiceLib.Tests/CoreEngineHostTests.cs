@@ -255,6 +255,112 @@ public sealed class CoreEngineHostTests
         }
     }
 
+    [Fact]
+    public async Task StartAsync_NativeInProcessEngine_SkipsBinaryValidationAndInstaller()
+    {
+        // Tier 2 — native motor izolasyonu: seçilen strateji in-process ise
+        // (UseNativeGpnEngine + WireGuard düğümü → NativeGpnStartStrategy) harici
+        // mihomo.exe yokluğu başlatmayı ENGELLEMEZ — motor saf C#'tır. Boş binary
+        // kökü + başarısız kurucu bile olsa StartAsync runtime'ı başlatır.
+        var runtime = new RecordingRuntime();
+        var installerCalls = new List<ECoreType>();
+        var tempRoot = CreateTempDirectory();
+        try
+        {
+            var registry = new CoreBinaryRegistry(tempRoot, () => true); // boş — mihomo exe yok
+            var host = new CoreEngineHost(
+                new Config(),
+                (_, _) => Task.CompletedTask,
+                runtime: runtime,
+                binaryRegistry: registry,
+                resetProxy: () => Task.CompletedTask,
+                autoCoreInstaller: (coreType, _, _) =>
+                {
+                    installerCalls.Add(coreType);
+                    return Task.FromResult(false);
+                });
+
+            var context = new CoreConfigContext
+            {
+                Node = new ProfileItem
+                {
+                    IndexId = "gpn-native",
+                    ConfigType = EConfigType.WireGuard,
+                    CoreType = ECoreType.mihomo,
+                    Address = "127.0.0.1",
+                    Port = 51820,
+                },
+                RunCoreType = ECoreType.mihomo,
+                UseNativeGpnEngine = true,
+            };
+
+            await host.StartAsync(context, null, TestContext.Current.CancellationToken);
+
+            runtime.StartCount.Should().Be(1, "native bağlam doğrulama bekletmeden başlar");
+            installerCalls.Should().BeEmpty("in-process motor mihomo.exe indirmez");
+
+            await host.StopAsync(TestContext.Current.CancellationToken);
+            await host.DisposeAsync();
+        }
+        finally
+        {
+            DeleteTempDirectory(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_DormantContext_StillRequiresMihomoBinary()
+    {
+        // Koruma kuralı: şalter KAPALIYKEN (UseNativeGpnEngine=false — üretimdeki
+        // mihomo yolu) binary süreci zerre değişmez: boş kök + başarısız kurucu →
+        // runtime BAŞLAMAZ, "required mihomo" hatası fırlar (CoreAutoInstallTests
+        // ile aynı davranış).
+        var runtime = new RecordingRuntime();
+        var installerCalls = new List<ECoreType>();
+        var tempRoot = CreateTempDirectory();
+        try
+        {
+            var registry = new CoreBinaryRegistry(tempRoot, () => true);
+            var host = new CoreEngineHost(
+                new Config(),
+                (_, _) => Task.CompletedTask,
+                runtime: runtime,
+                binaryRegistry: registry,
+                resetProxy: () => Task.CompletedTask,
+                autoCoreInstaller: (coreType, _, _) =>
+                {
+                    installerCalls.Add(coreType);
+                    return Task.FromResult(false);
+                });
+
+            var context = new CoreConfigContext
+            {
+                Node = new ProfileItem
+                {
+                    IndexId = "gpn-dormant",
+                    ConfigType = EConfigType.WireGuard,
+                    CoreType = ECoreType.mihomo,
+                    Address = "127.0.0.1",
+                    Port = 51820,
+                },
+                RunCoreType = ECoreType.mihomo,
+                UseNativeGpnEngine = false,
+            };
+
+            var act = async () => await host.StartAsync(context, null, TestContext.Current.CancellationToken);
+
+            (await act.Should().ThrowAsync<InvalidOperationException>())
+                .WithMessage("*required mihomo*");
+            runtime.StartCount.Should().Be(0, "binary doğrulanamadan runtime başlatılmaz");
+            installerCalls.Should().ContainSingle(x => x == ECoreType.mihomo,
+                "eksik mihomo yine de indirme denenir (davranış değişmez)");
+        }
+        finally
+        {
+            DeleteTempDirectory(tempRoot);
+        }
+    }
+
     private sealed class RecordingRuntime : ICoreRuntime
     {
         private int _activeOperations;

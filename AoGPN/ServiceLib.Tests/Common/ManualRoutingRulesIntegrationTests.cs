@@ -26,6 +26,9 @@ public class ManualRoutingRulesIntegrationTests
     /// <summary>Ensures no leftover routing items from other test suites interfere.</summary>
     private static async Task CleanRoutingItemsAsync()
     {
+        // Tabloları AppManager.InitApp yaratır ama test host'u onu hiç çalıştırmaz;
+        // temiz bir bin'de guiNDB.db tablosuzdur ve bu sorgu "no such table" ile düşer.
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
         var all = await SQLiteHelper.Instance.TableAsync<RoutingItem>().ToListAsync();
         foreach (var r in all)
         {

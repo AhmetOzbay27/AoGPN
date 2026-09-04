@@ -218,8 +218,10 @@ public static class CoreConfigHandler
     /// ProfileItem'ı (GPN launcher'ın BuildWireGuardProfile çıktısı) üreticinin
     /// beklediği GpnServerProfile kaydına geri çevirir. Tüm alanlar protocol
     /// extra'da taşınır (WgPublicKey, WgInterfaceAddress, WgMtu, keepalive).
+    /// internal: NativeGpnStartStrategy (yerel motor köprü başlatması) aynı
+    /// çeviriyi kullanır — tek kaynak, sürüklenme yok.
     /// </summary>
-    private static GpnServerProfile ToGpnServerProfile(ProfileItem node)
+    internal static GpnServerProfile ToGpnServerProfile(ProfileItem node)
     {
         var extra = node.GetProtocolExtra();
         var id = node.IndexId.StartsWith("gpn-", StringComparison.Ordinal)

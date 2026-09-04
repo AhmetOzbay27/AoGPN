@@ -37,10 +37,27 @@ public static class GpnServiceCollectionExtensions
         // kanıtı (SelectBestServer'in Tier kararının güçlendirilmiş sürümü).
         services.AddSingleton<IWireGuardHandshakeProbe, WireGuardHandshakeProbe>();
 
-        // GpnServerSelectionService — paralel ICMP + UDP sağlık testi +
-        // ConnectionMode kararı (WireGuardUDP / V2rayTCP fallback).
-        // UdpHealthChecker'ı ctor'dan alır; DI zincir otomatik kurar.
-        services.AddSingleton<IGpnServerSelectionService, GpnServerSelectionService>();
+        // GpnServerProber — ağ test motoru (ICMP/TCP/UDP + el sıkışma). P0 Faz 2
+        // katmanlamasında ölçüm GpnServerSelectionService'ten ayrıldı; singleton
+        // olarak paylaşılır (seçim + failover + dashboard aynı örneği kullanır).
+        services.AddSingleton<GpnServerProber>();
+
+        // GpnHairpinDetector — hairpin (kendi genel IP'si) teşhisi; own-IP önbelleği
+        // bu singleton üzerinde yaşar (GpnServerSelectionService ile paylaşılır).
+        services.AddSingleton<GpnHairpinDetector>();
+
+        // GpnServerSelectionService — orkestratör: paralel ICMP + UDP sağlık testi
+        // (GpnServerProber), hairpin teşhisi (GpnHairpinDetector) ve saf kararlar
+        // (GpnDecision) üzerinden ConnectionMode kararı (WireGuardUDP / V2rayTCP
+        // fallback). Ctor internal'dır (alt servis tipleri internal) — DI bu yüzden
+        // factory ile kurar; DI dışı (new) kullanımda checker'lar ctor opsiyonelleriyle
+        // verilir (örn. testler sahte IUdpHealthChecker enjekte eder).
+        services.AddSingleton<IGpnServerSelectionService>(sp => new GpnServerSelectionService(
+            udpHealthChecker: sp.GetRequiredService<IUdpHealthChecker>(),
+            wireGuardProbe: sp.GetRequiredService<IWireGuardHandshakeProbe>(),
+            ownPublicIpProvider: null,
+            prober: sp.GetRequiredService<GpnServerProber>(),
+            hairpinDetector: sp.GetRequiredService<GpnHairpinDetector>()));
 
         // Mevcut paralel ping koordinatörü — uygulamanın hız testi altyapısıyla
         // aynı örnek üzerinde paylaşılır (uygulama DI'ya geçtiğinde).
@@ -75,6 +92,40 @@ public static class GpnServiceCollectionExtensions
         // GpnResilienceLog — son 50 GpnResilience kararını tutan döngüsel tampon;
         // dosyaya yazarak sorun giderme penceresi sunar.
         services.AddSingleton<GpnResilienceLog>();
+
+        // P0 Faz 3 — Split-tunnel alt servisleri: oyun otomatik tetikleyici (durum
+        // makinesi + süreç taraması) ve canlı telemetri izdüşümü. SplitTunnelViewModel
+        // bunları şu an doğrudan kurar (Lazy/manual kompozisyon); DI'ya geçildiğinde
+        // singleton olarak buradan bağlanırlar (durum süreç boyunca tek örnekte yaşar).
+        services.AddSingleton<GameAutoTriggerService>();
+        services.AddSingleton<GpnTelemetryMonitorService>();
+
+        // P0 Nihai Faz — bağlantı + trafik veri motorları (DashboardConnectionEngine /
+        // DashboardTrafficEngine): OS bağlantı tablosu + /connections trafiği ve
+        // istatistik olayı → Mbps/kayıp/ping matematiği. ViewModel kabukları şu an
+        // doğrudan kurar (Lazy/manual kompozisyon); DI'ya geçildiğinde buradan bağlanır.
+        services.AddSingleton<DashboardConnectionEngine>();
+        services.AddSingleton<DashboardTrafficEngine>();
+
+        // CoreManager strateji kayıtları (P0: Başlatma Yöneticisinin Parçalanması):
+        // çekirdek başına başlatma politikası (mihomo own-TUN + WG host rotası,
+        // sing-box/Xray standart, openvpn native-tunnel varsayılanı). CoreManager
+        // şu an Lazy singleton kompozisyonla CoreStartStrategyFactory üzerinden
+        // çözer; DI'ya geçildiğinde buradan bağlanırlar (stateless — örnek paylaşımı
+        // güvenlidir). Varsayılan strateji DI'da standart politikayla çözülür;
+        // openvpn eşlemesi için CoreStartStrategyFactory kullanılmalıdır.
+        services.AddSingleton<MihomoStartStrategy>(_ => MihomoStartStrategy.Instance);
+        services.AddSingleton<SingboxStartStrategy>(_ => SingboxStartStrategy.Instance);
+        services.AddSingleton<XrayStartStrategy>(_ => XrayStartStrategy.Instance);
+        services.AddSingleton<DefaultCoreStartStrategy>(_ => DefaultCoreStartStrategy.Instance);
+
+        // P0 — Native GPN Motoru: yerel (in-process) WinDivert + WireGuard + Wintun
+        // motorunun strateji soketi. Köprüsüz dormant örnek — StartAsync ancak
+        // köprü delege çiftiyle kurulmuş bir örnekte motoru canlıya alır
+        // (NativeGpnStartStrategy ctor; Tier 1 flip'i GpnCoreLauncher'ın
+        // captureBridge deseninin aynısıyla bağlanır). Fabrika bu örneği yalnızca
+        // UseNativeGpnEngine bayrağı kuran WireGuard bağlamlarında seçer.
+        services.AddSingleton<NativeGpnStartStrategy>(_ => NativeGpnStartStrategy.Instance);
 
         // GpnCaptureSettingsProvider — WinDivertOpenParams yapılandırmasını
         // (queue len/time/size + katman/yön) kullanıcı config'inden (GpnCaptureItem)

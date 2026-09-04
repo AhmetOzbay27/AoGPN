@@ -308,7 +308,9 @@ public class CertPemManager
 
     private bool IsSystemRootCertProvider()
     {
-        return _config.GuiItem.RootCertProvider != Global.ChromeRootProvider && _config.GuiItem.RootCertProvider != Global.MozillaRootProvider;
+        // Uninitialized (no config yet — e.g. tests or a download before Init):
+        // treat as the system provider, i.e. no custom pinning, instead of crashing.
+        return _config?.GuiItem.RootCertProvider != Global.ChromeRootProvider && _config?.GuiItem.RootCertProvider != Global.MozillaRootProvider;
     }
 
     public X509ChainPolicy? BuildCertificateChainPolicy()
