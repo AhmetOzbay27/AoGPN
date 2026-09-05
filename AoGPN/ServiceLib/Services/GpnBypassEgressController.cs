@@ -10,8 +10,8 @@ namespace ServiceLib.Services;
 /// hatalarını sayar) faulted duruma geçince, çalışan mihomo superset oturumunda
 /// launcher/API egress'ini ÇEKİRDEĞİ YENİDEN BAŞLATMADAN DIRECT'e çevirir:
 ///
-///   PUT /proxies/GPN-BSG  → DIRECT   (sabit BSG DOMAIN-SUFFIX satırları)
-///   PUT /proxies/ao-&lt;i&gt;   → DIRECT   ("warp" rotalı girişler — ör. BsGLauncher.exe)
+///   PUT /proxies/GPN-LAUNCHER → DIRECT   (warp egress'li launcher DOMAIN-SUFFIX satırları)
+///   PUT /proxies/ao-&lt;i&gt;       → DIRECT   ("warp" rotalı girişler — ör. BsGLauncher.exe)
 ///
 /// Böylece WARP zinciri (sunucu wireproxy 10.66.66.1:40000 — yalnızca WG tüneli
 /// üzerinden erişilebilir) ölüyken launcher/auth trafiği dial hatası alıp WAF
@@ -22,13 +22,13 @@ namespace ServiceLib.Services;
 /// Kapılar (hepsi sağlanmazsa hiçbir şey uygulanmaz — davranış asla bozulmaz):
 ///   1) çalışan çekirdek mihomo'dur (soft oturum),
 ///   2) bağlantı Connected durumdadır,
-///   3) GPN-BSG ve hedeflenen ao-&lt;i&gt; grupları canlı config'te Selector'dür ve
+///   3) GPN-LAUNCHER ve hedeflenen ao-&lt;i&gt; grupları canlı config'te Selector'dür ve
 ///      istenen hedef üye listesindedir,
 ///   4) PUT sonrası geri-okuma ile seçimler doğrulanır (kısmi uygulama kabul edilmez).
 ///
 /// Kapsam notu: izleyici (WarpDialHealthMonitor) yalnızca legacy warp-socks
 /// zincirini izler — Çift Bağlantı (vless-launcher) modunda bu servis no-op'tur
-/// (GPN-BSG grubu da o biçimde üretilmez; satırlar doğrudan vless-launcher'a
+/// (GPN-LAUNCHER grubu da o biçimde üretilmez; satırlar doğrudan vless-launcher'a
 /// gider). Yumuşak uygulayıcıdan (GpnSoftPolicyApplier) bağımsızdır: mod/yön/
 /// giriş vektörünü değiştirmez, yalnızca launcher egress seçimini yönetir.
 /// Yeni bir fault olayı degrade durumunu yeniden doğrular (self-healing).
@@ -191,9 +191,10 @@ public sealed class GpnBypassEgressController : IDisposable
     }
 
     /// <summary>
-    /// Degrade değişim vektörü: GPN-BSG grubu + "warp" egress rotalı girişlerin
-    /// ao-&lt;i&gt; grupları → DIRECT. Yalnızca launcher egress'i etkiler; mod/yön/
-    /// giriş vektörü (GpnSoftPolicyApplier) değişmez.
+/// Degrade değişim vektörü: GPN-LAUNCHER grubu (warp egress'li launcher
+/// satırları) + "warp" egress rotalı girişlerin ao-&lt;i&gt; grupları → DIRECT.
+/// Yalnızca launcher egress'i etkiler; mod/yön/giriş vektörü
+/// (GpnSoftPolicyApplier) değişmez.
     /// </summary>
     private static IReadOnlyList<(string Group, string Target)> DegradeChanges(
         GpnSoftRoutingPolicy policy, string warpMember)
@@ -209,7 +210,7 @@ public sealed class GpnBypassEgressController : IDisposable
     {
         var changes = new List<(string Group, string Target)>
         {
-            (GpnSoftRouting.BsgGroupName, target),
+            (GpnSoftRouting.LauncherGroupName, target),
         };
         for (var i = 0; i < policy.Entries.Count; i++)
         {

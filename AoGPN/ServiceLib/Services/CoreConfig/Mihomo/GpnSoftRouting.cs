@@ -60,7 +60,7 @@ public static class GpnSoftRouting
     /// launcher trafiği hata almak yerine doğrudan çıkar ve WAF engeli yerine
     /// bağlantı korunur; sağlıklıyken grup warp egress'e döner.
     /// </summary>
-    public const string BsgGroupName = "GPN-BSG";
+    public const string LauncherGroupName = "GPN-LAUNCHER";
 
     /// <summary>Yakalayıcı (unlisted) hedef grubu: DIRECT | GPN-Nodes üyeleriyle.</summary>
     public const string ModeGroupName = "GPN-MODE";
@@ -119,14 +119,14 @@ public static class GpnSoftRouting
     /// canlı seçim PUT'larına çevrilir; üretici grubu varsayılan olarak sağlıklı
     /// hedefle açar.
     /// </summary>
-    public static string ResolveBsgEgressTarget(bool degraded, string? warpEgressProxy = null)
+    public static string ResolveLauncherEgressTarget(bool degraded, string? warpEgressProxy = null)
         => degraded
             ? ClashDirect
             : string.IsNullOrEmpty(warpEgressProxy) ? GpnMihomoConfigService.WarpProxyName : warpEgressProxy!;
 
-    /// <summary>BSG egress grubunun kanonik üye sırası: warp egress önce (varsayılan seçim), DIRECT sonra.</summary>
-    public static IReadOnlyList<string> BsgMemberOrder(string? warpEgressProxy = null)
-        => new[] { ResolveBsgEgressTarget(false, warpEgressProxy), ClashDirect };
+    /// <summary>Launcher egress grubunun kanonik üye sırası: warp egress önce (varsayılan seçim), DIRECT sonra.</summary>
+    public static IReadOnlyList<string> LauncherMemberOrder(string? warpEgressProxy = null)
+        => new[] { ResolveLauncherEgressTarget(false, warpEgressProxy), ClashDirect };
 
     /// <summary>Yakalayıcı (unlisted) hedefi: mod + yön → DIRECT ya da tünel grubu.</summary>
     public static string ModeTarget(int mode, bool invertManual)

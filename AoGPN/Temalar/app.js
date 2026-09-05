@@ -2330,6 +2330,9 @@
       }
     });
     refreshAllCustomSelects();
+    if (typeof data.launcherBypasses === 'string') {
+      setLauncherBypasses(data.launcherBypasses);
+    }
     if (data.platform && data.platform.isWindows && data.platform.isAdmin === false) {
       const hint = document.getElementById('st_tunAdminHint');
       if (hint) {
@@ -3750,6 +3753,10 @@
       }
     });
     s.destOverride = [...document.querySelectorAll('input[data-settings="destOverride"]:checked')].map(c => c.value);
+    // Launcher bypass düzenleyicisi ayrı bir bileşen olduğundan (satır ekleme/
+    // silme) formdan ayrı toplanır ve JSON liste olarak taşınır.
+    syncLauncherBypassesFromDom();
+    s.launcherBypasses = JSON.stringify(launcherBypasses);
     return s;
   }
 
@@ -3836,6 +3843,93 @@
       if (!postToHost({ action: 'set_vless_bypass_from_uri', uri })) {
         notifyNodes('No host bridge — cannot save the bypass node (preview)');
       }
+    });
+  }
+
+  // ── Launcher bypass düzenleyicisi (kullanıcı düzenlenebilir domain + egress) ──
+  // Host, window.setLauncherBypasses ile JSON listeyi yayınlar (boşsa yerleşik
+  // BSG varsayılanı host tarafında zaten üretilir); satırlar burada düzenlenir ve
+  // ana "Save Settings" akışıyla (collectSettings → launcherBypasses) kaydedilir.
+  const LAUNCHER_PRESETS = {
+    'BSG': { egress: 'warp', domains: ['escapefromtarkov.com', 'battlestategames.com', 'tarkov.com', 'escapefromtarkov.ru', 'prod.escapefromtarkov.com', 'launcher.escapefromtarkov.com', 'launcher.escapefromtarkov.ru', 'gw-pvp.escapefromtarkov.com', 'www.escapefromtarkov.com', 'profile.tarkov.com'] },
+    'Epic Games': { egress: 'warp', domains: ['epicgames.com', 'unrealengine.com'] },
+    'Steam': { egress: 'warp', domains: ['steampowered.com', 'steamgames.com', 'steamstatic.com'] },
+    'Riot': { egress: 'warp', domains: ['riotgames.com', 'riotcdn.net'] }
+  };
+  let launcherBypasses = [];
+  window.setLauncherBypasses = (json) => {
+    try {
+      const parsed = json ? JSON.parse(json) : [];
+      launcherBypasses = Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      launcherBypasses = [];
+    }
+    renderLauncherBypasses();
+  };
+  function launcherBypassRowHtml(item) {
+    const name = escHtml(String(item.name || 'Launcher'));
+    const domains = escHtml(Array.isArray(item.domains) ? item.domains.join(', ') : '');
+    const egress = item.egress === 'vless' || item.egress === 'direct' ? item.egress : 'warp';
+    const enabled = item.enabled !== false;
+    return `<div class="launcher-bypass-row flex flex-wrap items-center gap-2 border border-white/10 rounded-md px-3 py-2 bg-white/5 min-w-0">
+      <input data-lb-name type="text" value="${name}" placeholder="Name" class="w-28 min-w-0 bg-transparent text-xs text-slate-200 outline-none placeholder-[#5B6472]" />
+      <select data-lb-egress class="settings-select !w-auto !py-1 text-xs">
+        <option value="warp" ${egress === 'warp' ? 'selected' : ''}>WARP</option>
+        <option value="vless" ${egress === 'vless' ? 'selected' : ''}>VLESS</option>
+        <option value="direct" ${egress === 'direct' ? 'selected' : ''}>DIRECT</option>
+      </select>
+      <input data-lb-domains type="text" value="${domains}" placeholder="domain1.com, domain2.com" class="flex-1 min-w-0 bg-transparent text-xs font-mono text-slate-200 outline-none placeholder-[#5B6472]" />
+      <label class="flex items-center gap-1 text-[10px] text-[#64748B] whitespace-nowrap">
+        <input data-lb-enabled type="checkbox" ${enabled ? 'checked' : ''} class="accent-cyan-400" /> enabled
+      </label>
+      <button data-lb-remove type="button" title="Remove launcher" class="text-[#5B6472] hover:text-red-400 transition-colors text-sm leading-none">✕</button>
+    </div>`;
+  }
+  function renderLauncherBypasses() {
+    const host = document.getElementById('launcherBypassList');
+    if (!host) {
+      return;
+    }
+    host.innerHTML = launcherBypasses.map(launcherBypassRowHtml).join('');
+    host.querySelectorAll('[data-lb-remove]').forEach(btn => btn.addEventListener('click', () => {
+      const idx = [...host.querySelectorAll('[data-lb-remove]')].indexOf(btn);
+      launcherBypasses.splice(idx, 1);
+      renderLauncherBypasses();
+    }));
+  }
+  function syncLauncherBypassesFromDom() {
+    const host = document.getElementById('launcherBypassList');
+    if (!host) {
+      return;
+    }
+    const rows = [...host.querySelectorAll('.launcher-bypass-row')];
+    if (rows.length === 0) {
+      // Tüm satırlar silindiyse boş liste kaydedilir — bayat dizi geri dönmesin.
+      launcherBypasses = [];
+      return;
+    }
+    launcherBypasses = rows.map(row => ({
+      name: (row.querySelector('[data-lb-name]').value || '').trim() || 'Launcher',
+      domains: (row.querySelector('[data-lb-domains]').value || '').split(',').map(d => d.trim()).filter(Boolean),
+      egress: row.querySelector('[data-lb-egress]').value || 'warp',
+      enabled: row.querySelector('[data-lb-enabled]').checked
+    }));
+  }
+  const lbAddBtn = document.getElementById('launcherBypassAddBtn');
+  if (lbAddBtn) {
+    lbAddBtn.addEventListener('click', () => {
+      const presetSel = document.getElementById('launcherBypassPreset');
+      const key = presetSel ? presetSel.value : 'BSG';
+      const preset = LAUNCHER_PRESETS[key];
+      if (!preset) {
+        return;
+      }
+      if (launcherBypasses.some(l => l.name === key)) {
+        notifyNodes('Launcher is already in the list');
+        return;
+      }
+      launcherBypasses.push({ name: key, egress: preset.egress, domains: [...preset.domains], enabled: true });
+      renderLauncherBypasses();
     });
   }
 

@@ -2833,6 +2833,24 @@ body.effects-balanced #matrixRainCanvas {
                   <span id="vlessBypassStatus" class="text-[10px] text-[#5B6472] min-w-0">Loading…</span>
                 </div>
               </div>
+
+              <div class="settings-row !flex-col !items-stretch !gap-2 border-t border-white/10 pt-3">
+                <label class="settings-label">Launcher Bypass Domains</label>
+                <p class="text-[10px] text-[#64748B] leading-relaxed">Per-launcher domain lists exit through their own egress: <b class="text-slate-300">WARP</b> uses the launcher egress and degrades to DIRECT automatically while WARP is down (GpnBypassEgressController); <b class="text-slate-300">VLESS</b> requires the bypass node above (dual connection); <b class="text-slate-300">DIRECT</b> keeps launcher traffic off the tunnel entirely. Saved with the main Settings button — applied on the next connection without dropping a live session.</p>
+                <div id="launcherBypassList" class="flex flex-col gap-2 min-w-0"></div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <select id="launcherBypassPreset" class="settings-select !w-auto">
+                    <option value="BSG">BSG (EFT)</option>
+                    <option value="Epic Games">Epic Games</option>
+                    <option value="Steam">Steam</option>
+                    <option value="Riot">Riot</option>
+                  </select>
+                  <button id="launcherBypassAddBtn" type="button" class="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors">
+                    <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
+                    Add Launcher
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </section>

@@ -7,6 +7,7 @@ using ServiceLib.Helper;
 using ServiceLib.Models;
 using ServiceLib.Models.Configs;
 using ServiceLib.Services;
+using ServiceLib.Services.CoreConfig.Mihomo;
 using ServiceLib.ViewModels;
 
 namespace AoGPN.Services;
@@ -292,6 +293,16 @@ internal sealed class DashboardSettingsService
                 isMacOS = Utils.IsMacOS(),
                 isAdmin = Utils.IsAdministrator(),
             },
+            // Kullanıcı launcher-bypass listesi (JSON string) — dashboard düzenleyicisini
+            // besler; varsayılan (ayar boşsa) host tarafında üretilen BSG listesidir.
+            launcherBypasses = JsonSerializer.Serialize(
+                GpnLauncherBypass.ReadAll(config).Select(l => new
+                {
+                    name = l.Name,
+                    domains = l.Domains,
+                    egress = l.Egress,
+                    enabled = l.Enabled,
+                })),
         };
 
         var json = JsonSerializer.Serialize(payload);
@@ -391,6 +402,20 @@ internal sealed class DashboardSettingsService
         config.Fragment4RayItem.Lengths = fragmentLengths;
         config.Fragment4RayItem.Delays = fragmentDelays;
         config.Fragment4RayItem.MaxSplit = fragmentMaxSplit;
+
+        // Launcher bypass — kullanıcı düzenlenebilir launcher domain + egress listesi.
+        // Bozuk JSON kabul edilmez (varsayılan BSG davranışına sessizce düşmek yerine
+        // kayıt reddedilir); değişiklik sıradaki bağlantıda üretilen config'e yansır.
+        var launcherBypassesJson = GetSettingsString(settings, "launcherBypasses", config.GuiItem.LauncherBypassesJson);
+        if (!string.Equals(launcherBypassesJson, config.GuiItem.LauncherBypassesJson, StringComparison.Ordinal))
+        {
+            if (JsonUtils.Deserialize<List<LauncherBypassItem>>(launcherBypassesJson) is null)
+            {
+                await NotifySettingsSaveAsync(false, "Invalid launcher bypass list");
+                return;
+            }
+            config.GuiItem.LauncherBypassesJson = launcherBypassesJson;
+        }
 
         // General
         config.GuiItem.AutoRun = GetSettingsBool(settings, "autoRun", config.GuiItem.AutoRun);

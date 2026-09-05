@@ -81,7 +81,7 @@ public class GpnBypassEgressControllerTests
         bool connected = false)
     {
         var clash = new FakeClash();
-        clash.AddSelector(GpnSoftRouting.BsgGroupName, WarpSocks, GpnSoftRouting.ClashDirect)
+        clash.AddSelector(GpnSoftRouting.LauncherGroupName, WarpSocks, GpnSoftRouting.ClashDirect)
              .AddSelector(GpnSoftRouting.AppGroupName(0),
                  GpnMihomoConfigService.NodesGroupName, GpnSoftRouting.ClashDirect,
                  GpnSoftRouting.ClashReject, WarpSocks)
@@ -109,7 +109,7 @@ public class GpnBypassEgressControllerTests
 
         // GPN-BSG + warp rotalı giriş (ao-1, BsGLauncher.exe) DIRECT'e çekilir;
         // vpn girişi (ao-0) dokunulmaz.
-        clash.Puts.Should().Contain((GpnSoftRouting.BsgGroupName, GpnSoftRouting.ClashDirect));
+        clash.Puts.Should().Contain((GpnSoftRouting.LauncherGroupName, GpnSoftRouting.ClashDirect));
         clash.Puts.Should().Contain((GpnSoftRouting.AppGroupName(1), GpnSoftRouting.ClashDirect));
         clash.Puts.Should().NotContain((GpnSoftRouting.AppGroupName(0), GpnSoftRouting.ClashDirect));
         controller.Degraded.Should().BeTrue();
@@ -124,7 +124,7 @@ public class GpnBypassEgressControllerTests
 
         await controller.ProcessHealth(WarpDialHealth.Healthy);
 
-        clash.Puts.Should().Contain((GpnSoftRouting.BsgGroupName, WarpSocks));
+        clash.Puts.Should().Contain((GpnSoftRouting.LauncherGroupName, WarpSocks));
         clash.Puts.Should().Contain((GpnSoftRouting.AppGroupName(1), WarpSocks));
         controller.Degraded.Should().BeFalse();
     }
@@ -155,7 +155,7 @@ public class GpnBypassEgressControllerTests
     public async Task Fault_WhenBsgGroupMissing_DoesNothing()
     {
         var (controller, clash) = Build(connected: true);
-        clash.Proxies.Remove(GpnSoftRouting.BsgGroupName);
+        clash.Proxies.Remove(GpnSoftRouting.LauncherGroupName);
 
         await controller.ProcessHealth(Faulted());
 
@@ -172,7 +172,7 @@ public class GpnBypassEgressControllerTests
         await controller.ProcessHealth(Faulted());
 
         // PUT'lar denendi ama doğrulanamadı — işaret dönmez, sonraki olay dener.
-        clash.Puts.Should().Contain((GpnSoftRouting.BsgGroupName, GpnSoftRouting.ClashDirect));
+        clash.Puts.Should().Contain((GpnSoftRouting.LauncherGroupName, GpnSoftRouting.ClashDirect));
         controller.Degraded.Should().BeFalse();
     }
 
@@ -199,7 +199,7 @@ public class GpnBypassEgressControllerTests
 
         // Yalnızca sabit BSG egress grubu DIRECT'e çekilir; giriş gruplarına dokunulmaz.
         clash.Puts.Should().Equal(
-            (GpnSoftRouting.BsgGroupName, GpnSoftRouting.ClashDirect));
+            (GpnSoftRouting.LauncherGroupName, GpnSoftRouting.ClashDirect));
         controller.Degraded.Should().BeTrue();
     }
 

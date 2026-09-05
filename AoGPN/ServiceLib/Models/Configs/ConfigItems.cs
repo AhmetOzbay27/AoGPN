@@ -192,6 +192,17 @@ public class GUIItem
     /// Tekil (küresel) ayardır — hangi WG düğümü seçilirse seçilsin aynı düğüm kullanılır.
     /// </summary>
     public string? VlessBypassNodeJson { get; set; }
+
+    /// <summary>
+    /// Kullanıcı düzenlenebilir launcher-bypass listesi —
+    /// <see cref="ServiceLib.Models.Entities.LauncherBypassItem"/> kayıtlarının
+    /// JSON serileştirilmiş hali (ad + domain aileleri + egress seçimi). Boş/null
+    /// → yerleşik BSG varsayılanı (eski sabit BsgLauncherDomains davranışı); "[]"
+    /// → launcher satırları kapatılır. GpnMihomoConfigService kural üretiminde
+    /// GpnLauncherBypass.ReadAll ile çözülür; dashboard Ayarlar → GPN panelinden
+    /// düzenlenir (sıradaki bağlantıda uygulanır, çalışan oturumu kesmez).
+    /// </summary>
+    public string? LauncherBypassesJson { get; set; }
 }
 
 /// <summary>

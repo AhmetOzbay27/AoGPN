@@ -129,22 +129,22 @@ public class GpnSoftRoutingTests
     }
 
     [Fact]
-    public void ResolveBsgEgressTarget_HealthyUsesWarpEgress_DegradedDirect()
+    public void ResolveLauncherEgressTarget_HealthyUsesWarpEgress_DegradedDirect()
     {
         // Sağlıklı: legacy warp-socks / çift bağlantıda vless-launcher (politika egress'i).
-        GpnSoftRouting.ResolveBsgEgressTarget(false).Should().Be(GpnMihomoConfigService.WarpProxyName);
-        GpnSoftRouting.ResolveBsgEgressTarget(false, GpnMihomoConfigService.BypassProxyName)
+        GpnSoftRouting.ResolveLauncherEgressTarget(false).Should().Be(GpnMihomoConfigService.WarpProxyName);
+        GpnSoftRouting.ResolveLauncherEgressTarget(false, GpnMihomoConfigService.BypassProxyName)
             .Should().Be(GpnMihomoConfigService.BypassProxyName);
         // Degrade (WARP faulted): her iki biçimde de DIRECT.
-        GpnSoftRouting.ResolveBsgEgressTarget(true).Should().Be(GpnSoftRouting.ClashDirect);
-        GpnSoftRouting.ResolveBsgEgressTarget(true, GpnMihomoConfigService.BypassProxyName)
+        GpnSoftRouting.ResolveLauncherEgressTarget(true).Should().Be(GpnSoftRouting.ClashDirect);
+        GpnSoftRouting.ResolveLauncherEgressTarget(true, GpnMihomoConfigService.BypassProxyName)
             .Should().Be(GpnSoftRouting.ClashDirect);
         // Kanonik üye sırası: warp egress önce (varsayılan seçim), DIRECT sonra.
-        GpnSoftRouting.BsgMemberOrder().Should().Equal(
+        GpnSoftRouting.LauncherMemberOrder().Should().Equal(
             GpnMihomoConfigService.WarpProxyName, GpnSoftRouting.ClashDirect);
-        GpnSoftRouting.BsgMemberOrder(GpnMihomoConfigService.BypassProxyName).Should().Equal(
+        GpnSoftRouting.LauncherMemberOrder(GpnMihomoConfigService.BypassProxyName).Should().Equal(
             GpnMihomoConfigService.BypassProxyName, GpnSoftRouting.ClashDirect);
-        GpnSoftRouting.BsgGroupName.Should().Be("GPN-BSG");
+        GpnSoftRouting.LauncherGroupName.Should().Be("GPN-LAUNCHER");
     }
 
     [Fact]

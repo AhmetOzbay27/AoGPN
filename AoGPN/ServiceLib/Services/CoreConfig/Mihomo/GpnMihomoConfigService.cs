@@ -179,8 +179,8 @@ public sealed class GpnMihomoConfigService
     /// Kurallar geldikleri sırayla yazılır; sıra anlamsaldır (önce özel, sonra genel).
     /// </summary>
     public string GenerateYaml(GpnServerProfile server, IReadOnlyList<RulesItem> rules, GpnMihomoOptions options,
-        VlessProfileItem? bypass = null)
-        => GenerateCore(nodes: null, active: server, policy: null, rules, options, bypass);
+        VlessProfileItem? bypass = null, IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
+        => GenerateCore(nodes: null, active: server, policy: null, rules, options, bypass, launcherBypasses);
 
     /// <summary>
     /// Aday düğüm listesi + aktif düğüm + rota kurallarından eksiksiz mihomo YAML üretir.
@@ -202,8 +202,9 @@ public sealed class GpnMihomoConfigService
         GpnServerProfile active,
         IReadOnlyList<RulesItem> rules,
         GpnMihomoOptions options,
-        VlessProfileItem? bypass = null)
-        => GenerateCore(nodes, active, policy: null, rules, options, bypass);
+        VlessProfileItem? bypass = null,
+        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
+        => GenerateCore(nodes, active, policy: null, rules, options, bypass, launcherBypasses);
 
     /// <summary>
     /// Kesintisiz rota (superset) biçimi: politika (mod + yön + tüm girişler) + korunan
@@ -231,8 +232,9 @@ public sealed class GpnMihomoConfigService
         GpnSoftRoutingPolicy policy,
         IReadOnlyList<RulesItem> preservedRules,
         GpnMihomoOptions options,
-        VlessProfileItem? bypass = null)
-        => GenerateCore(nodes, active, policy, preservedRules ?? [], options, bypass);
+        VlessProfileItem? bypass = null,
+        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
+        => GenerateCore(nodes, active, policy, preservedRules ?? [], options, bypass, launcherBypasses);
 
     /// <summary>
     /// Tek ortak üretici: <paramref name="policy"/> null ise legacy (tek/çoklu düğüm,
@@ -246,7 +248,8 @@ public sealed class GpnMihomoConfigService
         GpnSoftRoutingPolicy? policy,
         IReadOnlyList<RulesItem> rules,
         GpnMihomoOptions options,
-        VlessProfileItem? bypass = null)
+        VlessProfileItem? bypass = null,
+        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
     {
         var server = active;
         var superset = policy is not null;
@@ -279,13 +282,20 @@ public sealed class GpnMihomoConfigService
         // "warp" egress'in çözüleceği proxy adı: Çift Bağlantıda ikincil VLESS
         // düğümü, legacy'de WARP SOCKS zinciri.
         var warpTarget = dual ? BypassProxyName : WarpProxyName;
-        // Superset-legacy: BSG launcher/API satırları GPN-BSG seçim grubundan geçer —
-        // WarpDialHealthMonitor faulted olunca GpnBypassEgressController bu grubu
-        // canlı (restart'sız) DIRECT'e çevirir, sağlıklıyken warp-socks'a döner.
-        // Çift Bağlantıda (vless-launcher) izleyici o egress'i henüz kapsamadığı
-        // için grup üretilmez; satırlar doğrudan vless-launcher'a gider (eski davranış).
-        var emitBsgGroup = superset && emitBsgDomains && !dual;
-        var bsgRuleTarget = emitBsgGroup ? GpnSoftRouting.BsgGroupName : warpTarget;
+        // Launcher bypass (kullanıcı düzenlenebilir — GuiItem.LauncherBypassesJson):
+        // her launcher kendi domain listesi + egress seçimiyle kural üretir. Satır
+        // hedefleri yalnızca arka uç TANIMLIYSA yazılır (mihomo config'i tanımsız
+        // outbound'a kuralı reddeder). Superset-legacy'de warp egress'li launcher'lar
+        // GPN-LAUNCHER seçim grubundan geçer — WarpDialHealthMonitor faulted olunca
+        // GpnBypassEgressController grubu canlı (restart'sız) DIRECT'e çevirir,
+        // sağlıklıyken warp egress'e döner. Çift Bağlantıda (vless-launcher) grup
+        // üretilmez; satırlar doğrudan vless-launcher'a gider (eski davranış).
+        launcherBypasses ??= GpnLauncherBypass.ReadAll(AppManager.Instance.Config);
+        var hasWarpLauncher = launcherBypasses.Any(l =>
+            l.Enabled && l.Domains.Length > 0
+            && string.Equals(l.Egress, GpnLauncherBypass.EgressWarp, StringComparison.OrdinalIgnoreCase));
+        var emitLauncherGroup = superset && !dual && hasWarpLauncher;
+        var launcherGroupTarget = emitLauncherGroup ? GpnSoftRouting.LauncherGroupName : warpTarget;
 
         var root = new Dictionary<string, object?>
         {
@@ -418,13 +428,13 @@ public sealed class GpnMihomoConfigService
             });
             // satırları bu gruba işaret eder; varsayılan seçim warp egress (sağlıklı),
             // degrade durumda GpnBypassEgressController DIRECT'e PUT eder.
-            if (emitBsgGroup)
+            if (emitLauncherGroup)
             {
                 groups.Add(new Dictionary<string, object?>
                 {
-                    ["name"] = GpnSoftRouting.BsgGroupName,
+                    ["name"] = GpnSoftRouting.LauncherGroupName,
                     ["type"] = "select",
-                    ["proxies"] = GpnSoftRouting.BsgMemberOrder(null).ToList(),
+                    ["proxies"] = GpnSoftRouting.LauncherMemberOrder(null).ToList(),
                 });
             }
             // Giriş grupları: her girişin kural satırı kendi ao-<i> grubuna işaret eder.
@@ -445,12 +455,14 @@ public sealed class GpnMihomoConfigService
 
         // ── rules ──
         var clashRules = new List<string>();
-        // BSG launcher/API domainleri her şeyden ÖNCE eşleşir (first-match-wins):
-        // Tarkov auth trafiği süreç kuralından bağımsız olarak launcher-egress
-        // çıkışından gider — MATCH / GPN-Nodes / FINAL'dan önce listelenir.
-        if (emitBsgDomains)
+        // Launcher bypass domainleri her şeyden ÖNCE eşleşir (first-match-wins):
+        // launcher/auth trafiği süreç kuralından bağımsız olarak kendi egress'inden
+        // çıkar — MATCH / GPN-Nodes / FINAL'dan önce listelenir. Her launcher'ın
+        // satırı yalnızca hedefi bu config biçiminde TANIMLIYSA yazılır.
+        foreach (var launcher in launcherBypasses)
         {
-            foreach (var domain in BsgLauncherDomains)
+            var target = ResolveLauncherTarget(launcher, dual, needWarp, warpTarget, launcherGroupTarget);
+            if (target is null)
             {
                 clashRules.Add($"DOMAIN-SUFFIX,{domain},{bsgRuleTarget}");
             }
@@ -845,5 +857,34 @@ public sealed class GpnMihomoConfigService
         {
             return "10.66.66.1";
         }
+    }
+
+    /// <summary>
+    /// Bir launcher bypass girişinin bu config biçimindeki kural hedefini çözer:
+    ///   warp   → launcher egress grubu/hedefi (yalnızca arka uç tanımlıysa —
+    ///            Çift Bağlantıda vless-launcher, legacy'de warp-socks/needWarp),
+    ///   vless  → yalnızca Çift Bağlantıda vless-launcher; düğüm yoksa legacy
+    ///            warp zincirine düşer (needWarp varsa),
+    ///   direct → her biçimde güvenli (DIRECT her zaman tanımlı).
+    /// Devre dışı / boş domain'li girişler ve tanımsız hedefler null döner —
+    /// satır üretilmez (mihomo config'i tanımsız outbound'a kuralı reddeder).
+    /// </summary>
+    private static string? ResolveLauncherTarget(
+        LauncherBypassItem launcher, bool dual, bool needWarp, string warpTarget, string launcherGroupTarget)
+    {
+        if (!launcher.Enabled || launcher.Domains.Length == 0)
+        {
+            return null;
+        }
+        if (string.Equals(launcher.Egress, GpnLauncherBypass.EgressDirect, StringComparison.OrdinalIgnoreCase))
+        {
+            return GpnSoftRouting.ClashDirect;
+        }
+        if (string.Equals(launcher.Egress, GpnLauncherBypass.EgressVless, StringComparison.OrdinalIgnoreCase))
+        {
+            return dual ? BypassProxyName : (needWarp ? warpTarget : null);
+        }
+        // warp (varsayılan): hedef grup/çıkış yalnızca arka uç tanımlıysa yazılır.
+        return dual || needWarp ? launcherGroupTarget : null;
     }
 }

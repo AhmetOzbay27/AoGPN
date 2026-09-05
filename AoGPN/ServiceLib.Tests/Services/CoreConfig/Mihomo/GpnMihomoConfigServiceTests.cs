@@ -34,16 +34,18 @@ public class GpnMihomoConfigServiceTests
         "10.66.66.2/24", 1420, "1.1.1.1", 25, true);
 
     private static string Generate(GpnServerProfile server, IReadOnlyList<RulesItem> rules,
-        GpnMihomoOptions? options = null, VlessProfileItem? bypass = null)
-        => new GpnMihomoConfigService().GenerateYaml(server, rules, options ?? new GpnMihomoOptions(), bypass);
+        GpnMihomoOptions? options = null, VlessProfileItem? bypass = null,
+        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
+        => new GpnMihomoConfigService().GenerateYaml(server, rules, options ?? new GpnMihomoOptions(), bypass, launcherBypasses);
 
     private static string GenerateMulti(
         IReadOnlyList<GpnServerProfile>? nodes,
         GpnServerProfile active,
         IReadOnlyList<RulesItem> rules,
         GpnMihomoOptions? options = null,
-        VlessProfileItem? bypass = null)
-        => new GpnMihomoConfigService().GenerateYaml(nodes, active, rules, options ?? new GpnMihomoOptions(), bypass);
+        VlessProfileItem? bypass = null,
+        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
+        => new GpnMihomoConfigService().GenerateYaml(nodes, active, rules, options ?? new GpnMihomoOptions(), bypass, launcherBypasses);
 
     [Fact]
     public void MultiNode_EmitsEveryNodePlusSelectGroup_AndRulesTargetGroup()
@@ -659,8 +661,9 @@ public class GpnMihomoConfigServiceTests
         GpnSoftRoutingPolicy policy,
         IReadOnlyList<RulesItem>? preserved = null,
         IReadOnlyList<GpnServerProfile>? nodes = null,
-        VlessProfileItem? bypass = null)
-        => new GpnMihomoConfigService().GenerateYaml(nodes, active, policy, preserved ?? [], new GpnMihomoOptions(), bypass);
+        VlessProfileItem? bypass = null,
+        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
+        => new GpnMihomoConfigService().GenerateYaml(nodes, active, policy, preserved ?? [], new GpnMihomoOptions(), bypass, launcherBypasses);
 
     /// <summary>YAML'deki bir select grubunun üye sırasını okur (blok stil).</summary>
     private static List<string> GroupMembers(string yaml, string groupName)
@@ -856,5 +859,92 @@ public class GpnMihomoConfigServiceTests
         yaml.Should().NotContain("name: ao-");
         yaml.Should().Contain("MATCH,GPN-MODE");
         yaml.Should().NotContain("MATCH,DIRECT");
+    }
+
+    // ── Launcher bypass genelleştirme (kullanıcı düzenlenebilir domain + egress) ──
+
+    private static LauncherBypassItem Launcher(string name, string egress, params string[] domains)
+        => new() { Name = name, Egress = egress, Domains = domains, Enabled = true };
+
+    [Fact]
+    public void LauncherBypasses_ResolvePerEgressTargets_InSupersetLegacy()
+    {
+        // Superset-legacy: warp → GPN-LAUNCHER grubu, direct → DIRECT, vless (düğüm
+        // yok) → warp-socks zincirine düşer (needWarp superset'te her zaman açık).
+        var policy = new GpnSoftRoutingPolicy(
+            GameTriggerModes.Manual, InvertManualRouting: false,
+            new[] { AppEntry("EscapeFromTarkov.exe", "vpn") });
+        var yaml = GenerateSuperset(Almanya, policy, launcherBypasses:
+        [
+            Launcher("BSG", GpnLauncherBypass.EgressWarp,
+                "escapefromtarkov.com", "profile.tarkov.com"),
+            Launcher("Epic", GpnLauncherBypass.EgressDirect, "epicgames.com", "unrealengine.com"),
+            Launcher("Steam", GpnLauncherBypass.EgressVless, "steampowered.com"),
+        ]);
+
+        yaml.Should().Contain("DOMAIN-SUFFIX,escapefromtarkov.com,GPN-LAUNCHER");
+        yaml.Should().Contain("DOMAIN-SUFFIX,profile.tarkov.com,GPN-LAUNCHER");
+        yaml.Should().Contain("DOMAIN-SUFFIX,epicgames.com,DIRECT");
+        yaml.Should().Contain("DOMAIN-SUFFIX,unrealengine.com,DIRECT");
+        yaml.Should().Contain("DOMAIN-SUFFIX,steampowered.com,warp-socks");
+        // Varsayılan BSG yerine özel liste verildi — başka BSG domaini üretilmez.
+        yaml.Should().NotContain("DOMAIN-SUFFIX,battlestategames.com,");
+        // Degrade grubu yalnızca warp egress'li launcher için üretilir.
+        GroupMembers(yaml, GpnSoftRouting.LauncherGroupName).Should().Equal(
+            GpnMihomoConfigService.WarpProxyName, GpnSoftRouting.ClashDirect);
+    }
+
+    [Fact]
+    public void LauncherBypasses_DirectRowsEmitWithoutWarpBackend_WarpRowsSkipped()
+    {
+        // Legacy tek düğüm, warp kuralı yok, çift bağlantı yok: direct egress satırları
+        // güvenle üretilir (DIRECT her zaman tanımlı); warp egress satırları tanımsız
+        // hedef yüzünden atlanır (mihomo config'i tanımsız outbound'a kuralı reddeder).
+        var yaml = Generate(Almanya, [], launcherBypasses:
+        [
+            Launcher("BSG", GpnLauncherBypass.EgressWarp, "escapefromtarkov.com"),
+            Launcher("Epic", GpnLauncherBypass.EgressDirect, "epicgames.com"),
+        ]);
+
+        yaml.Should().Contain("DOMAIN-SUFFIX,epicgames.com,DIRECT");
+        yaml.Should().NotContain("DOMAIN-SUFFIX,escapefromtarkov.com,");
+    }
+
+    [Fact]
+    public void LauncherBypasses_VlessInDualMode_TargetsBypassProxy()
+    {
+        // Çift Bağlantı: warp ve vless egress'li launcher'ların tamamı vless-launcher'a
+        // gider; GPN-LAUNCHER grubu üretilmez (izleyici o egress'i kapsamaz).
+        var policy = new GpnSoftRoutingPolicy(
+            GameTriggerModes.Manual, InvertManualRouting: false,
+            new[] { AppEntry("EscapeFromTarkov.exe", "vpn") });
+        var yaml = GenerateSuperset(Almanya, policy, bypass: LauncherBypass, launcherBypasses:
+        [
+            Launcher("BSG", GpnLauncherBypass.EgressWarp, "escapefromtarkov.com"),
+            Launcher("Epic", GpnLauncherBypass.EgressVless, "epicgames.com"),
+        ]);
+
+        yaml.Should().Contain("DOMAIN-SUFFIX,escapefromtarkov.com,vless-launcher");
+        yaml.Should().Contain("DOMAIN-SUFFIX,epicgames.com,vless-launcher");
+        yaml.Should().NotContain("name: GPN-LAUNCHER");
+    }
+
+    [Fact]
+    public void LauncherBypasses_DisabledOrEmptyDomainLaunchers_EmitNothing()
+    {
+        var policy = new GpnSoftRoutingPolicy(
+            GameTriggerModes.Manual, InvertManualRouting: false,
+            new[] { AppEntry("EscapeFromTarkov.exe", "vpn") });
+        var yaml = GenerateSuperset(Almanya, policy, launcherBypasses:
+        [
+            new LauncherBypassItem { Name = "Kapalı", Egress = GpnLauncherBypass.EgressDirect, Domains = ["kapali.com"], Enabled = false },
+            new LauncherBypassItem { Name = "Boş", Egress = GpnLauncherBypass.EgressDirect, Domains = [], Enabled = true },
+        ]);
+
+        yaml.Should().NotContain("kapali.com");
+        // Varsayılan BSG listesi de devre dışı — hiçbir launcher satırı üretilmez
+        // (IP-check satırları gpn-check grubuna gider, launcher değildir).
+        yaml.Should().NotContain("DOMAIN-SUFFIX,escapefromtarkov.com,");
+        yaml.Should().NotContain("name: GPN-LAUNCHER");
     }
 }
