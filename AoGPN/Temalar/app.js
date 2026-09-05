@@ -2132,6 +2132,23 @@
     }
     const auto = $('boostAutoGameConnect');
     if (auto && document.activeElement !== auto) auto.checked = data.autoConnectOnGameStart === true;
+    // Capture-drift warning: GPN modunda tünellenmesi gereken bir oyunun canlı
+    // bağlantısı var ama yakalama köprüsü ondan hiç paket saymadı — trafik
+    // doğrudan gidiyor (host GpnCaptureDriftChecker → monitor snapshot captureDrift).
+    const driftBanner = document.getElementById('captureDriftBanner');
+    const driftText = document.getElementById('captureDriftText');
+    if (driftBanner && driftText) {
+      const drift = Array.isArray(data.captureDrift) ? data.captureDrift : [];
+      if (drift.length > 0) {
+        const names = drift.map(d => d.processName).filter(Boolean).join(', ');
+        driftText.textContent = t('capture.driftBanner')
+          .replace('{count}', String(drift.length))
+          .replace('{names}', names);
+        driftBanner.classList.remove('hidden');
+      } else {
+        driftBanner.classList.add('hidden');
+      }
+    }
     applySplitMode();
     // Rebuilding the connection/split tables is the expensive part of the 2 s poll;
     // skip it while those views are hidden and re-render on the explicit snapshot

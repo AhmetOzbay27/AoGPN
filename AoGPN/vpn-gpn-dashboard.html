@@ -2196,6 +2196,15 @@ body.effects-balanced #matrixRainCanvas {
               </div>
               <div id="winDivertHealthError" class="hidden mt-1.5 pl-7 text-[10px] leading-relaxed text-amber-300/70 font-mono break-all"></div>
 
+              <!-- Capture drift (host monitor snapshot → captureDrift): GPN
+                   modunda tünellenmesi gereken bir oyunun canlı bağlantısı var
+                   ama yakalama köprüsü ondan hiç paket saymadı — trafik doğrudan
+                   gidiyor, ping düşmüyor. Sessiz hata modu bu rozetle görünür. -->
+              <div id="captureDriftBanner" class="hidden mt-3 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3.5 py-2.5 text-xs font-medium text-rose-200 flex items-center gap-2.5 min-w-0">
+                <svg class="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm1 14h-2v2h2v-2Zm0-6h-2v4h2v-4Z"/></svg>
+                <span id="captureDriftText" class="min-w-0"></span>
+              </div>
+
               <p id="connectionStatusLine" class="text-xs text-[#8A94A6] leading-relaxed mt-4">Route <span class="text-cyan-300 font-medium">Global VPN</span> · Capture <span class="text-cyan-300 font-medium">Proxy</span> — press <span class="text-cyan-300 font-medium">CONNECT</span> to start the tunnel.</p>
             </div>
           </div>

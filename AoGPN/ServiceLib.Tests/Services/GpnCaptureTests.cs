@@ -504,7 +504,8 @@ public class GpnCaptureTests
 
         public override async IAsyncEnumerable<TargetPidSnapshot> RefreshLoopAsync(
             TimeSpan? interval = null,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default,
+            TimeSpan? firstTickInterval = null)
         {
             await Task.CompletedTask;
             if (_refresh is not null)

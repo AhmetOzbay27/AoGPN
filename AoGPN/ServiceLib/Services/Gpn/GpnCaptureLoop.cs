@@ -269,9 +269,17 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
         }
     }
 
+    // Açılış penceresi: bağlantı kurulurken oyun henüz başlamamış olabilir — ilk
+    // tazeleme tik'i kısa aralıkla atılır (5 sn yerine) ki launcher'ın açtığı oyun
+    // süreci ilk paketlerini kaçırmadan filtreye girsin. PID kümesi değişmediyse
+    // tik sessizdir (worker yeniden derlenmez).
+    private static readonly TimeSpan FirstRefreshInterval = TimeSpan.FromMilliseconds(750);
+
     private async Task RefreshLoopCoreAsync(CancellationToken cancellationToken)
     {
-        await foreach (var snapshot in _resolver.RefreshLoopAsync(cancellationToken: cancellationToken))
+        await foreach (var snapshot in _resolver.RefreshLoopAsync(
+            firstTickInterval: FirstRefreshInterval,
+            cancellationToken: cancellationToken))
         {
             if (cancellationToken.IsCancellationRequested)
             {

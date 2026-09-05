@@ -678,5 +678,6 @@
   "skin.nexus-gpn.transportTun": "TUN",
   "skin.nexus-gpn.tunnel": "Oyun tüneli",
   "skin.nexus-gpn.you": "SEN",
-  "gpn.capture.winDivertBanner": "GPN yakalama köprüsü kullanılamıyor — WinDivert sürücü/dosyaları eksik veya engellendi."
+  "gpn.capture.winDivertBanner": "GPN yakalama köprüsü kullanılamıyor — WinDivert sürücü/dosyaları eksik veya engellendi.",
+  "capture.driftBanner": "{count} oyunun canlı bağlantısı var ama 0 paket yakalanıyor — trafik doğrudan gidiyor: {names}"
 }

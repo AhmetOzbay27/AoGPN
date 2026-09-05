@@ -602,6 +602,34 @@ internal sealed class DashboardPushService
             };
         }
 
+        // Yakalama sürüklenmesi (A2): GPN modunda tünellenmesi gereken bir
+        // uygulamanın canlı bağlantısı var ama köprü onun PID'lerinden hiç paket
+        // saymadıysa trafik doğrudan gidiyordur — ping düşmez, hiçbir hata
+        // görünmez. Yalnızca köprünün beklendiği modda (tun + manual = "gpn")
+        // denetle: global/proxy modunda yakalama zaten hedef değildir, sürüklenme
+        // kavramı yoktur. Boş PID kümesi (kimliksiz sahip) yargılanmaz.
+        object[] captureDrift = [];
+        if (routingMode == "gpn")
+        {
+            var livePidsByProcess = monitor.Connections
+                .Where(c => c.Pid > 0 && c.ProcessName.IsNotEmpty())
+                .GroupBy(c => c.ProcessName, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    g => g.Key,
+                    g => (IReadOnlyCollection<int>)g.Select(c => c.Pid).Distinct().ToArray(),
+                    StringComparer.OrdinalIgnoreCase);
+            var candidates = connectionViewModel.Apps
+                .Where(a => a.EntryType == "app"
+                    && string.Equals(a.Action, connectionViewModel.InvertManualRouting ? "direct" : "vpn", StringComparison.OrdinalIgnoreCase)
+                    && a.LiveConnectionCount > 0)
+                .Select(a => new CaptureDriftCandidate(
+                    a.Value,
+                    a.LiveConnectionCount,
+                    livePidsByProcess.TryGetValue(a.Value, out var pids) ? pids : []));
+            captureDrift = GpnCaptureDriftChecker.FindDrifted(_lastCaptureStats?.ByPid, candidates)
+                .Select(d => new { processName = d.ProcessName, liveConnections = d.LiveConnections })
+                .ToArray();
+        }
 
         var payload = new
         {
@@ -619,6 +647,7 @@ internal sealed class DashboardPushService
             trafficStatus = monitor.TrafficStatus,
             flushedSocketCount = flushedCount,
             routingMode,
+            captureDrift,
             connections,
             apps,
             traffic,

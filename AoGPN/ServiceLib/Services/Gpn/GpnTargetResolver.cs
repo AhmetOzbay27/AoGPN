@@ -124,9 +124,18 @@ public class GpnTargetResolver
     /// DEĞİŞİNCE yeni anlık görüntü sağlar. Çağıran, yeni görüntüde filtreyi
     /// yeniden derler.
     /// </summary>
+    /// <param name="firstTickInterval">
+    /// Açılış penceresi tazeleme aralığı: ilk anlık görüntüden sonraki İLK tik
+    /// bu aralıkla atılır (verilirse), ardından normal <paramref name="interval"/>
+    /// kadansına dönülür. Bağlantı anında oyun henüz başlamamışsa (launcher oyunu
+    /// açar açmaz doğar) hedef PID'ler varsayılan 5 sn yerine ~1 sn içinde filtreye
+    /// girer — ilk paketler yarışta kaybolmaz. PID kümesi değişmediyse tik sessizdir
+    /// (filtre yeniden derlenmez).
+    /// </param>
     public virtual async IAsyncEnumerable<TargetPidSnapshot> RefreshLoopAsync(
         TimeSpan? interval = null,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default,
+        TimeSpan? firstTickInterval = null)
     {
         interval ??= DefaultRefreshInterval;
         var previous = Resolve(cancellationToken);
@@ -135,9 +144,18 @@ public class GpnTargetResolver
             yield return previous;
         }
 
+        // İlk tik kısa aralıkla atılır (varsa), sonra normal kadans devreye girer.
+        var tick = firstTickInterval is { } fast && fast > TimeSpan.Zero ? fast : interval.Value;
+        var firstTickDone = false;
         while (!cancellationToken.IsCancellationRequested)
         {
-            await Task.Delay(interval.Value, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(tick, cancellationToken).ConfigureAwait(false);
+            if (!firstTickDone)
+            {
+                firstTickDone = true;
+                tick = interval.Value;
+            }
+
             var current = Resolve(cancellationToken);
             if (current is null)
             {

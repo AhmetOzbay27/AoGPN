@@ -678,5 +678,6 @@
   "skin.nexus-gpn.transportTun": "TUN",
   "skin.nexus-gpn.tunnel": "Gaming tunnel",
   "skin.nexus-gpn.you": "YOU",
-  "gpn.capture.winDivertBanner": "GPN capture bridge is unavailable — the WinDivert driver/files are missing or blocked."
+  "gpn.capture.winDivertBanner": "GPN capture bridge is unavailable — the WinDivert driver/files are missing or blocked.",
+  "capture.driftBanner": "{count} 个游戏有活动连接但捕获到 0 个数据包——流量正在直连：{names}"
 }
