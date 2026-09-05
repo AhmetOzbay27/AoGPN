@@ -599,6 +599,16 @@ public class SpeedtestService(Config config, Func<SpeedTestResult, Task> updateF
     private List<List<ServerTestItem>> GetTestBatchItem(List<ServerTestItem> lstSelected, int pageSize)
     {
         List<List<ServerTestItem>> lstTest = [];
+        // Empty selection or a non-positive page size must short-circuit: the
+        // chunk math below divides by pageSize, and with checked arithmetic
+        // (CheckForOverflowUnderflow) a 0/0 or count/0 NaN/Infinity cast to int
+        // throws OverflowException — an empty run then crashes into the error
+        // path and reports "stopped" instead of finishing cleanly.
+        if (lstSelected.Count == 0 || pageSize <= 0)
+        {
+            return lstTest;
+        }
+
         var lst1 = lstSelected.Where(t => t.CoreType == ECoreType.Xray).ToList();
         var lst2 = lstSelected.Where(t => t.CoreType == ECoreType.sing_box).ToList();
 
