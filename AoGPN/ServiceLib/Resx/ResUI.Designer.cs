@@ -5947,6 +5947,12 @@ namespace ServiceLib.Resx {
             }
         }
 
+        public static string GpnStructuralChangeDeferred {
+            get {
+                return ResourceManager.GetString("GpnStructuralChangeDeferred", resourceCulture);
+            }
+        }
+
         /// <summary>
         ///   localized string
         /// </summary>

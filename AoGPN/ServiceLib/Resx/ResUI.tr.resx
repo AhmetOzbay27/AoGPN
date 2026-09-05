@@ -2093,6 +2093,10 @@ Belirtildiğinde sertifika sabitlenir ve "Güvensize İzin Ver" devre dışı b�
     <value>WARP egress onarıldı — tünel otomatik yeniden başlatıldı.</value>
   </data>
 
+  <data name="GpnStructuralChangeDeferred" xml:space="preserve">
+    <value>Kural değişiklikleri sonraki bağlantıda uygulanacak — şimdi uygulamak canlı oturumu koparır.</value>
+  </data>
+
   <data name="ManualEntryApp" xml:space="preserve">
     <value>Uygulama</value>
   </data>

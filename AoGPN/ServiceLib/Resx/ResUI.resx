@@ -2093,6 +2093,10 @@ The "Get Certificate" action may fail if a self-signed certificate is used or if
     <value>WARP egress restored — the tunnel was reconnected automatically.</value>
   </data>
 
+  <data name="GpnStructuralChangeDeferred" xml:space="preserve">
+    <value>Rule changes will take effect on the next connection — applying now would disconnect the live session.</value>
+  </data>
+
   <data name="ManualEntryApp" xml:space="preserve">
     <value>App</value>
   </data>

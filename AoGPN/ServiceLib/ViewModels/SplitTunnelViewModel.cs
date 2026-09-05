@@ -125,6 +125,13 @@ public class SplitTunnelViewModel : MyReactiveObject
     /// <summary>Son GPN bağlantı modu (WireGuardUDP / V2rayTCP). WARP uyarısı buna göre verilir.</summary>
     private ConnectionMode? _activeGpnMode;
 
+    /// <summary>
+    /// GPN bağlantısı şu anda Connected mı? Yapısal kural değişikliklerinde
+    /// (ekleme/silme/sıralama) maç ortası restart yerine erteleme kararı bu
+    /// değerden beslenir — canlı bağlantı yoksa eski ReloadRequested yolu kullanılır.
+    /// </summary>
+    private bool _isGpnConnected;
+
     // Alt servisler (P0 Faz 3): oyun tetikleyici (durum makinesi + süreç taraması)
     // ve canlı telemetri izdüşümü bu servislerde yaşar; ViewModel bağlı durumu uygular.
     private readonly GameAutoTriggerService _gameTriggerService = new();
@@ -210,6 +217,9 @@ public class SplitTunnelViewModel : MyReactiveObject
         AppEvents.GpnConnectionStateChanged.AsObservable().Subscribe(snap =>
         {
             _activeGpnMode = snap.Mode;
+            // Canlı bağlantı işareti: yapısal kural değişikliklerinde maç ortası
+            // restart yerine erteleme kararı bu değerden beslenir.
+            _isGpnConnected = snap.State == GpnConnectionState.Connected;
             if (snap.State == GpnConnectionState.Connected
                 && snap.Mode == ConnectionMode.V2rayTCP
                 && Apps.Any(a => a.Action == "warp"))
@@ -1252,9 +1262,25 @@ public class SplitTunnelViewModel : MyReactiveObject
         // yerine canlı grup seçimleriyle uygulanır — bağlantı kesilmez, mevcut oturumlar
         // doğal olarak sürer. Kapılar tutmuyorsa (superset oturum yok, giriş listesi
         // yapısal olarak değişti, API erişilemez) eski ReloadRequested yolu korunur.
-        if (!await TryApplyGpnRoutingSoftAsync())
+        //
+        // Maç ortası kopma koruması: giriş listesi YAPISAL değiştiyse (ekleme/silme/
+        // sıralama) yumuşak yol parmak izi kapısında bilerek düşer; canlı bağlantı
+        // varken restart yerine uygulama SONRAKİ doğal yeniden bağlantıya ertelenir
+        // (kurallar zaten kaydedildi — sonraki bağlantı config'i yeni kurallarla
+        // üretir). Rota seçimleri ve mod/yön değişiklikleri bu kapıya takılmaz.
+        var softPolicy = GpnSoftRouting.BuildPolicy(Mode, InvertManualRouting, Apps, _config);
+        if (!await TryApplyGpnRoutingSoftAsync(softPolicy))
         {
-            StatusBarViewModel.Instance.ReloadRequested.Publish();
+            if (_isGpnConnected
+                && GpnSoftRouting.IsStructuralEntryChange(GpnSoftSession.Fingerprint, softPolicy))
+            {
+                StatusText = ResUI.GpnStructuralChangeDeferred;
+                NoticeManager.Instance.Enqueue(ResUI.GpnStructuralChangeDeferred);
+            }
+            else
+            {
+                StatusBarViewModel.Instance.ReloadRequested.Publish();
+            }
         }
 
         // The routing rules changed; drop the monitor's cached routing and refresh so
@@ -1277,9 +1303,8 @@ public class SplitTunnelViewModel : MyReactiveObject
     /// listesi çalışan config'le birebir aynı değilse (ekleme/silme/taşıma) veya API
     /// doğrulaması başarısız olursa <c>false</c> → legacy reload (config yeniden üretilir).
     /// </summary>
-    private async Task<bool> TryApplyGpnRoutingSoftAsync()
+    private async Task<bool> TryApplyGpnRoutingSoftAsync(GpnSoftRoutingPolicy policy)
     {
-        var policy = GpnSoftRouting.BuildPolicy(Mode, InvertManualRouting, Apps, _config);
         var applied = await GpnSoftPolicyApplier.TryApplyAsync(policy);
         Logging.Verbose("GPN", applied ? "soft_routing_applied" : "soft_routing_fallback_reload",
             ("mode", Mode), ("invert", InvertManualRouting), ("entries", Apps.Count));

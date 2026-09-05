@@ -168,6 +168,24 @@ public static class GpnSoftRouting
     public static string EntryKey(GpnSoftRoutingEntry entry)
         => $"{entry.EntryType}|{entry.Value}|{entry.Port}";
 
+    /// <summary>
+    /// Canlı superset oturumu varken giriş listesi YAPISAL olarak değişti mi?
+    /// (giriş eklendi/silindi/sıralandı — rota seçimleri değil, EntryKeys rota
+    /// dışıdır). Doğruysa çekirdek restart'ı yalnızca bu yapısal değişiklikler için
+    /// gereklidir ve çağıran (SplitTunnelViewModel) maç ortası kopmayı önlemek için
+    /// uygulamayı sonraki doğal yeniden bağlantıya erteleyebilir; kurallar zaten
+    /// kaydedildiği için sonraki bağlantı config'i yeni kurallarla üretir.
+    /// </summary>
+    public static bool IsStructuralEntryChange(IReadOnlyList<string>? liveFingerprint, GpnSoftRoutingPolicy desired)
+    {
+        if (liveFingerprint is null || desired is null)
+        {
+            return false;
+        }
+        var desiredKeys = desired.EntryKeys;
+        return desiredKeys.Count != liveFingerprint.Count || !desiredKeys.SequenceEqual(liveFingerprint);
+    }
+
     /// <summary>Kayıtlı bağlantı ayarlarından (ConnectionItem) politika üretir.</summary>
     public static GpnSoftRoutingPolicy BuildPolicy(Config config)
     {

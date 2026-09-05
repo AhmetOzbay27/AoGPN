@@ -148,6 +148,39 @@ public class GpnSoftRoutingTests
     }
 
     [Fact]
+    public void IsStructuralEntryChange_DetectsOnlyEntrySetChanges()
+    {
+        var policy = Policy(GameTriggerModes.Manual, false,
+            App("EscapeFromTarkov.exe", "vpn"), App("BsGLauncher.exe", "warp"));
+
+        // Superset oturum yoksa yapısal değişiklik sayılmaz → çağıran reload yolunu kullanır.
+        GpnSoftRouting.IsStructuralEntryChange(null, policy).Should().BeFalse();
+
+        var live = policy.EntryKeys.ToList();
+        // Birebir aynı giriş seti → yapısal değişiklik yok (rota değişimi EntryKeys dışıdır).
+        GpnSoftRouting.IsStructuralEntryChange(live, policy).Should().BeFalse();
+
+        // Yalnızca ROTA değişimi (action) yapısal DEĞİLDİR — yumuşak yol hâlâ uygulayabilir.
+        var routeChanged = Policy(GameTriggerModes.Manual, false,
+            App("EscapeFromTarkov.exe", "vpn"), App("BsGLauncher.exe", "direct"));
+        GpnSoftRouting.IsStructuralEntryChange(live, routeChanged).Should().BeFalse();
+
+        // Giriş EKLENDİ → yapısal.
+        var added = Policy(GameTriggerModes.Manual, false,
+            App("EscapeFromTarkov.exe", "vpn"), App("BsGLauncher.exe", "warp"), App("discord.exe", "direct"));
+        GpnSoftRouting.IsStructuralEntryChange(live, added).Should().BeTrue();
+
+        // Giriş SİLİNDİ → yapısal.
+        var removed = Policy(GameTriggerModes.Manual, false, App("EscapeFromTarkov.exe", "vpn"));
+        GpnSoftRouting.IsStructuralEntryChange(live, removed).Should().BeTrue();
+
+        // SIRALAMA değişti → yapısal (kural satırları sıraya göre üretilir).
+        var reordered = Policy(GameTriggerModes.Manual, false,
+            App("BsGLauncher.exe", "warp"), App("EscapeFromTarkov.exe", "vpn"));
+        GpnSoftRouting.IsStructuralEntryChange(live, reordered).Should().BeTrue();
+    }
+
+    [Fact]
     public void BuildPolicy_ConfigWithBypass_ProducesDualWarpVector()
     {
         // Küresel ayar (GuiItem.VlessBypassNodeJson) dolu bir Config'ten üretilen
