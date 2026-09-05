@@ -32,6 +32,15 @@ public static class AoGpnDashboardServiceCollectionExtensions
         Func<string, Task> executeScript,
         Func<bool> isWebViewReady,
         Func<string> readTransport,
+        Func<bool> isClosing,
+        Func<string, Task> notifyNodesOp,
+        Action<Action> invokeOnUiThread,
+        Func<bool, Task> pushSystemProxyState,
+        Action updateTrayStatus,
+        Func<bool> readActualConnectionState,
+        Func<string> getActiveView,
+        Func<CancellationToken> getWebViewToken,
+        Func<GpnBypassEgressController?> getBypassEgressController,
         SystemProxyOnlyService proxyOnlyService,
         Func<MainWindowViewModel?> getViewModel)
     {
@@ -51,6 +60,39 @@ public static class AoGpnDashboardServiceCollectionExtensions
             executeScript,
             isWebViewReady,
             getViewModel));
+
+        // DashboardNodeService — düğüm/profil yönetimi (seçim, CRUD, havuz,
+        // favori, ping testi, liste yayını). Singleton: düğüm kümesi durumu
+        // (_nodeSpeedtestService, _nodeTestRunId, _lastNodeSignature) süreç
+        // boyunca tek örnek üzerinde yaşar. Ctor delegeleri MainWindow'un
+        // kendi primitiflerine bağlanır (toast kanalı NotifyNodesOpAsync,
+        // Dispatcher.InvokeAsync, tepsi durumu vb.).
+        services.AddSingleton(sp => new DashboardNodeService(
+            executeScript,
+            isWebViewReady,
+            isClosing,
+            notifyNodesOp,
+            () => getViewModel()?.ProfilesViewModel,
+            invokeOnUiThread,
+            proxyOnlyService,
+            pushSystemProxyState,
+            updateTrayStatus));
+
+        // DashboardPushService — egress push kümesi (telemetri/direnç/izleyici/
+        // kayma itmeleri). Singleton: anlık görüntü + karar durumu (_lastCaptureStats,
+        // _lastRuleDriftVerdict, _gpnPidBridge) tek örnek üzerinde yaşar. Delegeler
+        // MainWindow'un kendi primitiflerine bağlanır (ConnectionViewModel okuma,
+        // transport/aktif görünüm okuyucuları, WebView2 ömür token'ı, WARP degrade
+        // denetleyicisi — WhenActivated'ta kurulduğu için tembel okunur).
+        services.AddSingleton(sp => new DashboardPushService(
+            executeScript,
+            isWebViewReady,
+            () => getViewModel()?.ConnectionViewModel,
+            readTransport,
+            readActualConnectionState,
+            getActiveView,
+            getWebViewToken,
+            getBypassEgressController));
 
         return services;
     }

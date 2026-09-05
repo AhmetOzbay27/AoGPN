@@ -46,11 +46,6 @@ public partial class MainWindow : IDashboardBridge
     private bool _webViewReady;
     private bool _connectionState;
     private bool _connectionStarting;
-    private readonly GpnTelemetryService _gpnTelemetry = new();
-    private readonly GpnResilienceLog _gpnResilienceLog = new();
-
-    /// <summary>GpnCaptureLoop'un son yayınladığı telemetri anlık görüntüsü (dashboard'a yeniden basmak için).</summary>
-    private GpnCaptureStatsSnapshot? _lastCaptureStats;
 
     // Bağlantı kurulamayınca dashboard hata kartına taşınan başarısızlık bilgisi:
     // ana çekirdeğin son Failed durumu (kullanıcı dostu Error mesajı) + son
@@ -60,9 +55,6 @@ public partial class MainWindow : IDashboardBridge
     private CoreStartupDiagnostic? _lastMainCoreDiagnostic;
     private GpnConnectionSnapshot? _lastGpnFailedSnapshot;
 
-    // GPN PID havuzu köprüsü — SplitTunnelViewModel'in vpn eylemli oyunlarından
-    // GpnTargetResolver'ı canlı çalıştırır; dashboard "PID havuzu" kartını besler.
-    private GpnTargetResolverBridge? _gpnPidBridge;
 
     // WARP egress otomatik kurtarma — WARP dial sağlığı faulted olunca aktif WG
     // tünelini yeniden başlatır (bkz. WarpAutoRecoverService).
@@ -74,8 +66,6 @@ public partial class MainWindow : IDashboardBridge
     // Last rule-drift verdict pushed to the dashboard ("InSync"/"Drifted"/...).
     // The periodic health check only republishes when the verdict changes, so the
     // banner never flickers on every 30 s tick.
-    private string _lastRuleDriftVerdict = "";
-    private string _lastNodeSignature = "";
     private string _activeView = "dashboard";
     private bool _allowClose;
     private bool _isClosing;
@@ -90,13 +80,6 @@ public partial class MainWindow : IDashboardBridge
     // be re-armed when the user toggles TUN.
     private readonly HashSet<string> _realityFallbackAdvisedNodes = new(StringComparer.Ordinal);
 
-    // Real ping-test bridge: runs the native SpeedtestService over the selected
-    // profiles and streams per-node results into the WebView2 DOM.
-    private SpeedtestService? _nodeSpeedtestService;
-    private CancellationTokenSource? _nodePingCancellation;
-    private bool _nodeTestRunning;
-    private long _nodeTestRunId;
-    private readonly ProcessCatalogService _processCatalogService = new();
     private readonly DashboardHost _dashboardHost;
     // Runs the local SOCKS/HTTP listener without an active tunnel so the system proxy
     // works while "disconnected", like v2rayN. Reconciles on proxy-mode changes,
@@ -115,6 +98,8 @@ public partial class MainWindow : IDashboardBridge
     private readonly AoGPN.Services.DashboardPublisher _dashboardPublisher;
     private readonly DashboardSettingsService _settingsService;
     private readonly DashboardGpnServerService _gpnServerService;
+    private readonly DashboardNodeService _nodeService;
+    private readonly DashboardPushService _pushService;
     private readonly DashboardMessageDispatcher _dashboardMessageDispatcher;
 
     public MainWindow()
@@ -152,6 +137,25 @@ public partial class MainWindow : IDashboardBridge
             executeScript: ExecuteScriptSafelyAsync,
             isWebViewReady: () => _webViewReady,
             getViewModel: () => ViewModel);
+        _nodeService = new DashboardNodeService(
+            executeScript: ExecuteScriptSafelyAsync,
+            isWebViewReady: () => _webViewReady,
+            isClosing: () => _isClosing,
+            notifyNodesOp: NotifyNodesOpAsync,
+            getProfilesViewModel: () => ViewModel?.ProfilesViewModel,
+            invokeOnUiThread: action => Dispatcher.InvokeAsync(action),
+            proxyOnlyService: _proxyOnlyService,
+            pushSystemProxyState: force => PushSystemProxyStateAsync(force),
+            updateTrayStatus: UpdateTrayStatus);
+        _pushService = new DashboardPushService(
+            executeScript: ExecuteScriptSafelyAsync,
+            isWebViewReady: () => _webViewReady,
+            getConnectionViewModel: () => ViewModel?.ConnectionViewModel,
+            readTransport: ReadTransport,
+            readActualConnectionState: ReadActualConnectionState,
+            getActiveView: () => _activeView,
+            getWebViewToken: () => _webViewLifetime.Token,
+            getBypassEgressController: () => _bypassEgressController);
         _dashboardPublisher = new AoGPN.Services.DashboardPublisher(ExecuteScriptSafelyAsync);
         _connectionCoordinator.SnapshotChanged += snapshot =>
         {
@@ -222,13 +226,11 @@ public partial class MainWindow : IDashboardBridge
         // GPN diyagnoz akışı (GPN_LOG / GPN_RECOVER / GPN_SELECT / GPN_FAILOVER /
         // GPN_LAUNCH ...): DiagLog "GPN_*" satırlarını dashboard tanı akışına taşır.
         AppEvents.GpnDiagChanged.AsObservable()
-            .Subscribe(async evt => await PushGpnDiagAsync(evt));
-
-        AppEvents.GpnCaptureStatsChanged.AsObservable()
+            .Subscribe(async evt => await PushGpnDiagAsync(evt));            AppEvents.GpnCaptureStatsChanged.AsObservable()
             .Subscribe(async evt =>
             {
-                _lastCaptureStats = evt;
-                await PushGpnCaptureStatsAsync();
+                _pushService.UpdateLastCaptureStats(evt);
+                await _pushService.PushGpnCaptureStatsAsync();
             });
 
         // Sunucu kullanılabilirlik ölçümü (hız testi) sonucunu dashboard ana paneline
@@ -974,17 +976,25 @@ public partial class MainWindow : IDashboardBridge
                 await Task.Delay(wait).ConfigureAwait(false);
             }
 
-            var connectionViewModel = ViewModel?.ConnectionViewModel;
-            if (connectionViewModel is null)
+            // ViewModel (ReactiveWindow DependencyProperty) + ObservableCollection
+            // yalnızca UI thread'inde okunabilir. Delay + ConfigureAwait(false) sonrası
+            // burada pool thread'indeyiz — doğrudan okuma Dispatcher.VerifyAccess ile
+            // "real ping measurement failed" üretir (canlı gözlenen). VM durumunu
+            // dispatcher'a geri dönerek yakala, ölçümü (ağ) pool thread'inde yürüt.
+            var appNames = await Dispatcher.InvokeAsync(() =>
             {
-                return;
-            }
-            var appNames = connectionViewModel.Apps
-                .Where(a => a.EntryType == "app")
-                .Select(a => a.ProcessName.IsNotEmpty() ? a.ProcessName : a.Value)
-                .Where(n => n.IsNotEmpty())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+                var vm = ViewModel?.ConnectionViewModel;
+                if (vm is null)
+                {
+                    return Array.Empty<string>();
+                }
+                return vm.Apps
+                    .Where(a => a.EntryType == "app")
+                    .Select(a => a.ProcessName.IsNotEmpty() ? a.ProcessName : a.Value)
+                    .Where(n => n.IsNotEmpty())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+            }).Task.ConfigureAwait(false);
             if (appNames.Length == 0)
             {
                 return;
@@ -1001,12 +1011,14 @@ public partial class MainWindow : IDashboardBridge
             var byApp = results.ToDictionary(r => r.AppName, StringComparer.OrdinalIgnoreCase);
             await Dispatcher.InvokeAsync(() =>
             {
-                connectionViewModel = ViewModel?.ConnectionViewModel;
-                if (connectionViewModel is null)
+                // VM durumunu burada (UI thread) TAZE oku — sonuçlar arka planda
+                // alınırken liste değişmiş olabilir; bayat referansa yazılmaz.
+                var vm = ViewModel?.ConnectionViewModel;
+                if (vm is null)
                 {
                     return;
                 }
-                foreach (var app in connectionViewModel.Apps)
+                foreach (var app in vm.Apps)
                 {
                     var key = app.ProcessName.IsNotEmpty() ? app.ProcessName : app.Value;
                     if (!byApp.TryGetValue(key, out var result))
@@ -1027,7 +1039,10 @@ public partial class MainWindow : IDashboardBridge
                 }
             });
 
-            await PushMonitorSnapshotAsync(force: true);
+            // PushMonitorSnapshotAsync reads ViewModel/VM bindings, so it must run
+            // on the UI thread; this method resumes on a pool thread after
+            // ConfigureAwait(false). Hop back to the dispatcher before pushing.
+            await Dispatcher.InvokeAsync(() => _ = PushMonitorSnapshotAsync(force: true));
             var ok = results.Count(r => r.IsMeasured);
             DiagLog.Write($"GPN_REALPING {(isBefore ? "before" : "after")} apps={results.Count} ok={ok}");
         }
@@ -2818,48 +2833,8 @@ public partial class MainWindow : IDashboardBridge
 
     /// <summary>Wave 2: <see cref="DashboardSettingsService"/> delegasyonu — gövde servise taşındı.</summary>
     private Task PushSystemProxyStateAsync(bool force = false) => _settingsService.PushSystemProxyStateAsync(force);
-    /// <summary>
-    /// Sends the currently selected AoGPN profile to the dashboard node card.
-    /// The signature check suppresses repeats so the 2 s poll only touches the
-    /// browser when the name, address or protocol actually changed.
-    /// </summary>
-    private async Task PushNodeInfoAsync(bool force = false)
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        ProfileItem? profile;
-        try
-        {
-            profile = await AppManager.Instance.GetProfileItem(AppManager.Instance.Config.IndexId);
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN node info lookup failed", ex);
-            return;
-        }
-
-        if (profile is null)
-        {
-            return;
-        }
-
-        var address = profile.Port > 0 ? $"{profile.Address}:{profile.Port}" : profile.Address;
-        var signature = $"{profile.Remarks}|{address}|{profile.ConfigType}";
-        if (!force && signature == _lastNodeSignature)
-        {
-            return;
-        }
-
-        _lastNodeSignature = signature;
-        var nameJson = JsonSerializer.Serialize(profile.Remarks);
-        var addressJson = JsonSerializer.Serialize(address);
-        var protocolJson = JsonSerializer.Serialize(profile.ConfigType.ToString());
-        await ExecuteScriptSafelyAsync(
-            $"window.updateNodeInfo({nameJson}, {addressJson}, {protocolJson});");
-    }
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushNodeInfoAsync(bool force = false) => _nodeService.PushNodeInfoAsync(force);
 
     /// <summary>
     /// Publishes the live connection table and manual-route list used by the
@@ -2899,294 +2874,26 @@ public partial class MainWindow : IDashboardBridge
         }
     }
 
-    /// <summary>
-    /// Pushes a GPN resilience decision (server switch, UDP death, mode fallback to
-    /// V2rayTCP, or Tier-2 recovery) into the dashboard. The event carries no traffic;
-    /// it only surfaces what GpnServerSelectionService already decided, in camelCase.
-    /// </summary>
-    /// <summary>
-    /// Pushes a GPN diagnostic line (GPN_LOG / GPN_RECOVER / GPN_SELECT ...) into
-    /// the dashboard diagnostics feed. The event is published by DiagLog for every
-    /// "GPN_*" write, so the feed mirrors ao_diag.txt without re-reading the file.
-    /// </summary>
-    private async Task PushGpnDiagAsync(GpnDiagEvent evt)
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var json = JsonSerializer.Serialize(evt, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnDiag?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-diag push failed", ex);
-        }
-    }
-
-    public async Task PushGpnTelemetryAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var json = JsonSerializer.Serialize(_gpnTelemetry.Snapshot, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnTelemetry?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-telemetry push failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// GpnCaptureLoop'un paket başına telemetrisini dashboard'a taşır
-    /// (protokol/yön/byte sayaçları, top akışlar, per-PID atfı). Canlı akış
-    /// AppEvents.GpnCaptureStatsChanged'den gelir; bu yöntem son görüntüyü
-    /// dashboard açılışı / get_gpn_telemetry / failover olaylarında yeniden basar.
-    /// </summary>
-    public async Task PushGpnCaptureStatsAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            if (_lastCaptureStats is not { } snap)
-            {
-                return; // döngü hiç çalışmadı — kart boş kalır
-            }
-            var json = JsonSerializer.Serialize(snap, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnCaptureStats?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-capture-stats push failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// SplitTunnelViewModel'e bağlı köprü: Game Boost'taki vpn eylemli oyunların
-    /// exe adlarından GpnTargetResolver'ı canlı (5 sn) çalıştırır. Olayların
-    /// dashboard'a taşınması için tek abonelik kurulur.
-    /// </summary>
-    private GpnTargetResolverBridge GetGpnPidBridge()
-    {
-        if (_gpnPidBridge is null)
-        {
-            _gpnPidBridge = new GpnTargetResolverBridge(ViewModel!.ConnectionViewModel);
-            _gpnPidBridge.SnapshotChanged += async _ => await PushGpnPidPoolAsync();
-        }
-        return _gpnPidBridge;
-    }
-
-    /// <summary>PID havuzu anlık görüntüsünü dashboard'a gönderir (özel veri taşınmaz).</summary>
-    public async Task PushGpnPidPoolAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var bridge = _gpnPidBridge;
-            if (bridge?.LastSnapshot is not { } snap)
-            {
-                return;
-            }
-            var json = JsonSerializer.Serialize(
-                new
-                {
-                    targetNames = snap.TargetNames,
-                    pids = snap.Pids,
-                    version = snap.Version,
-                    resolvedAt = snap.ResolvedAt.ToUnixTimeMilliseconds(),
-                    watching = snap.Watching,
-                    targetRunning = snap.TargetRunning,
-                    sourceStatus = snap.SourceStatus.ToString(),
-                },
-                RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnPidPool?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-pid-pool push failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// WARP dial sağlığını dashboard'a gönderir. `window.setWarpHealth` banner'ı
-    /// gösterir/gizler; veri yalnızca faulted bayrağı, hata sayısı ve son hata
-    /// metnidir (ağ geçidi adresi veya anahtar gibi hassas veri taşınmaz).
-    /// </summary>
-    private async Task PushWarpHealthAsync()
-    {
-        var health = WarpDialHealthMonitor.Instance.Snapshot;
-        var json = JsonSerializer.Serialize(
-            new
-            {
-                health.Faulted,
-                health.ErrorCount,
-                health.LatestError,
-            },
-            RouteTestJsonOptions);
-        await ExecuteScriptSafelyAsync($"window.setWarpHealth?.({json});");
-    }
-
-    private async Task PushWinDivertHealthAsync()
-    {
-        var health = WinDivertHealthMonitor.Instance.Snapshot;
-        var json = JsonSerializer.Serialize(
-            new
-            {
-                State = health.State.ToString(),
-                health.Message,
-                health.NativeError,
-            },
-            RouteTestJsonOptions);
-        await ExecuteScriptSafelyAsync($"window.setWinDivertHealth?.({json});");
-    }
-
-    public async Task PushGpnResilienceLogAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var json = JsonSerializer.Serialize(
-                new { entries = _gpnResilienceLog.Recent, path = _gpnResilienceLog.LogPath },
-                RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnResilienceLog?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-resilience-log push failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// Pushes a soft node-switch drain snapshot (old node draining after a
-    /// restart-free switch) into the dashboard status line, in camelCase.
-    /// </summary>
-    private async Task PushGpnDrainAsync(GpnDrainSnapshot snap)
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var json = JsonSerializer.Serialize(snap, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnNodeSwitch?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-drain push failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// Pushes a GPN resilience decision (server switch, UDP death, mode fallback to
-    /// V2rayTCP, or Tier-2 recovery) into the dashboard. The event carries no traffic;
-    /// it only surfaces what GpnServerSelectionService already decided, in camelCase.
-    /// </summary>
-    private async Task PushGpnResilienceAsync(GpnResilienceEvent evt)
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var json = JsonSerializer.Serialize(evt, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setGpnResilience?.({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN gpn-resilience push failed", ex);
-        }
-
-        // Her failover/kurtarma olayından sonra telemetri sayaçlarını, yakalanan
-        // trafik istatistiklerini ve döngüsel karar günlüğünü de tazele.
-        await PushGpnTelemetryAsync();
-        await PushGpnCaptureStatsAsync();
-        await PushGpnResilienceLogAsync();
-
-        // Bağlan sırasında seçilen sunucuyu + gecikmeyi + modu StatusBar'a ve
-        // dashboard telemetri panelinin Ping kartına / oturum düğümüne canlı taşı.
-        // ModeDecision aday seçiminin sonucudur; sunucu adı ve gecikme mevcutsa
-        // hem tepsi satırını hem telemetriyi güncelle (ağ çağrısı tekrarlanmaz).
-        if (evt.Action is GpnResilienceAction.ModeDecision
-            && evt.ServerName.IsNotEmpty())
-        {
-            var status = StatusBarViewModel.Instance;
-            var mode = evt.ToMode == ConnectionMode.V2rayTCP ? "V2rayTCP" : "WireGuard";
-            var latency = evt.DelayMs is >= 0 ? $"{evt.DelayMs} ms" : "—";
-            status.RunningServerDisplay = $"{evt.ServerName} · {latency} · {mode}";
-            status.TrayStatusLine = $"GPN → {evt.ServerName} ({latency}, {mode})";
-            status.TrayStatusState = 2;
-
-            try
-            {
-                var infoJson = JsonSerializer.Serialize(new
-                {
-                    Server = evt.ServerName,
-                    DelayMs = evt.DelayMs,
-                    Mode = mode,
-                }, RouteTestJsonOptions);
-                await ExecuteScriptSafelyAsync($"window.setGpnConnectionInfo?.({infoJson});");
-            }
-            catch (Exception ex)
-            {
-                Logging.SaveLog("AoGPN gpn-connection-info push failed", ex);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Sunucu kullanılabilirlik ölçümü sonucunu (StatusBarViewModel.TestServerAvailability
-    /// → ConnectionHandler.RunAvailabilityCheckData) dashboard ana paneline taşır:
-    /// gecikme Ping kartına, IP + sunucu adı alt satırına yazılır. Bağlantı kurulduktan
-    /// sonra otomatik ölçüm (RunAvailabilityCheckAfterConnectAsync) ve manuel ⚡ Test
-    /// butonu bu akıştan beslenir — ölçüm yalnızca WPF durum çubuğunda kalmaz.
-    /// </summary>
-    private async Task PushAvailabilityInfoAsync(AvailabilityCheckResult result)
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var infoJson = JsonSerializer.Serialize(new
-            {
-                Server = result.ServerName,
-                DelayMs = result.DelayMs,
-                Ip = result.Ip,
-                Country = result.Country,
-            }, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setAvailabilityInfo?.({infoJson});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN availability-info push failed", ex);
-        }
-    }
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushGpnDiagAsync(GpnDiagEvent evt) => _pushService.PushGpnDiagAsync(evt);
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushGpnTelemetryAsync() => _pushService.PushGpnTelemetryAsync();
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushGpnCaptureStatsAsync() => _pushService.PushGpnCaptureStatsAsync();
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushGpnPidPoolAsync() => _pushService.PushGpnPidPoolAsync();
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushWarpHealthAsync() => _pushService.PushWarpHealthAsync();
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushWinDivertHealthAsync() => _pushService.PushWinDivertHealthAsync();
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushGpnResilienceLogAsync() => _pushService.PushGpnResilienceLogAsync();
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushGpnDrainAsync(GpnDrainSnapshot snap) => _pushService.PushGpnDrainAsync(snap);
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushGpnResilienceAsync(GpnResilienceEvent evt) => _pushService.PushGpnResilienceAsync(evt);
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushAvailabilityInfoAsync(AvailabilityCheckResult result) => _pushService.PushAvailabilityInfoAsync(result);
 
     // ── GPN Sunucu Yönetimi (Faz 3 ekranı) ───────────────────────────────
 
@@ -3235,971 +2942,49 @@ public partial class MainWindow : IDashboardBridge
         }
     }
 
-    /// <summary>
-    /// Runs the rule-drift health check on a background thread and pushes the verdict
-    /// into the dashboard. The check rebuilds the sing-box config the active core would
-    /// use right now and compares its route rules against the config the running core
-    /// loaded — a mismatch means the tunnel is enforcing stale rules (e.g. routing edited
-    /// in the settings without a reload). No traffic is sent.
-    /// </summary>
-    private async Task PushRuleDriftAsync(bool force = false)
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var config = AppManager.Instance.Config;
-            var report = await Task.Run(async () => await new RoutingDriftHealthCheck(config).CheckAsync());
-
-            var verdict = report.IsDrifted ? "drifted" : report.State.ToString();
-            var previousVerdict = Volatile.Read(ref _lastRuleDriftVerdict);
-            if (!force && verdict == previousVerdict)
-            {
-                return;
-            }
-            Volatile.Write(ref _lastRuleDriftVerdict, verdict);
-
-            AppEvents.RuleDriftChanged.Publish(report);
-            if (report.IsDrifted)
-            {
-                DiagLog.Write($"RULE_DRIFT UI routing={report.ActiveRoutingId} missing={report.MissingRules.Count} extra={report.ExtraRules.Count} reordered={report.Reordered}");
-            }
-
-            var json = JsonSerializer.Serialize(report, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setRuleDrift({json});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN rule-drift check failed", ex);
-        }
-    }
-
-    public async Task PushProcessCatalogAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        try
-        {
-            var processes = await Task.Run(() => _processCatalogService.GetRunningProcesses(_webViewLifetime.Token));
-            var payload = processes.Select(item => new
-            {
-                pid = item.Pid,
-                processName = item.ProcessName,
-                displayName = item.DisplayName,
-                exePath = item.ExePath,
-                isElevatedProcess = item.IsElevatedProcess,
-            });
-            await ExecuteScriptSafelyAsync(
-                $"window.updateProcessList({JsonSerializer.Serialize(payload)});");
-        }
-        catch (OperationCanceledException) when (_webViewLifetime.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN process catalog push failed", ex);
-        }
-    }
-
-    public async Task PushMonitorSnapshotAsync(bool force = false)
-    {
-        if (!_webViewReady || ViewModel?.ConnectionViewModel is not { } connectionViewModel)
-        {
-            return;
-        }
-
-        // The connection/split tables only exist on the Performance and Game Boost
-        // views. The 2 s poll skips serialization and DOM re-rendering while the user
-        // is elsewhere; entering those views requests a snapshot explicitly.
-        if (!force && _activeView is not ("perf" or "boost"))
-        {
-            return;
-        }
-
-        var monitor = connectionViewModel.Monitor;
-        var connections = monitor.Connections
-            .Take(300)
-            .Select(item => new
-            {
-                processName = item.ProcessName,
-                displayName = item.DisplayName,
-                exePath = item.ExePath,
-                pid = item.Pid,
-                protocol = item.Protocol,
-                remoteAddress = item.RemoteAddress,
-                localAddress = item.LocalAddress,
-                state = item.State,
-                routeTag = item.RouteTag,
-                routeText = item.RouteText,
-                countryText = item.CountryText,
-                asnText = item.AsnText,
-            })
-            .ToList();
-
-        // Propagate the active-node ping to every running app so the dashboard
-        // boost cards show per-game latency from the real telemetry loop.
-        var activePing = connectionViewModel.Telemetry.PingValue;
-        foreach (var app in connectionViewModel.Apps)
-        {
-            if (app.IsRunning && activePing > 0)
-            {
-                app.LatencyMs = activePing;
-                app.LatencyText = activePing + " ms";
-            }
-            else
-            {
-                // Clear latency for idle/paused apps so old values don't linger.
-                app.LatencyMs = -1;
-                app.LatencyText = "—";
-            }
-        }
-
-        var apps = connectionViewModel.Apps
-            .Take(200)
-            .Select(item => new
-            {
-                processName = item.ProcessName,
-                displayName = item.DisplayName,
-                entryType = item.EntryType,
-                value = item.Value,
-                action = item.Action,
-                routeTag = item.RouteTag,
-                routeText = item.RouteText,
-                isRunning = item.IsRunning,
-                runStatusText = item.RunStatusText,
-                liveRouteTag = item.LiveRouteTag,
-                liveRouteText = item.LiveRouteText,
-                liveConnectionCount = item.LiveConnectionCount,
-                downloadText = item.DownloadText,
-                uploadText = item.UploadText,
-                activeIps = item.ActiveIps,
-                needsTun = item.NeedsTun,
-                exeMissing = item.ExeMissing,
-                latencyMs = item.LatencyMs,
-                latencyText = item.LatencyText,
-                beforePingMs = item.BeforePingMs,
-                beforePingText = item.BeforePingText,
-                afterPingMs = item.AfterPingMs,
-                afterPingText = item.AfterPingText,
-                pingDeltaText = item.PingDeltaText,
-            })
-            .ToList();
-
-        var traffic = monitor.AppTrafficItems
-            .Take(100)
-            .Select(item => new
-            {
-                appName = item.AppName,
-                exePath = item.ExePath,
-                downloadText = item.DownloadText,
-                uploadText = item.UploadText,
-                activeIps = item.ActiveIps,
-                connectionCount = item.ConnectionCount,
-            })
-            .ToList();
-
-        var mode = connectionViewModel.Mode switch
-        {
-            SplitTunnelViewModel.ModeManual => "manual",
-            SplitTunnelViewModel.ModeVpn => "vpn",
-            _ => "off",
-        };
-        var transport = ReadTransport();
-        var flushedCount = TunLifecycleManager.DrainFlushCount();
-
-        // Compute the routing-engine mode the core is running under.
-        //  - gpn   : GPN Game Tunnel — stripped v2rayN baggage, process_name only
-        //  - global: Global VPN — full legacy clash_mode / geoip / hosts chain
-        //  - proxy : Proxy capture — no TUN, OS proxy routes all traffic
-        //  - none  : Disconnected or undefined
-        string routingMode;
-        if (!ReadActualConnectionState())
-        {
-            routingMode = "none";
-        }
-        else
-        {
-            routingMode = transport switch
-            {
-                "tun" when mode == "manual" => "gpn",
-                "tun" when mode == "vpn" => "global",
-                "tun" => "global",
-                "proxy" => "proxy",
-                _ => "none",
-            };
-        }
-
-        var payload = new
-        {
-            updatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            connected = ReadActualConnectionState(),
-            mode,
-            transport,
-            invertManualRouting = connectionViewModel.InvertManualRouting,
-            autoConnectOnGameStart = connectionViewModel.AutoConnectOnGameStart,
-            activeConnectionCount = monitor.ActiveConnectionCount,
-            activeAppCount = monitor.ActiveAppCount,
-            activeCountryCount = monitor.ActiveCountryCount,
-            totalDownloadText = monitor.TotalDownloadText,
-            totalUploadText = monitor.TotalUploadText,
-            trafficStatus = monitor.TrafficStatus,
-            flushedSocketCount = flushedCount,
-            routingMode,
-            connections,
-            apps,
-            traffic,
-        };
-
-        var json = JsonSerializer.Serialize(payload);
-        await ExecuteScriptSafelyAsync($"window.updateMonitorSnapshot({json});");
-    }
-
-    /// <summary>
-    /// Switches the active AoGPN server from the dashboard node list. Reuses the
-    /// same persistence + core reload path as the native servers view, then pushes
-    /// the switched profile and refreshed selection back to the renderer.
-    /// </summary>
-    public async Task SelectNodeAsync(string indexId)
-    {
-        var profilesViewModel = ViewModel?.ProfilesViewModel;
-        if (profilesViewModel is null)
-        {
-            await AcknowledgeNodeSwitchAsync(succeeded: false, indexId);
-            return;
-        }
-
-        var succeeded = false;
-        try
-        {
-            await profilesViewModel.SetDefaultServer(indexId);
-            // SetDefaultServer can return silently (unknown id, same server); the
-            // persisted IndexId is the authoritative proof the switch took effect.
-            succeeded = AppManager.Instance.Config.IndexId == indexId;
-            if (succeeded)
-            {
-                // Feed the "Recently used" node sort.
-                ProfileExManager.Instance.TouchLastUsed(indexId);
-                await ProfileExManager.Instance.SaveTo();
-
-                // While the proxy-only core is up (no tunnel), re-run it on the newly
-                // selected node so the system proxy follows the node picker.
-                if (_proxyOnlyService.IsRunning)
-                {
-                    try
-                    {
-                        await _proxyOnlyService.RestartOnNodeChangeAsync(AppManager.Instance.Config);
-                        await PushSystemProxyStateAsync(force: true);
-                    }
-                    catch (Exception ex)
-                    {
-                        Logging.SaveLog("AoGPN proxy-only node switch failed", ex);
-                    }
-                }
-
-                UpdateTrayStatus();
-            }
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("WebView2 server switch failed", ex);
-        }
-
-        // Always publish the effective profile and selection, then acknowledge so
-        // the renderer can clear its "switching…" state or roll the switch back.
-        await PushNodeInfoAsync(force: true);
-        await PushNodeListAsync();
-        await AcknowledgeNodeSwitchAsync(succeeded, indexId);
-    }
-
-    private async Task AcknowledgeNodeSwitchAsync(bool succeeded, string indexId)
-    {
-        await ExecuteScriptSafelyAsync(
-            $"window.setNodeSwitchResult({JsonSerializer.Serialize(succeeded)}, {JsonSerializer.Serialize(indexId)});");
-    }
-
-    /// <summary>
-    /// Loads the profile entities for the given ids; unknown or unreadable ids are
-    /// skipped so a stale renderer selection can never crash the operation.
-    /// </summary>
-    private async Task<List<ProfileItem>> LoadProfilesByIdsAsync(IReadOnlyCollection<string> indexIds)
-    {
-        var profiles = new List<ProfileItem>();
-        foreach (var id in indexIds)
-        {
-            if (id.IsNullOrEmpty())
-            {
-                continue;
-            }
-
-            try
-            {
-                var item = await AppManager.Instance.GetProfileItem(id);
-                if (item is not null)
-                {
-                    profiles.Add(item);
-                }
-            }
-            catch (Exception ex)
-            {
-                Logging.SaveLog("AoGPN node lookup failed", ex);
-            }
-        }
-        return profiles;
-    }
-
-    /// <summary>
-    /// Copies the share links (vless://, vmess://, ...) of the selected nodes to the
-    /// clipboard, mirroring the native servers view's Ctrl+C (Export2ShareUrl). An
-    /// empty selection copies the active profile.
-    /// </summary>
-    public async Task CopyNodesAsync(string[] indexIds)
-    {
-        var ids = indexIds.Length > 0 ? indexIds : new[] { AppManager.Instance.Config.IndexId };
-        var profiles = await LoadProfilesByIdsAsync(ids);
-        if (profiles.Count == 0)
-        {
-            return;
-        }
-
-        var sb = new StringBuilder();
-        foreach (var item in profiles)
-        {
-            var url = FmtHandler.GetShareUri(item);
-            if (url.IsNullOrEmpty())
-            {
-                continue;
-            }
-            sb.AppendLine(url);
-        }
-
-        if (sb.Length == 0)
-        {
-            await NotifyNodesOpAsync("Selected nodes have no share link");
-            return;
-        }
-
-        WindowsUtils.SetClipboardData(sb.ToString());
-        await NotifyNodesOpAsync($"Copied {profiles.Count} node share link(s) to clipboard");
-    }
-
-    /// <summary>
-    /// Imports nodes from the clipboard into the current group, mirroring the native
-    /// Ctrl+V (AddServerViaClipboard), then republishes the refreshed node list.
-    /// </summary>
-    public async Task PasteNodesAsync()
-    {
-        var clipboardData = WindowsUtils.GetClipboardData();
-        if (clipboardData.IsNullOrEmpty())
-        {
-            await NotifyNodesOpAsync("Clipboard is empty");
-            return;
-        }
-
-        try
-        {
-            var ret = await ConfigHandler.AddBatchServers(
-                AppManager.Instance.Config, clipboardData, AppManager.Instance.Config.SubIndexId, false);
-            Logging.SaveLog($"AoGPN clipboard paste imported {ret} node(s)");
-            await PushNodeListAsync();
-            await NotifyNodesOpAsync(ret > 0
-                ? $"Imported {ret} node(s) from clipboard"
-                : "No valid nodes found in clipboard");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN clipboard import failed", ex);
-            await NotifyNodesOpAsync("Clipboard import failed");
-        }
-    }
-
-    /// <summary>
-    /// Deletes the given nodes through the same persistence path as the native view
-    /// (ConfigHandler.RemoveServers), reloads the core if the active profile was
-    /// among the removed ones, then republishes the list.
-    /// </summary>
-    public async Task DeleteNodesAsync(string[] indexIds)
-    {
-        var profiles = await LoadProfilesByIdsAsync(indexIds);
-        if (profiles.Count == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            var config = AppManager.Instance.Config;
-            var removedActive = profiles.Exists(t => t.IndexId == config.IndexId);
-            await ConfigHandler.RemoveServers(config, profiles);
-
-            var profilesViewModel = ViewModel?.ProfilesViewModel;
-            if (profilesViewModel is not null)
-            {
-                await profilesViewModel.RefreshServers();
-                if (removedActive)
-                {
-                    profilesViewModel.ReloadRequested.Publish();
-                }
-            }
-
-            await PushNodeInfoAsync(force: true);
-            await PushNodeListAsync();
-            await NotifyNodesOpAsync($"Deleted {profiles.Count} node(s)");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN node delete failed", ex);
-            await NotifyNodesOpAsync("Delete failed");
-        }
-    }
-
-    /// <summary>
-    /// Runs the native real-ping test over the given nodes (empty array = the whole
-    /// current group) and streams per-node results to the renderer. The same
-    /// SpeedtestService the native servers view uses, so delays persist in
-    /// ProfileEx and the "remove failed" cleanup matches native semantics.
-    /// </summary>
-    public async Task StartNodeSpeedtestAsync(string[] indexIds, string? testType = null, long requestedRunId = 0)
-    {
-        if (_nodeTestRunning)
-        {
-            // The flag can only be trusted while the service really has a run in
-            // flight (e.g. a dashboard page reload can strand it as true). A
-            // stuck flag must not permanently block new tests.
-            if (_nodeSpeedtestService?.HasActiveRun == true)
-            {
-                await NotifyNodesOpAsync("A ping test is already running — press Stop to cancel it");
-                return;
-            }
-            _nodeTestRunning = false;
-        }
-
-        List<ProfileItem> profiles;
-        try
-        {
-            profiles = indexIds.Length > 0
-                ? await LoadProfilesByIdsAsync(indexIds)
-                : await AppManager.Instance.ProfileItems(AppManager.Instance.Config.SubIndexId) ?? [];
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN ping test profile load failed", ex);
-            await NotifyNodesOpAsync("Ping test could not load the nodes");
-            return;
-        }
-
-        // Skip non-testable profiles (custom configs, portless groups) the same
-        // way SpeedtestService.GetClearItem does.
-        var testable = profiles.Where(p => p.ConfigType != EConfigType.Custom
-            && (p.ConfigType.IsComplexType() || p.Port > 0)).ToList();
-        if (testable.Count == 0)
-        {
-            await NotifyNodesOpAsync("No testable nodes in the selection");
-            return;
-        }
-
-        var normalizedTestType = testType is "udp" or "both" ? testType : "tcp";
-        var actionType = normalizedTestType switch
-        {
-            "udp" => ESpeedActionType.UdpTest,
-            "both" => ESpeedActionType.Mixedtest,
-            _ => ESpeedActionType.Tcping,
-        };
-
-        _nodeTestRunning = true;
-        var runId = requestedRunId > 0 ? requestedRunId : Interlocked.Increment(ref _nodeTestRunId);
-        Interlocked.Exchange(ref _nodeTestRunId, runId);
-        await ExecuteScriptSafelyAsync($"window.setNodeTestRunning(true, {runId});");
-        Logging.SaveLog($"AoGPN ping test starting with {testable.Count} node(s), type={normalizedTestType}");
-
-        _nodePingCancellation?.Cancel();
-        _nodePingCancellation = new CancellationTokenSource();
-        _nodeSpeedtestService ??= new SpeedtestService(AppManager.Instance.Config, result =>
-        {
-            // Never await the renderer from the speed-test worker thread:
-            // CoreWebView2.ExecuteScriptAsync can deadlock when awaited off the UI
-            // thread, which would stall the whole test run. Dispatch the DOM push
-            // onto the UI thread and return immediately, mirroring how the native
-            // servers view schedules speed-test updates on the main scheduler.
-            if (result is null || _isClosing || !_webViewReady)
-            {
-                return Task.CompletedTask;
-            }
-
-            try
-            {
-                Dispatcher.InvokeAsync(() => PushNodeTestResultAsync(result));
-            }
-            catch
-            {
-                // The dispatcher is shutting down; there is nothing left to push.
-            }
-
-            return Task.CompletedTask;
-        });
-
-        // A previous run that was interrupted is stopped before starting fresh.
-        _nodeSpeedtestService.ExitLoop();
-        _nodeSpeedtestService.RunLoop(actionType, testable, _nodePingCancellation.Token);
-    }
-
-    /// <summary>
-    /// Pushes one speed-test result to the renderer on the UI thread. An empty
-    /// IndexId marks the run as finished/stopped and clears the running state.
-    /// </summary>
-    private async Task PushNodeTestResultAsync(SpeedTestResult result)
-    {
-        if (result is null)
-        {
-            return;
-        }
-
-        var runId = Volatile.Read(ref _nodeTestRunId);
-        if (result.IndexId.IsNullOrEmpty())
-        {
-            _nodeTestRunning = false;
-        }
-
-        await ExecuteScriptSafelyAsync(
-            $"window.updateNodeTest({JsonSerializer.Serialize(result.IndexId)}, {JsonSerializer.Serialize(result.Delay)}, {runId});");
-    }
-
-    /// <summary>Stops a running ping test; the service reports the stop back to the renderer.</summary>
-    public void StopNodeSpeedtest()
-    {
-        Interlocked.Increment(ref _nodeTestRunId);
-        _nodePingCancellation?.Cancel();
-        _nodeSpeedtestService?.ExitLoop();
-        _nodeTestRunning = false;
-    }
-
-    /// <summary>
-    /// Moves the given nodes into the dashboard's Disabled section (a config-level
-    /// flag, not a DB move), hides them from the main list, and persists the change.
-    /// </summary>
-    public async Task DisableNodesAsync(string[] indexIds)
-    {
-        var profiles = await LoadProfilesByIdsAsync(indexIds);
-        if (profiles.Count == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            var config = AppManager.Instance.Config;
-            config.DisabledIndexIds ??= [];
-            var added = 0;
-            foreach (var profile in profiles)
-            {
-                if (!config.DisabledIndexIds.Contains(profile.IndexId))
-                {
-                    config.DisabledIndexIds.Add(profile.IndexId);
-                    added++;
-                }
-            }
-            if (added > 0)
-            {
-                await ConfigHandler.SaveConfig(config);
-            }
-
-            await PushNodeListAsync();
-            await NotifyNodesOpAsync($"{added} node(s) moved to Disabled");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN node disable failed", ex);
-            await NotifyNodesOpAsync("Disable failed");
-        }
-    }
-
-    /// <summary>Moves the given nodes back from the Disabled section into the main list.</summary>
-    public async Task RestoreNodesAsync(string[] indexIds)
-    {
-        try
-        {
-            var config = AppManager.Instance.Config;
-            if (config.DisabledIndexIds is null || config.DisabledIndexIds.Count == 0)
-            {
-                return;
-            }
-
-            var restored = 0;
-            foreach (var id in indexIds)
-            {
-                if (config.DisabledIndexIds.Remove(id))
-                {
-                    restored++;
-                }
-            }
-            if (restored == 0)
-            {
-                return;
-            }
-
-            await ConfigHandler.SaveConfig(config);
-            await PushNodeListAsync();
-            await NotifyNodesOpAsync($"{restored} node(s) restored");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN node restore failed", ex);
-            await NotifyNodesOpAsync("Restore failed");
-        }
-    }
-
-    /// <summary>
-    /// Finds the nodes in the current group whose last real-ping result was a
-    /// failure (ProfileEx delay == -1) and either deletes them or moves them to
-    /// the Disabled section, mirroring native RemoveInvalidServerResult.
-    /// </summary>
-    public async Task CleanupFailedNodesAsync(string target)
-    {
-        try
-        {
-            var config = AppManager.Instance.Config;
-            var lstModel = await AppManager.Instance.ProfileModels(config.SubIndexId, "");
-            if (lstModel is null || lstModel.Count == 0)
-            {
-                return;
-            }
-
-            var lstProfileExs = await ProfileExManager.Instance.GetProfileExs();
-            var failedIds = lstModel
-                .Where(t => !t.ConfigType.IsComplexType()
-                    && lstProfileExs.Any(e => e.IndexId == t.IndexId && e.Delay == -1))
-                .Select(t => t.IndexId)
-                .ToHashSet();
-            if (failedIds.Count == 0)
-            {
-                await NotifyNodesOpAsync("No failed nodes found — run a ping test first");
-                return;
-            }
-
-            var lstProfile = await AppManager.Instance.ProfileItems(config.SubIndexId) ?? [];
-            var failed = lstProfile.Where(p => failedIds.Contains(p.IndexId)).ToList();
-            if (failed.Count == 0)
-            {
-                return;
-            }
-
-            if (target == "disable")
-            {
-                config.DisabledIndexIds ??= [];
-                var added = 0;
-                foreach (var item in failed)
-                {
-                    if (!config.DisabledIndexIds.Contains(item.IndexId))
-                    {
-                        config.DisabledIndexIds.Add(item.IndexId);
-                        added++;
-                    }
-                }
-                if (added > 0)
-                {
-                    await ConfigHandler.SaveConfig(config);
-                }
-                await PushNodeListAsync();
-                await NotifyNodesOpAsync($"{added} failed node(s) moved to Disabled");
-                return;
-            }
-
-            var removedActive = failed.Exists(t => t.IndexId == config.IndexId);
-            await ConfigHandler.RemoveServers(config, failed);
-
-            var profilesViewModel = ViewModel?.ProfilesViewModel;
-            if (profilesViewModel is not null)
-            {
-                await profilesViewModel.RefreshServers();
-                if (removedActive)
-                {
-                    profilesViewModel.ReloadRequested.Publish();
-                }
-            }
-
-            await PushNodeInfoAsync(force: true);
-            await PushNodeListAsync();
-            await NotifyNodesOpAsync($"{failed.Count} failed node(s) deleted");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN failed-node cleanup failed", ex);
-            await NotifyNodesOpAsync("Cleanup failed");
-        }
-    }
-
-    /// <summary>
-    /// Removes duplicate profiles from the current group using the same property-
-    /// based comparison as the native servers view, keeping only one of each.
-    /// </summary>
-    public async Task DedupNodesAsync()
-    {
-        try
-        {
-            var config = AppManager.Instance.Config;
-            var tuple = await ConfigHandler.DedupServerList(config, config.SubIndexId);
-            if (tuple.Item1 > 0)
-            {
-                await PushNodeInfoAsync(force: true);
-                await PushNodeListAsync();
-                await NotifyNodesOpAsync(
-                    $"Duplicates removed: {tuple.Item1 - tuple.Item2} of {tuple.Item1} kept {tuple.Item2}");
-            }
-            else
-            {
-                await NotifyNodesOpAsync("No duplicate nodes found");
-            }
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN node dedup failed", ex);
-            await NotifyNodesOpAsync("Deduplicate failed");
-        }
-    }
-
-    /// <summary>Pushes the node-pool link list to the dashboard Nodes view.</summary>
-    public async Task PushNodePoolAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        var links = AppManager.Instance.Config.NodePoolLinks ?? [];
-        await ExecuteScriptSafelyAsync(
-            $"window.updateNodePool({JsonSerializer.Serialize(links)});");
-    }
-
-    /// <summary>Adds a raw .txt / subscription URL to the node pool.</summary>
-    public async Task AddNodePoolLinkAsync(string url)
-    {
-        url = url.Trim();
-        if (!url.StartsWith(Global.HttpsProtocol, StringComparison.OrdinalIgnoreCase)
-            && !url.StartsWith(Global.HttpProtocol, StringComparison.OrdinalIgnoreCase))
-        {
-            await NotifyNodesOpAsync("Invalid link — must start with http:// or https://");
-            return;
-        }
-
-        var config = AppManager.Instance.Config;
-        config.NodePoolLinks ??= [];
-        if (!config.NodePoolLinks.Contains(url, StringComparer.OrdinalIgnoreCase))
-        {
-            config.NodePoolLinks.Add(url);
-            await ConfigSaveQueue.SaveAndWaitAsync(config);
-        }
-        await PushNodePoolAsync();
-        await NotifyNodesOpAsync("Link added to pool");
-    }
-
-    /// <summary>Replaces a pooled URL with an edited one (same validation as add).</summary>
-    public async Task EditNodePoolLinkAsync(string url, string newUrl)
-    {
-        url = url.Trim();
-        newUrl = newUrl.Trim();
-        if (!newUrl.StartsWith(Global.HttpsProtocol, StringComparison.OrdinalIgnoreCase)
-            && !newUrl.StartsWith(Global.HttpProtocol, StringComparison.OrdinalIgnoreCase))
-        {
-            await NotifyNodesOpAsync("Invalid link — must start with http:// or https://");
-            return;
-        }
-
-        var config = AppManager.Instance.Config;
-        config.NodePoolLinks ??= [];
-        if (!config.NodePoolLinks.Contains(url, StringComparer.OrdinalIgnoreCase))
-        {
-            await NotifyNodesOpAsync("Link not found in pool");
-            return;
-        }
-        if (config.NodePoolLinks.Any(l => !l.Equals(url, StringComparison.OrdinalIgnoreCase)
-                                          && l.Equals(newUrl, StringComparison.OrdinalIgnoreCase)))
-        {
-            await NotifyNodesOpAsync("Link already in pool");
-            return;
-        }
-
-        var idx = config.NodePoolLinks.FindIndex(l => l.Equals(url, StringComparison.OrdinalIgnoreCase));
-        config.NodePoolLinks[idx] = newUrl;
-        await ConfigSaveQueue.SaveAndWaitAsync(config);
-        await PushNodePoolAsync();
-        await NotifyNodesOpAsync("Link updated");
-    }
-
-    /// <summary>Removes a URL from the node pool.</summary>
-    public async Task RemoveNodePoolLinkAsync(string url)
-    {
-        var config = AppManager.Instance.Config;
-        config.NodePoolLinks ??= [];
-        config.NodePoolLinks.RemoveAll(l => l.Equals(url.Trim(), StringComparison.OrdinalIgnoreCase));
-        await ConfigSaveQueue.SaveAndWaitAsync(config);
-        await PushNodePoolAsync();
-        await NotifyNodesOpAsync("Link removed from pool");
-    }
-
-    /// <summary>
-    /// Downloads every link in the node pool (plain .txt, base64 or subscription
-    /// endpoints) and imports the shared nodes into the current group without
-    /// touching existing entries. Reports per-link progress through the Nodes-view
-    /// toast, then republishes the node list.
-    /// </summary>
-    public async Task FetchNodePoolAsync()
-    {
-        var config = AppManager.Instance.Config;
-        var links = config.NodePoolLinks ?? [];
-        if (links.Count == 0)
-        {
-            await NotifyNodesOpAsync("Pool is empty — add links first");
-            return;
-        }
-
-        await NotifyNodesOpAsync($"Downloading nodes from {links.Count} pool link(s)…");
-        var total = 0;
-        var totalLinks = 0;
-        foreach (var link in links)
-        {
-            var url = Utils.GetPunycode(link.Trim());
-            if (url.IsNullOrEmpty())
-            {
-                continue;
-            }
-
-            var download = new DownloadService();
-            try
-            {
-                var content = await download.TryDownloadString(url, false, "");
-                // Retry through the proxy when a direct fetch comes back empty.
-                if (content.IsNullOrEmpty())
-                {
-                    content = await download.TryDownloadString(url, true, "");
-                }
-                if (content.IsNullOrEmpty())
-                {
-                    await NotifyNodesOpAsync($"{link} — no content");
-                    continue;
-                }
-
-                content = NormalizeNodePoolContent(content);
-                var ret = await ConfigHandler.AddBatchServers(config, content, "", false);
-                if (ret > 0)
-                {
-                    total += ret;
-                    totalLinks++;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logging.SaveLog($"NodePool fetch failed: {link}", ex);
-                await NotifyNodesOpAsync($"{link} — failed");
-            }
-        }
-
-        await PushNodeInfoAsync(force: true);
-        await PushNodeListAsync();
-        await PushNodePoolAsync();
-        await NotifyNodesOpAsync(
-            total > 0
-                ? $"{total} new nodes imported from {totalLinks} pool link(s)"
-                : "No new nodes found in the pool");
-    }
-
-    private static string NormalizeNodePoolContent(string content)
-    {
-        var value = content.Trim();
-        if (value.Length == 0) return value;
-
-        // Subscription feeds are commonly base64-wrapped. Decode only when the
-        // decoded text looks like a node URI or a JSON profile document.
-        var compact = string.Concat(value.Where(c => !char.IsWhiteSpace(c)));
-        try
-        {
-            var padded = compact.PadRight(compact.Length + (4 - compact.Length % 4) % 4, '=');
-            var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(padded));
-            if (decoded.Contains("://", StringComparison.Ordinal)
-                || decoded.Contains("{\"", StringComparison.Ordinal)
-                || decoded.Contains("outbounds", StringComparison.OrdinalIgnoreCase))
-            {
-                value = decoded;
-            }
-        }
-        catch (FormatException)
-        {
-            // Plain text feeds are expected and need no decoding.
-        }
-
-        // Accept JSON arrays/objects emitted by several public aggregators by
-        // extracting common URI lines; AddBatchServers handles the URI formats.
-        if (value.TrimStart().StartsWith('{') || value.TrimStart().StartsWith('['))
-        {
-            try
-            {
-                using var document = JsonDocument.Parse(value);
-                var uris = new List<string>();
-                CollectNodeUris(document.RootElement, uris);
-                value = string.Join(Environment.NewLine, uris);
-            }
-            catch (JsonException)
-            {
-                // Let the existing batch parser report unsupported content.
-            }
-        }
-
-        return string.Join(Environment.NewLine, value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.Trim())
-            .Where(line => IsNodeUri(line) || line.Contains("vless://", StringComparison.OrdinalIgnoreCase)
-                || line.Contains("vmess://", StringComparison.OrdinalIgnoreCase)
-                || line.Contains("ss://", StringComparison.OrdinalIgnoreCase)
-                || line.Contains("trojan://", StringComparison.OrdinalIgnoreCase)
-                || line.Contains("hysteria", StringComparison.OrdinalIgnoreCase)
-                || line.Contains("tuic://", StringComparison.OrdinalIgnoreCase)));
-    }
-
-    private static void CollectNodeUris(JsonElement element, List<string> uris)
-    {
-        if (element.ValueKind == JsonValueKind.String)
-        {
-            var value = element.GetString();
-            if (IsNodeUri(value)) uris.Add(value!);
-            return;
-        }
-        if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var child in element.EnumerateArray()) CollectNodeUris(child, uris);
-        }
-        else if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in element.EnumerateObject()) CollectNodeUris(property.Value, uris);
-        }
-    }
-
-    private static bool IsNodeUri(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return false;
-        var line = value.Trim();
-        return line.StartsWith("vless://", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("ss://", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("trojan://", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("hysteria2://", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("hysteria://", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("tuic://", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("socks://", StringComparison.OrdinalIgnoreCase)
-            || line.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>Flips the favorite star for a node and republishes the list.</summary>
-    public async Task ToggleNodeFavAsync(string indexId)
-    {
-        var current = ProfileExManager.Instance.GetFav(indexId);
-        ProfileExManager.Instance.SetFav(indexId, !current);
-        await ProfileExManager.Instance.SaveTo();
-        await PushNodeListAsync();
-        await NotifyNodesOpAsync(!current ? "Added to favorites" : "Removed from favorites");
-    }
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushRuleDriftAsync(bool force = false) => _pushService.PushRuleDriftAsync(force);
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushProcessCatalogAsync() => _pushService.PushProcessCatalogAsync();
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushMonitorSnapshotAsync(bool force = false) => _pushService.PushMonitorSnapshotAsync(force);
+
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task SelectNodeAsync(string indexId) => _nodeService.SelectNodeAsync(indexId);
+
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task CopyNodesAsync(string[] indexIds) => _nodeService.CopyNodesAsync(indexIds);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PasteNodesAsync() => _nodeService.PasteNodesAsync();
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task DeleteNodesAsync(string[] indexIds) => _nodeService.DeleteNodesAsync(indexIds);
+
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task StartNodeSpeedtestAsync(string[] indexIds, string? testType = null, long requestedRunId = 0) => _nodeService.StartNodeSpeedtestAsync(indexIds, testType, requestedRunId);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public void StopNodeSpeedtest() => _nodeService.StopNodeSpeedtest();
+
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task DisableNodesAsync(string[] indexIds) => _nodeService.DisableNodesAsync(indexIds);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task RestoreNodesAsync(string[] indexIds) => _nodeService.RestoreNodesAsync(indexIds);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task CleanupFailedNodesAsync(string target) => _nodeService.CleanupFailedNodesAsync(target);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task DedupNodesAsync() => _nodeService.DedupNodesAsync();
+
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushNodePoolAsync() => _nodeService.PushNodePoolAsync();
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task AddNodePoolLinkAsync(string url) => _nodeService.AddNodePoolLinkAsync(url);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task EditNodePoolLinkAsync(string url, string newUrl) => _nodeService.EditNodePoolLinkAsync(url, newUrl);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task RemoveNodePoolLinkAsync(string url) => _nodeService.RemoveNodePoolLinkAsync(url);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task FetchNodePoolAsync() => _nodeService.FetchNodePoolAsync();
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task ToggleNodeFavAsync(string indexId) => _nodeService.ToggleNodeFavAsync(indexId);
 
     /// <summary>Shows a transient toast in the dashboard's Nodes view.</summary>
     public async Task NotifyNodesOpAsync(string message)
@@ -4211,93 +2996,8 @@ public partial class MainWindow : IDashboardBridge
         await ExecuteScriptSafelyAsync($"window.notifyNodes({JsonSerializer.Serialize(message)});");
     }
 
-    /// <summary>
-    /// Streams the active subscription group's real profiles to the renderer in
-    /// chunks (large subscriptions would exceed a single script payload), then
-    /// finalizes with the active profile id so the Nodes view can render.
-    /// </summary>
-    private async Task PushNodeListAsync()
-    {
-        if (!_webViewReady)
-        {
-            return;
-        }
-
-        List<ProfileItemModel>? profiles;
-        try
-        {
-            profiles = await AppManager.Instance.ProfileModels(AppManager.Instance.Config.SubIndexId, "");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN node list lookup failed", ex);
-            return;
-        }
-
-        if (profiles is null || profiles.Count == 0)
-        {
-            return;
-        }
-
-        var config = AppManager.Instance.Config;
-        var activeIndexId = config.IndexId;
-        var disabledIds = new HashSet<string>(config.DisabledIndexIds ?? []);
-
-        // Favorites and last-used stamps come from the profile extension table so
-        // the dashboard can offer country / favorite / recently-used sorting.
-        var profileExs = await ProfileExManager.Instance.GetProfileExs();
-        var exByIndex = new Dictionary<string, ProfileExItem>(StringComparer.Ordinal);
-        if (profileExs is not null)
-        {
-            foreach (var ex in profileExs)
-            {
-                if (ex?.IndexId is { Length: > 0 } && !exByIndex.ContainsKey(ex.IndexId))
-                {
-                    exByIndex[ex.IndexId] = ex;
-                }
-            }
-        }
-
-        var projectNode = (ProfileItemModel p) =>
-        {
-            var ex = exByIndex.TryGetValue(p.IndexId, out var foundEx) ? foundEx : null;
-            return new
-            {
-                indexId = p.IndexId,
-                name = p.Remarks ?? string.Empty,
-                address = p.Address ?? string.Empty,
-                port = p.Port,
-                protocol = p.ConfigType.ToString(),
-                sub = p.SubRemarks ?? string.Empty,
-                delay = p.Delay > 0 ? p.Delay : 0,
-                active = p.IndexId == activeIndexId,
-                // Prefer the explicit remark code, then resolve the address IP via
-                // GeoIP so plain-IP nodes still sort by country.
-                country = DashboardMessageDispatcher.ResolveNodeCountry(p.Remarks, p.Address),
-                fav = ex?.IsFav ?? false,
-                lastUsed = ex?.LastUsed ?? 0,
-            };
-        };
-
-        // Disabled nodes are hidden from the main list and pushed separately so
-        // the renderer can show them in their own section with restore/delete.
-        var nodes = profiles.Where(p => !disabledIds.Contains(p.IndexId)).Select(projectNode).ToList();
-        var disabledNodes = profiles.Where(p => disabledIds.Contains(p.IndexId)).Select(projectNode).ToList();
-
-        const int chunkSize = 150;
-        for (var offset = 0; offset < nodes.Count; offset += chunkSize)
-        {
-            var chunk = nodes.Skip(offset).Take(chunkSize).ToList();
-            var chunkJson = JsonSerializer.Serialize(chunk);
-            await ExecuteScriptSafelyAsync($"window.updateNodeListAppend({chunkJson});");
-        }
-
-        var disabledJson = JsonSerializer.Serialize(disabledNodes);
-        await ExecuteScriptSafelyAsync($"window.updateDisabledNodes({disabledJson});");
-
-        var activeJson = JsonSerializer.Serialize(activeIndexId);
-        await ExecuteScriptSafelyAsync($"window.updateNodeListDone({activeJson});");
-    }
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    private Task PushNodeListAsync() => _nodeService.PushNodeListAsync();
 
     /// <summary>Wave 2: <see cref="DashboardSettingsService"/> delegasyonu — gövde servise taşındı.</summary>
     public Task PushSettingsAsync() => _settingsService.PushSettingsAsync();
@@ -4576,7 +3276,7 @@ public partial class MainWindow : IDashboardBridge
         _isClosing = true;
         StopNodeSpeedtest();
         StopTelemetryBridge();
-        _gpnPidBridge?.Dispose();
+        _pushService.DisposePidBridge();
         _warpAutoRecover?.Dispose();
 
         // Remove the shell tray icon on EVERY exit path, not just the tray menu's
@@ -5254,16 +3954,16 @@ public partial class MainWindow : IDashboardBridge
         set => _activeView = value;
     }
 
-    long IDashboardBridge.NodeTestRunId => Volatile.Read(ref _nodeTestRunId);
+    long IDashboardBridge.NodeTestRunId => _nodeService.NodeTestRunId;
 
-    GpnTargetResolverBridge IDashboardBridge.GpnPidBridge => GetGpnPidBridge();
+    GpnTargetResolverBridge IDashboardBridge.GpnPidBridge => _pushService.GpnPidBridge;
 
-    void IDashboardBridge.ResetGpnTelemetry() => _gpnTelemetry.Reset();
+    void IDashboardBridge.ResetGpnTelemetry() => _pushService.ResetGpnTelemetry();
 
-    void IDashboardBridge.ClearGpnResilienceLog() => _gpnResilienceLog.Clear();
+    void IDashboardBridge.ClearGpnResilienceLog() => _pushService.ClearGpnResilienceLog();
 
     bool IDashboardBridge.TryResolveExecutablePath(int pid, out string runningPath)
-        => _processCatalogService.TryResolveExecutablePath(pid, out runningPath);
+        => _pushService.TryResolveExecutablePath(pid, out runningPath);
 
     bool IDashboardBridge.TryApplySidebarTheme(string wpfTheme)
     {
