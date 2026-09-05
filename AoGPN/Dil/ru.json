@@ -372,6 +372,8 @@
   "skin.infra.log.toggle": "ПЕРЕКЛЮЧЕНИЕ ОТПРАВЛЕНО: {state}",
   "skin.infra.log.language": "ЯЗЫК: {lang}",
   "warp.healthBanner": "WARP outbound dial is failing — launcher/regional traffic may not pass. Check the diag log for WARP_DIAL lines.",
+  "warp.degradedBanner": "WARP недоступен — трафик лаунчера/API выходит напрямую (DIRECT), пока WARP не восстановится.",
+  "warp.degradedTag": "Лаунчер напрямую",
   "nodes.countryUnknown": "Other",
   "nodes.showAll": "Show all",
   "nodes.hideAll": "Hide all",

@@ -2180,6 +2180,9 @@ body.effects-balanced #matrixRainCanvas {
                 <svg class="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm1 14h-2v2h2v-2Zm0-6h-2v4h2v-4Z"/></svg>
                 <span id="warpHealthText" class="min-w-0">WARP outbound dial is failing — launcher/regional traffic may not pass.</span>
                 <span id="warpHealthCount" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-amber-400/10 text-amber-300 border border-amber-400/25 font-mono"></span>
+                <!-- Degrade rozeti (GpnBypassEgressController → setWarpHealth degraded):
+                     launcher/API trafiği WARP yerine doğrudan çıkıyor. -->
+                <span id="warpHealthDegraded" class="hidden shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-300 border border-emerald-400/30 font-mono uppercase tracking-[.14em]"></span>
               </div>
               <div id="warpHealthError" class="hidden mt-1.5 pl-7 text-[10px] leading-relaxed text-amber-300/70 font-mono break-all"></div>
 

@@ -279,6 +279,13 @@ public sealed class GpnMihomoConfigService
         // "warp" egress'in çözüleceği proxy adı: Çift Bağlantıda ikincil VLESS
         // düğümü, legacy'de WARP SOCKS zinciri.
         var warpTarget = dual ? BypassProxyName : WarpProxyName;
+        // Superset-legacy: BSG launcher/API satırları GPN-BSG seçim grubundan geçer —
+        // WarpDialHealthMonitor faulted olunca GpnBypassEgressController bu grubu
+        // canlı (restart'sız) DIRECT'e çevirir, sağlıklıyken warp-socks'a döner.
+        // Çift Bağlantıda (vless-launcher) izleyici o egress'i henüz kapsamadığı
+        // için grup üretilmez; satırlar doğrudan vless-launcher'a gider (eski davranış).
+        var emitBsgGroup = superset && emitBsgDomains && !dual;
+        var bsgRuleTarget = emitBsgGroup ? GpnSoftRouting.BsgGroupName : warpTarget;
 
         var root = new Dictionary<string, object?>
         {
@@ -409,6 +416,17 @@ public sealed class GpnMihomoConfigService
                 ["type"] = "select",
                 ["proxies"] = OrderMembers(modeTarget, GpnSoftRouting.ModeMemberOrder),
             });
+            // satırları bu gruba işaret eder; varsayılan seçim warp egress (sağlıklı),
+            // degrade durumda GpnBypassEgressController DIRECT'e PUT eder.
+            if (emitBsgGroup)
+            {
+                groups.Add(new Dictionary<string, object?>
+                {
+                    ["name"] = GpnSoftRouting.BsgGroupName,
+                    ["type"] = "select",
+                    ["proxies"] = GpnSoftRouting.BsgMemberOrder(null).ToList(),
+                });
+            }
             // Giriş grupları: her girişin kural satırı kendi ao-<i> grubuna işaret eder.
             for (var i = 0; i < policy!.Entries.Count; i++)
             {
@@ -434,7 +452,7 @@ public sealed class GpnMihomoConfigService
         {
             foreach (var domain in BsgLauncherDomains)
             {
-                clashRules.Add($"DOMAIN-SUFFIX,{domain},{warpTarget}");
+                clashRules.Add($"DOMAIN-SUFFIX,{domain},{bsgRuleTarget}");
             }
         }
         if (superset)

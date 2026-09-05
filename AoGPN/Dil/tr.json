@@ -175,6 +175,8 @@
   "ip.isp": "ISP",
   "ip.leakBanner": "Bağlısınız ancak genel IP'niz değişmedi ({ip}) — trafik sızıyor olabilir. Yakalama ayarlarınızı kontrol edin veya TUN'a geçmeyi deneyin.",
   "warp.healthBanner": "WARP egress dial hatası — launcher/bölgesel trafik geçmeyebilir. Diag logunda WARP_DIAL satırlarını kontrol edin.",
+  "warp.degradedBanner": "WARP kapalı — launcher/API trafiği WARP düzelene kadar doğrudan (DIRECT) çıkıyor.",
+  "warp.degradedTag": "Launcher direkt",
   "ip.leaking": "sızıntı!",
   "ip.pending": "IP kontrolü bekleniyor…",
   "ip.probing": "tünel yoklanıyor…",

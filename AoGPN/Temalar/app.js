@@ -3120,6 +3120,8 @@
     "telemetry.warning": "warning",
     "ip.leakBanner": "You are connected but your public IP has not changed ({ip}) — traffic may be leaking. Check your capture settings or switch to TUN.",
     "warp.healthBanner": "WARP outbound dial is failing — launcher/regional traffic may not pass. Check the diag log for WARP_DIAL lines.",
+    "warp.degradedBanner": "WARP is down — launcher/API traffic is now going DIRECT until WARP recovers.",
+    "warp.degradedTag": "Launcher direct",
     "tip.modeGpn": "GPN Game Tunnel — only assigned games and apps are tunneled; everything else stays direct.",
     "tip.modeVpn": "Global VPN — all traffic is routed through the tunnel using TUN capture.",
     "tip.transportProxy": "Proxy — apps that honor the system proxy flow through the tunnel. No admin rights needed.",
@@ -4332,8 +4334,13 @@
     const faulted = !!(health && health.faulted);
     const errorCount = (health && typeof health.errorCount === 'number') ? health.errorCount : 0;
     const latestError = (health && health.latestError) || '';
+    // Degrade (GpnBypassEgressController): WARP faulted iken launcher/BSG egress'i
+    // canlı (restart'sız) DIRECT'e çekildi — rozet bunu söyler, banner metni
+    // degrade açıklamasına döner.
+    const degraded = !!(health && health.degraded);
+    const badge = document.getElementById('warpHealthDegraded');
     if (faulted) {
-      text.textContent = t('warp.healthBanner');
+      text.textContent = degraded ? t('warp.degradedBanner') : t('warp.healthBanner');
       if (count) {
         count.textContent = errorCount > 0 ? String(errorCount) : '';
         count.classList.toggle('hidden', errorCount <= 0);
@@ -4342,9 +4349,14 @@
         errbox.textContent = latestError;
         errbox.classList.toggle('hidden', !latestError);
       }
+      if (badge) {
+        badge.textContent = t('warp.degradedTag');
+        badge.classList.toggle('hidden', !degraded);
+      }
       banner.classList.remove('hidden');
     } else {
       banner.classList.add('hidden');
+      if (badge) badge.classList.add('hidden');
       if (errbox) errbox.classList.add('hidden');
     }
   };

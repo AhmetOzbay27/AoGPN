@@ -129,6 +129,25 @@ public class GpnSoftRoutingTests
     }
 
     [Fact]
+    public void ResolveBsgEgressTarget_HealthyUsesWarpEgress_DegradedDirect()
+    {
+        // Sağlıklı: legacy warp-socks / çift bağlantıda vless-launcher (politika egress'i).
+        GpnSoftRouting.ResolveBsgEgressTarget(false).Should().Be(GpnMihomoConfigService.WarpProxyName);
+        GpnSoftRouting.ResolveBsgEgressTarget(false, GpnMihomoConfigService.BypassProxyName)
+            .Should().Be(GpnMihomoConfigService.BypassProxyName);
+        // Degrade (WARP faulted): her iki biçimde de DIRECT.
+        GpnSoftRouting.ResolveBsgEgressTarget(true).Should().Be(GpnSoftRouting.ClashDirect);
+        GpnSoftRouting.ResolveBsgEgressTarget(true, GpnMihomoConfigService.BypassProxyName)
+            .Should().Be(GpnSoftRouting.ClashDirect);
+        // Kanonik üye sırası: warp egress önce (varsayılan seçim), DIRECT sonra.
+        GpnSoftRouting.BsgMemberOrder().Should().Equal(
+            GpnMihomoConfigService.WarpProxyName, GpnSoftRouting.ClashDirect);
+        GpnSoftRouting.BsgMemberOrder(GpnMihomoConfigService.BypassProxyName).Should().Equal(
+            GpnMihomoConfigService.BypassProxyName, GpnSoftRouting.ClashDirect);
+        GpnSoftRouting.BsgGroupName.Should().Be("GPN-BSG");
+    }
+
+    [Fact]
     public void BuildPolicy_ConfigWithBypass_ProducesDualWarpVector()
     {
         // Küresel ayar (GuiItem.VlessBypassNodeJson) dolu bir Config'ten üretilen

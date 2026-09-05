@@ -538,6 +538,46 @@ public class GpnMihomoConfigServiceTests
     }
 
     [Fact]
+    public void SupersetLegacy_BsgDomainsRouteThroughGpnBsgGroup_WithDirectFallback()
+    {
+        // Superset-legacy (warp-socks): sabit BSG domain satırları GPN-BSG seçim
+        // grubuna gider — GpnBypassEgressController faulted iken bu grubu canlı
+        // (restart'sız) DIRECT'e çeker, sağlıklıyken warp-socks'a döner.
+        var policy = new GpnSoftRoutingPolicy(
+            GameTriggerModes.Manual,
+            InvertManualRouting: false,
+            new[]
+            {
+                AppEntry("EscapeFromTarkov.exe", "vpn"),
+                AppEntry("BsGLauncher.exe", "warp"),
+            });
+        var yaml = GenerateSuperset(Almanya, policy);
+
+        // Domain satırları GPN-BSG grubuna gider (eski warp-socks doğrudan hedefi değil).
+        yaml.Should().Contain("DOMAIN-SUFFIX,escapefromtarkov.com,GPN-BSG");
+        yaml.Should().Contain("DOMAIN-SUFFIX,battlestategames.com,GPN-BSG");
+        yaml.Should().Contain("DOMAIN-SUFFIX,tarkov.com,GPN-BSG");
+        yaml.Should().Contain("DOMAIN-SUFFIX,escapefromtarkov.ru,GPN-BSG");
+        yaml.Should().Contain("DOMAIN-SUFFIX,profile.tarkov.com,GPN-BSG");
+        yaml.Should().NotContain("DOMAIN-SUFFIX,escapefromtarkov.com,warp-socks");
+
+        // GPN-BSG grubu: warp-socks varsayılan seçim, DIRECT degrade yedeği.
+        yaml.Should().Contain("name: GPN-BSG");
+        GroupMembers(yaml, "GPN-BSG").Should().Equal(
+            GpnMihomoConfigService.WarpProxyName, GpnSoftRouting.ClashDirect);
+
+        // warp rotalı giriş hâlâ ao-1 grubuna gider (değişmedi); zincir duruyor.
+        yaml.Should().Contain("PROCESS-NAME,BsGLauncher.exe,ao-1");
+        yaml.Should().Contain("name: warp-socks");
+
+        // First-match-wins: BSG domain satırları process satırlarından ve MATCH'tan önce.
+        var bsgIdx = yaml.IndexOf("DOMAIN-SUFFIX,escapefromtarkov.com,GPN-BSG", StringComparison.Ordinal);
+        var gameIdx = yaml.IndexOf("PROCESS-NAME,EscapeFromTarkov.exe,ao-0", StringComparison.Ordinal);
+        bsgIdx.Should().BeGreaterThanOrEqualTo(0);
+        gameIdx.Should().BeGreaterThan(bsgIdx);
+    }
+
+    [Fact]
     public void CatchAllIsAlwaysAppended_AsSafetyNet()
     {
         var yaml = Generate(Almanya, new[]

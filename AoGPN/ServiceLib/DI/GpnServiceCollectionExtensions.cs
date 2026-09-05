@@ -89,6 +89,13 @@ public static class GpnServiceCollectionExtensions
         // servisi (AppEvents.GpnResilienceChanged akışını dinler).
         services.AddSingleton<GpnTelemetryService>();
 
+        // GpnBypassEgressController — WARP faulted iken launcher egress'ini canlı
+        // (restart'sız) DIRECT'e çeken degrade denetleyicisi (AppEvents.WarpDialHealthChanged
+        // + GpnConnectionStateChanged dinler). Uygulama şu an MainWindow'da doğrudan
+        // kurar; DI'ya geçildiğinde singleton olarak buradan bağlanır (işaret süreç
+        // boyunca tek örnekte yaşar — dashboard rozeti Degraded bayrağını okur).
+        services.AddSingleton<GpnBypassEgressController>();
+
         // GpnResilienceLog — son 50 GpnResilience kararını tutan döngüsel tampon;
         // dosyaya yazarak sorun giderme penceresi sunar.
         services.AddSingleton<GpnResilienceLog>();

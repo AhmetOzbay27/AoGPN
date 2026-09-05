@@ -372,6 +372,8 @@
   "skin.infra.log.toggle": "已发送切换：{state}",
   "skin.infra.log.language": "语言：{lang}",
   "warp.healthBanner": "WARP outbound dial is failing — launcher/regional traffic may not pass. Check the diag log for WARP_DIAL lines.",
+  "warp.degradedBanner": "WARP 已中断 — 启动器/API 流量在 WARP 恢复前将直接（DIRECT）出站。",
+  "warp.degradedTag": "启动器直连",
   "nodes.countryUnknown": "Other",
   "nodes.showAll": "Show all",
   "nodes.hideAll": "Hide all",

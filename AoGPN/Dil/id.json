@@ -372,6 +372,8 @@
   "skin.infra.log.toggle": "PERINTAH TERKIRIM: {state}",
   "skin.infra.log.language": "BAHASA: {lang}",
   "warp.healthBanner": "WARP outbound dial is failing — launcher/regional traffic may not pass. Check the diag log for WARP_DIAL lines.",
+  "warp.degradedBanner": "WARP mati — lalu lintas launcher/API keluar langsung (DIRECT) sampai WARP pulih.",
+  "warp.degradedTag": "Launcher langsung",
   "nodes.countryUnknown": "Other",
   "nodes.showAll": "Show all",
   "nodes.hideAll": "Hide all",

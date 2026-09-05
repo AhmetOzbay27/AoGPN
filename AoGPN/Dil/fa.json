@@ -372,6 +372,8 @@
   "skin.infra.log.toggle": "فرمان ارسال شد: {state}",
   "skin.infra.log.language": "زبان: {lang}",
   "warp.healthBanner": "WARP outbound dial is failing — launcher/regional traffic may not pass. Check the diag log for WARP_DIAL lines.",
+  "warp.degradedBanner": "WARP در دسترس نیست — ترافیک لانچر/API تا بازیابی WARP به‌صورت مستقیم (DIRECT) خارج می‌شود.",
+  "warp.degradedTag": "لانچر مستقیم",
   "nodes.countryUnknown": "Other",
   "nodes.showAll": "Show all",
   "nodes.hideAll": "Hide all",

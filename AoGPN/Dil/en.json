@@ -175,6 +175,8 @@
   "ip.isp": "ISP",
   "ip.leakBanner": "You are connected but your public IP has not changed ({ip}) — traffic may be leaking. Check your capture settings or switch to TUN.",
   "warp.healthBanner": "WARP outbound dial is failing — launcher/regional traffic may not pass. Check the diag log for WARP_DIAL lines.",
+  "warp.degradedBanner": "WARP is down — launcher/API traffic is now going DIRECT until WARP recovers.",
+  "warp.degradedTag": "Launcher direct",
   "ip.leaking": "leaking!",
   "ip.pending": "IP check pending…",
   "ip.probing": "probing tunnel…",

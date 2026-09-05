@@ -67,6 +67,9 @@ public partial class MainWindow : IDashboardBridge
     // WARP egress otomatik kurtarma — WARP dial sağlığı faulted olunca aktif WG
     // tünelini yeniden başlatır (bkz. WarpAutoRecoverService).
     private WarpAutoRecoverService? _warpAutoRecover;
+    // WARP faulted iken launcher egress'ini restart'sız DIRECT'e çeker
+    // (bkz. GpnBypassEgressController — dashboard rozeti Degraded bayrağını okur).
+    private GpnBypassEgressController? _bypassEgressController;
 
     // Last rule-drift verdict pushed to the dashboard ("InSync"/"Drifted"/...).
     // The periodic health check only republishes when the verdict changes, so the
@@ -485,6 +488,13 @@ public partial class MainWindow : IDashboardBridge
                 ct => ViewModel.ReconnectGpnTunnelAsync(ct),
                 isEnabled: () => _config.GuiItem.GpnEnableWarpAutoRecover);
             _warpAutoRecover.Start();
+
+            // WARP degrade-egress: faulted iken BSG launcher/API satırları + "warp"
+            // rotalı girişler mihomo superset oturumunda canlı (restart'sız) DIRECT'e
+            // çekilir — WARP ölüyken launcher auth hata yerine doğrudan çıkar;
+            // sağlık gelince warp egress üyesine geri döner (bkz. GpnBypassEgressController).
+            _bypassEgressController = new GpnBypassEgressController();
+            _bypassEgressController.Start();
 
             // WinDivert yakalama köprüsü sağlığı: DLL/sürücü dosyalarını ve sürücüyü
             // kontrol eder, gerekiyorsa SCM ile kurar. Köprü flame'inin bilinen
