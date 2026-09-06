@@ -427,4 +427,44 @@ public class ManualRoutingRulesIntegrationTests
             "GetDefaultRouting must return the item with IsActive=true");
         result.Remarks.Should().Be("active");
     }
+
+    [Fact]
+    public async Task SetDefaultRouting_NullRoutingItem_DoesNotThrowAndKeepsState()
+    {
+        // Regression: SetDefaultRouting must not throw NullReferenceException when
+        // routingItem is null (e.g. GetDefaultRouting raced an empty routing table
+        // against a concurrent insert). Null is a no-op with a failure code.
+        await CleanRoutingItemsAsync();
+        var config = CreateTestConfig();
+        BindConfig(config);
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
+
+        var existing = new RoutingItem
+        {
+            Id = Utils.GetGuid(false),
+            Remarks = "existing",
+            RuleSet = "[]",
+            IsActive = true,
+        };
+        await SQLiteHelper.Instance.ReplaceAsync(existing);
+
+        var result = await ConfigHandler.SetDefaultRouting(config, null!);
+
+        result.Should().Be(-1);
+        var reread = await SQLiteHelper.Instance.TableAsync<RoutingItem>().ToListAsync();
+        reread.Should().ContainSingle();
+        reread[0].IsActive.Should().BeTrue("a null routingItem must not mutate any row");
+    }
+
+    [Fact]
+    public async Task GetDefaultRouting_EmptyTable_ReturnsNullWithoutThrowing()
+    {
+        await CleanRoutingItemsAsync();
+        var config = CreateTestConfig();
+        BindConfig(config);
+
+        var result = await ConfigHandler.GetDefaultRouting(config);
+
+        result.Should().BeNull();
+    }
 }

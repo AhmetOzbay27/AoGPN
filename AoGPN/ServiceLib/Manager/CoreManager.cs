@@ -241,8 +241,8 @@ public class CoreManager
             // is especially important for QUIC/UDP sessions that survived
             // the pre-start TCP-only flush.
             // mihomo hariç: mihomo kendi TUN'unu kurar, TunInterfaceConfirmed/
-            // fallback mekanizması sing-box'a özgüdür (Global VPN fallback'i
-            // mihomo config'ini yeniden üretemez).
+            // fallback mekanizması uygulamanın kendi TUN'unu yöneten çekirdeklere
+            // (Xray + pre-SOCKS) aittir.
             if ((mainContext.IsTunEnabled || preContext?.IsTunEnabled == true) && !mihomoOwnsTun)
             {
                 _ = Task.Run(async () =>
@@ -256,12 +256,12 @@ public class CoreManager
                         // core in Global VPN mode.  The GPN routing with
                         // process_name rules cannot work through the SOCKS inbound
                         // (no PID attribution), so we must regenerate the config
-                        // with IsTunEnabled=false and restart sing-box.
+                        // with IsTunEnabled=false and restart the core.
                         //
                         // Step 1: mutate the app config so SystemProxyPolicy
                         //         permits the proxy.
-                        // Step 2: regenerate the sing-box config with TUN disabled
-                        //         → Global VPN path → route.final = "proxy".
+                        // Step 2: regenerate the config with TUN disabled
+                        //         → Global VPN path → mixed-port (mihomo) / SOCKS.
                         // Step 3: restart the core process.
                         // Step 4: enable the OS system proxy.
                         if (TunLifecycleManager.TunInterfaceConfirmed == false)
@@ -377,7 +377,9 @@ public class CoreManager
 
     public async Task<ProcessService?> LoadCoreConfigSpeedtest(List<ServerTestItem> selecteds)
     {
-        var coreType = selecteds.FirstOrDefault()?.CoreType == ECoreType.sing_box ? ECoreType.sing_box : ECoreType.Xray;
+        // sing-box kaldırıldı — hız testi her zaman Xray (VLESS/VMess/...) config'iyle koşar;
+        // eski sing_box profilleri de doğal olarak Xray'e düşer (RunProcessForSpeedtest).
+        var coreType = ECoreType.Xray;
         var fileName = string.Format(Global.CoreSpeedtestConfigFileName, Utils.GetGuid(false));
         var configPath = Utils.GetBinConfigPath(fileName);
         var result = await CoreConfigHandler.GenerateClientSpeedtestConfig(_config, configPath, selecteds, coreType);
@@ -391,7 +393,7 @@ public class CoreManager
         await UpdateFunc(false, configPath);
 
         var coreInfo = CoreInfoManager.Instance.GetCoreInfo(coreType);
-        return await RunProcess(coreInfo, fileName, true, false);
+        return await RunProcessForSpeedtest(coreInfo, fileName, true, false);
     }
 
     public async Task<ProcessService?> LoadCoreConfigSpeedtest(ServerTestItem testItem)
@@ -413,7 +415,7 @@ public class CoreManager
 
         var coreType = context.RunCoreType;
         var coreInfo = CoreInfoManager.Instance.GetCoreInfo(coreType);
-        return await RunProcess(coreInfo, fileName, true, false);
+        return await RunProcessForSpeedtest(coreInfo, fileName, true, false);
     }
 
     public async Task CoreStop()
@@ -483,13 +485,12 @@ public class CoreManager
     }
 
     /// <summary>
-    /// Kill any core processes (xray, sing-box, mihomo) left running from a
+    /// Kill any core processes (xray, mihomo) left running from a
     /// previous AoGPN session. Only processes whose executable lives under this
     /// application's own directories are considered: foreign clients that happen
-    /// to run an identically-named binary (v2rayN, Nekoray, standalone
-    /// sing-box, ...) are never touched, and a process whose executable path
-    /// cannot be read is left alone too — never kill what we cannot attribute
-    /// to this app.
+    /// to run an identically-named binary (v2rayN, Nekoray, ...) are never
+    /// touched, and a process whose executable path cannot be read is left alone
+    /// too — never kill what we cannot attribute to this app.
     ///
     /// Runs on three occasions:
     ///  1. during every core stop, so a graceful disconnect/exit kills its own;
@@ -503,7 +504,7 @@ public class CoreManager
     /// </summary>
     public static void KillOrphanCoreProcesses()
     {
-        var coreNames = new[] { "xray", "sing-box", "mihomo" };
+        var coreNames = new[] { "xray", "mihomo" };
         var ownedDirectories = new[]
         {
             Utils.StartupPath(),
@@ -863,11 +864,28 @@ public class CoreManager
     public static bool ShouldRunAsSudo(bool isTunLaunch, ECoreType? coreType, bool isNonWindows)
     {
         return isTunLaunch
-            && coreType is ECoreType.sing_box or ECoreType.mihomo or ECoreType.Xray or ECoreType.openvpn
+            && coreType is ECoreType.mihomo or ECoreType.Xray or ECoreType.openvpn
             && isNonWindows;
     }
 
-    private async Task<ProcessService?> RunProcess(CoreInfo? coreInfo, string configPath, bool displayLog, bool mayNeedSudo, bool isTunLaunch = false, Action? exitedCallback = null)
+    /// <summary>
+    /// Ortak çekirdek başlatma hattı — stratejilerin CoreProcessLauncher delegesine
+    /// bağlandığı imza (parametre sayısı CoreProcessLauncher ile AYNI kalmalıdır;
+    /// aksi halde StartAsync'teki yöntem grubu dönüşümü derlenmez).
+    /// </summary>
+    private Task<ProcessService?> RunProcess(CoreInfo? coreInfo, string configPath, bool displayLog, bool mayNeedSudo, bool isTunLaunch = false, Action? exitedCallback = null)
+        => RunProcessCore(coreInfo, configPath, displayLog, mayNeedSudo, isTunLaunch, exitedCallback, validateConfig: true);
+
+    /// <summary>
+    /// Speedtest çekirdekleri için hızlı başlatma: config'i uygulama saniyeler
+    /// önce ürettiği için doğrulama alt sürecini (xray run -test) ATLAR —
+    /// UDP/mixed node-test fazındaki parti başına ek yük gider. Bozuk bir config
+    /// zaten anında çıkış + başarısız sonuç olarak görünür, asla takılmaz.
+    /// </summary>
+    private Task<ProcessService?> RunProcessForSpeedtest(CoreInfo? coreInfo, string configPath, bool displayLog, bool mayNeedSudo)
+        => RunProcessCore(coreInfo, configPath, displayLog, mayNeedSudo, isTunLaunch: false, exitedCallback: null, validateConfig: false);
+
+    private async Task<ProcessService?> RunProcessCore(CoreInfo? coreInfo, string configPath, bool displayLog, bool mayNeedSudo, bool isTunLaunch, Action? exitedCallback, bool validateConfig)
     {
         var fileName = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out var msg);
         if (fileName.IsNullOrEmpty())
@@ -885,39 +903,50 @@ public class CoreManager
 
         try
         {
-            var validation = await CoreConfigValidator.ValidateAsync(
-                coreInfo.CoreType,
-                fileName,
-                configPath,
-                Utils.GetBinConfigPath(),
-                coreInfo.Environment);
-            // Always surface the pre-launch core check (e.g. `sing-box check -c`)
-            // in ao_diag.txt. A failing check is the single most informative
-            // line for diagnosing "TUN never created" / instant core exits.
-            DiagLog.Write($"CORE_CHECK {coreInfo.CoreType} config={configPath} success={validation.Success}");
-            if (!validation.Success)
+            // Pre-launch config validation (e.g. `xray run -test`) is valuable
+            // for the MAIN connection path, but it spawns a subprocess per launch
+            // — pure overhead for speedtest cores, whose configs the app itself
+            // just generated (RunProcessForSpeedtest passes validateConfig: false).
+            // Skipping it keeps the UDP/mixed node-test phase fast; a broken
+            // speedtest config surfaces immediately anyway as an instant core exit
+            // (RunProcessNormal's HasExited check) and a failed per-node result,
+            // never as a hang.
+            if (validateConfig)
             {
-                var validationMessage = validation.Message.IsNullOrEmpty()
-                    ? "Core configuration validation failed."
-                    : validation.Message;
-                DiagLog.Write($"CORE_CHECK OUTPUT: {validationMessage.ReplaceLineBreaks(" | ")}");
-                // The raw core output is developer-oriented (FATAL + schema jargon).
-                // The user gets a plain explanation; the technical detail stays in
-                // the startup diagnostics, ao_diag.txt and the message panel below.
-                var userMessage = CoreValidationMessage.ToUserMessage(validationMessage);
-                var technicalDetail = CoreValidationMessage.StripAnsi(validationMessage);
-                PublishDiagnostic(CoreStartupDiagnostics.Create(
-                    CoreHealthRole.Main, coreInfo.CoreType, CoreStartupStage.ValidateConfig,
-                    validationMessage, output: technicalDetail,
-                    port: AppManager.Instance.GetLocalPort(EInboundProtocol.socks)));
-                PublishHealth(CoreHealthRole.Main, CoreHealthState.Failed, coreInfo.CoreType,
-                    AppManager.Instance.GetLocalPort(EInboundProtocol.socks), userMessage);
-                await UpdateFunc(true, userMessage);
-                if (!validationMessage.Equals(userMessage, StringComparison.Ordinal))
+                var validation = await CoreConfigValidator.ValidateAsync(
+                    coreInfo.CoreType,
+                    fileName,
+                    configPath,
+                    Utils.GetBinConfigPath(),
+                    coreInfo.Environment);
+                // Always surface the pre-launch core check (e.g. `xray run -test`)
+                // in ao_diag.txt. A failing check is the single most informative
+                // line for diagnosing "TUN never created" / instant core exits.
+                DiagLog.Write($"CORE_CHECK {coreInfo.CoreType} config={configPath} success={validation.Success}");
+                if (!validation.Success)
                 {
-                    NoticeManager.Instance.SendMessage(technicalDetail);
+                    var validationMessage = validation.Message.IsNullOrEmpty()
+                        ? "Core configuration validation failed."
+                        : validation.Message;
+                    DiagLog.Write($"CORE_CHECK OUTPUT: {validationMessage.ReplaceLineBreaks(" | ")}");
+                    // The raw core output is developer-oriented (FATAL + schema jargon).
+                    // The user gets a plain explanation; the technical detail stays in
+                    // the startup diagnostics, ao_diag.txt and the message panel below.
+                    var userMessage = CoreValidationMessage.ToUserMessage(validationMessage);
+                    var technicalDetail = CoreValidationMessage.StripAnsi(validationMessage);
+                    PublishDiagnostic(CoreStartupDiagnostics.Create(
+                        CoreHealthRole.Main, coreInfo.CoreType, CoreStartupStage.ValidateConfig,
+                        validationMessage, output: technicalDetail,
+                        port: AppManager.Instance.GetLocalPort(EInboundProtocol.socks)));
+                    PublishHealth(CoreHealthRole.Main, CoreHealthState.Failed, coreInfo.CoreType,
+                        AppManager.Instance.GetLocalPort(EInboundProtocol.socks), userMessage);
+                    await UpdateFunc(true, userMessage);
+                    if (!validationMessage.Equals(userMessage, StringComparison.Ordinal))
+                    {
+                        NoticeManager.Instance.SendMessage(technicalDetail);
+                    }
+                    return null;
                 }
-                return null;
             }
 
             if (mayNeedSudo
@@ -956,9 +985,9 @@ public class CoreManager
     {
         // Always pass the config as an absolute, quoted path so the core can
         // find it no matter which working directory we launch from. Some cores
-        // (sing-box) resolve wintun.dll / geo assets relative to their own
-        // executable, so we set the working directory to the binary's folder
-        // instead of the binConfigs folder.
+        // resolve wintun.dll / geo assets relative to their own executable, so
+        // we set the working directory to the binary's folder instead of the
+        // binConfigs folder.
         var absoluteConfigPath = Utils.GetBinConfigPath(configPath).AppendQuotes();
         var workingDirectory = Path.GetDirectoryName(fileName) ?? Utils.GetBinConfigPath();
         if (!File.Exists(fileName))
@@ -995,7 +1024,7 @@ public class CoreManager
             // startup window so a core that crashes during startup (bad config,
             // missing wintun.dll, etc.) leaves an exact trace next to the EXE.
             // Steady-state core output is already written by the core itself to
-            // its own log file (ao_singbox_*.log / Verror_*.txt / Vaccess_*.txt);
+            // its own log file (ao_mihomo_*.log / Verror_*.txt / Vaccess_*.txt);
             // mirroring it forever duplicated every line into ao_diag.txt and
             // vpn-session.log for the whole session.
             outputSink: line =>

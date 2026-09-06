@@ -55,7 +55,7 @@ public sealed class AppManager
         switch (type)
         {
             case ECoreType.Xray when RunningCoreType is ECoreType.Xray or ECoreType.v2fly or ECoreType.v2fly_v5:
-            case ECoreType.sing_box when RunningCoreType is ECoreType.sing_box or ECoreType.mihomo:
+            case ECoreType.mihomo when RunningCoreType == ECoreType.mihomo:
             case ECoreType.openvpn when RunningCoreType == ECoreType.openvpn:
                 return true;
 
@@ -744,10 +744,10 @@ public sealed class AppManager
             case ECoreType.Xray:
                 return Global.SsSecuritiesInXray;
 
-            case ECoreType.sing_box:
-                return Global.SsSecuritiesInSingbox;
+            case ECoreType.mihomo:
+                return Global.SsSecuritiesInMihomo;
         }
-        return Global.SsSecuritiesInSingbox;
+        return Global.SsSecuritiesInMihomo;
     }
 
     public ECoreType GetCoreType(ProfileItem? profileItem, EConfigType eConfigType)

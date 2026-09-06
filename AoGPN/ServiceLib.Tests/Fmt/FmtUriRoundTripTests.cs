@@ -101,6 +101,10 @@ public class FmtUriRoundTripTests
         {
             second.Username.Should().Be(username);
         }
+        if (security is not null)
+        {
+            second.StreamSecurity.Should().Be(security);
+        }
         if (sni is not null)
         {
             second.Sni.Should().Be(sni);

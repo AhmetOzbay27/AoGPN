@@ -1007,7 +1007,7 @@ public class MainWindowViewModel : MyReactiveObject
             // manuel ⚡ Test butonu her zaman çalışır.
             _ = RunAvailabilityCheckAfterConnectAsync();
 
-            var showClashUI = AppManager.Instance.IsRunningCore(ECoreType.sing_box);
+            var showClashUI = AppManager.Instance.IsRunningCore(ECoreType.mihomo);
             if (showClashUI)
             {
                 //await Observable.Start(async () =>

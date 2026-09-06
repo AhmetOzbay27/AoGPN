@@ -53,6 +53,17 @@ public sealed record GpnCaptureOptions
     /// <summary>Sniff/recv-only bayraklarına eklenecek ek WinDivert bayrakları (ör. FlagUseSequenceNumbers).</summary>
     public ulong ExtraFlags { get; init; }
 
+    /// <summary>
+    /// Filtreden hariç tutulacak hedef IP (ör. WireGuard sunucu uç noktası).
+    /// Filtre NETWORK katmanında süreç tanımadığı için geniş (tüm outbound UDP)
+    /// kurulur; kendi şifreli tünel egress'imizin geri yakalanıp sonsuz döngüye
+    /// girmemesi için bu uç nokta ZORUNLU hariç tutulur (bkz. WinDivertFilterBuilder).
+    /// </summary>
+    public string? ExcludedDstHost { get; init; }
+
+    /// <summary>ExcludedDstHost ile birlikte kullanılır (WireGuard portu, ör. 51820).</summary>
+    public int? ExcludedDstPort { get; init; }
+
     /// <summary>Paket başına telemetri sayaçları + AppEvents.GpnCaptureStatsChanged akışı (varsayılan açık).</summary>
     public bool EnableTelemetry { get; init; } = true;
 
@@ -75,6 +86,7 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
     private GpnCaptureMode _currentMode = GpnCaptureMode.RecvOnly;
     private int _sniffedPackets;
     private int _consumedPackets;
+    private long _reinjectedPackets;
     private volatile IReadOnlyDictionary<ushort, uint> _portPidMap = EmptyPortPidMap;
     private volatile IReadOnlySet<uint> _poolPids = EmptyPool;
 
@@ -115,8 +127,11 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
     /// <summary>Sniff aşamasında gözlemlenen (yakala-bırak) paket sayısı.</summary>
     public int SniffedPacketCount => Volatile.Read(ref _sniffedPackets);
 
-    /// <summary>Recv-only aşamasında enjeksiyon hattına verilen paket sayısı.</summary>
+    /// <summary>Recv-only aşamasında enjeksiyon hattına verilen (hedef süreç) paket sayısı.</summary>
     public int ConsumedPacketCount => Volatile.Read(ref _consumedPackets);
+
+    /// <summary>Recv-only aşamasında hedef DIŞI sayılıp yığına geri enjekte edilen paket sayısı.</summary>
+    public long ReinjectedPacketCount => Interlocked.Read(ref _reinjectedPackets);
 
     /// <summary>
     /// 5 sn'lik PID tazeleme + filtre yeniden derleme + enjeksiyon döngüsü.
@@ -241,13 +256,11 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
             {
                 try
                 {
-                    if (_options.EnableTelemetry)
-                    {
-                        RecordTelemetry(packet); // senkron — Data yalnızca burada okunur
-                    }
-                    // _inject, Data'yı await edilen çağrı içinde senkron tüketir
-                    // (Encrypt aşaması) — dönüşte kiralanan tampon havuza döner (Tier 4).
-                    await _inject(packet, cancellationToken).ConfigureAwait(false);
+                    // Net katmanı filtre içinde süreç tanımadığı için (processId yok —
+                    // hata 87) paket burada ROTALANIR: hedef süreç → tünel egress,
+                    // hedef dışı → yığına geri enjeksiyon. Telemetri her iki yol için
+                    // kaydedilir (havuz içi / kaçan trafik işareti).
+                    await RoutePacketAsync(packet, cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -314,17 +327,27 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
         {
             _openedSnapshot = snapshot;
         }
-        var filter = WinDivertFilterBuilder.BuildFilter(snapshot.PidSet);
+        // Filtrede süreç yok (NETWORK katmanı processId tanımaz — hata 87): geniş
+        // outbound-UDP + zorunlu kendi-tünel-egress dışlaması. PID ayrımı kullanıcı
+        // modunda RoutePacketAsync'te yapılır (port→PID tablosu).
+        var filter = WinDivertFilterBuilder.BuildFilter(
+            excludedDstHost: _options.ExcludedDstHost,
+            excludedDstPort: _options.ExcludedDstPort);
         switch (mode)
         {
             case GpnCaptureMode.Sniff:
                 _engine.OpenSniff(filter, _options.OpenParams, extraFlags: _options.ExtraFlags);
                 break;
             default:
-                _engine.OpenRecvOnly(filter, _options.OpenParams, extraFlags: _options.ExtraFlags);
+                // Düz divert (flags=0): Send ETKİN — hedef dışı paketler geri enjekte
+                // edilebilir (RecvOnly WinDivertSend'i devre dışı bırakırdı).
+                _engine.OpenDivert(filter, _options.OpenParams, extraFlags: _options.ExtraFlags);
                 break;
         }
         var worker = _engine.StartCapture(cancellationToken);
+        // İlk paket için bile port→PID haritası hazır olsun — telemetri kapalıyken
+        // (veya ilk tik gelene kadar) hedef paketler yanlışlıkla geri enjekte edilmesin.
+        RefreshPortMap();
         lock (_gate)
         {
             _worker = worker;
@@ -381,30 +404,83 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    // ── per-packet telemetri ──────────────────────────────────────────────
+    // ── per-packet rota + telemetri ───────────────────────────────────────
 
     /// <summary>
-    /// Paketi telemetriye kaydeder: IP başlığı çözülür, dışa giden UDP paketinin
-    /// kaynak portu UDP port→PID tablosuyla sahibine atfedilir. Ağ katmanında
-    /// WinDivert PID vermez — port köprüsü "hangi PID'in trafiği yakalanıyor /
-    /// havuz dışı (kaçan) trafik var mı" teşhisini sağlar.
+    /// Paketi ROTALAR: IP başlığı çözülür, dışa giden UDP paketinin kaynak portu
+    /// UDP port→PID tablosuyla sahibine atfedilir; sahibi yakalama havuzundaysa
+    /// (hedef oyun/uygulama) paket tünel enjeksiyon hattına verilir, değilse ya da
+    /// sahibi çözülemiyorsa yığına GERİ ENJEKTE edilir (kaçan trafik yutulmaz).
+    /// Ağ katmanında WinDivert PID vermez — port köprüsü "hangi PID'in trafiği
+    /// yakalanıyor / havuz dışı trafik var mı" teşhisinin TEK kaynağıdır.
+    /// Telemetri her iki yol için kaydedilir (havuz içi / kaçan işareti).
+    /// Tier 4: havuzlanmış tamponun YALNIZCA mantıksal uzunluğu işlenir (Length),
+    /// kapasitesi değil — dilim boşluğu asla telemetriye/enjeksiyona girmez.
     /// </summary>
-    private void RecordTelemetry(DivertedPacket packet)
+    private async ValueTask RoutePacketAsync(DivertedPacket packet, CancellationToken cancellationToken)
     {
-        // Tier 4: havuzlanmış tamponun YALNIZCA mantıksal uzunluğu işlenir (Length),
-        // kapasitesi değil — dilim boşluğu asla telemetriye girmez.
         var stats = GpnPacketStats.FromPacket(packet.Data.AsSpan(0, packet.Length), packet.Address.IsOutbound);
         uint? pid = null;
         var inPool = false;
-        if (stats.Protocol == GpnPacketProtocol.Udp && stats.LocalPort != 0)
+        if (stats.Protocol == GpnPacketProtocol.Udp && stats.LocalPort != 0
+            && _portPidMap.TryGetValue(stats.LocalPort, out var owner))
         {
-            if (_portPidMap.TryGetValue(stats.LocalPort, out var owner))
-            {
-                pid = owner;
-                inPool = _poolPids.Contains(owner);
-            }
+            pid = owner;
+            inPool = _poolPids.Contains(owner);
         }
-        _telemetry.Record(stats, pid, inPool);
+
+        if (_options.EnableTelemetry)
+        {
+            _telemetry.Record(stats, pid, inPool);
+        }
+
+        if (inPool)
+        {
+            // Hedef süreç paketi → tünel egress. _inject Data'yı await edilen çağrı
+            // içinde senkron tüketir (Encrypt aşaması) — dönüşte tampon havuza döner.
+            await _inject(packet, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            ReinjectPacket(packet);
+        }
+    }
+
+    /// <summary>
+    /// Hedef dışı (veya sahibi çözülemeyen) paketi aynı handle üzerinden yığına
+    /// geri enjekte eder — geniş filtre yalnızca GÖZLEM için değil, yakalama için
+    /// kurulduğundan, geri enjeksiyon olmadan diğer uygulamaların UDP trafiği
+    /// (DNS, tarayıcı QUIC, sesli sohbet) yutulurdu. Enjeksiyon hatası paketi
+    /// düşürür ama döngüyü fault ettirmez (kapanış yarışı vb. — best-effort).
+    /// </summary>
+    private void ReinjectPacket(DivertedPacket packet)
+    {
+        if (!_engine.IsOpen)
+        {
+            return; // kapanış anı — paket zaten yığından çıkarıldı, düşür
+        }
+        try
+        {
+            _engine.Send(packet.Data.AsSpan(0, packet.Length), packet.Address);
+            Interlocked.Increment(ref _reinjectedPackets);
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog($"[GpnCaptureLoop] Geri enjeksiyon hatası: {ex.Message}");
+        }
+    }
+
+    /// <summary>UDP port→PID haritasını tazeler (açılışta + telemetri tikinde; erişilemezse eski harita korunur).</summary>
+    private void RefreshPortMap()
+    {
+        try
+        {
+            _portPidMap = _portPidTable.GetUdpPortOwners();
+        }
+        catch
+        {
+            // erişilemezse eski harita korunur
+        }
     }
 
     /// <summary>
@@ -418,7 +494,7 @@ public sealed class GpnCaptureLoop : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                _portPidMap = _portPidTable.GetUdpPortOwners(); // erişilemezse eski harita korunur
+                RefreshPortMap();
                 _statsChannel.Publish(_telemetry.Snapshot);
                 await Task.Delay(_options.TelemetryTickInterval, cancellationToken).ConfigureAwait(false);
             }

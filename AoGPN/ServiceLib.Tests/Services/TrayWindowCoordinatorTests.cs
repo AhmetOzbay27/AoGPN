@@ -239,7 +239,7 @@ public sealed class TrayWindowCoordinatorTests
             await harness.Coordinator.ExitApplicationAsync();
             // Application.Shutdown returned without terminating (as in the bug) —
             // wait past the watchdog deadline and assert it still fires.
-            await Task.Delay(700);
+            await Task.Delay(700, TestContext.Current.CancellationToken);
         }
         finally
         {

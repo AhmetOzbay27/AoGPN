@@ -54,7 +54,6 @@ public class NativeGpnStartStrategyTests
 
         // Harici çekirdeklerin tamamı katı kalır (null → "Core executable missing").
         CoreStartStrategyFactory.For(ECoreType.mihomo).IsInProcessEngine.Should().BeFalse();
-        CoreStartStrategyFactory.For(ECoreType.sing_box).IsInProcessEngine.Should().BeFalse();
         CoreStartStrategyFactory.For(ECoreType.Xray).IsInProcessEngine.Should().BeFalse();
         CoreStartStrategyFactory.For(ECoreType.openvpn).IsInProcessEngine.Should().BeFalse();
         CoreStartStrategyFactory.For(ECoreType.v2fly).IsInProcessEngine.Should().BeFalse();

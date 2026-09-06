@@ -540,10 +540,10 @@ public class GpnMihomoConfigServiceTests
     }
 
     [Fact]
-    public void SupersetLegacy_BsgDomainsRouteThroughGpnBsgGroup_WithDirectFallback()
+    public void SupersetLegacy_BsgDomainsRouteThroughLauncherGroup_WithDirectFallback()
     {
-        // Superset-legacy (warp-socks): sabit BSG domain satırları GPN-BSG seçim
-        // grubuna gider — GpnBypassEgressController faulted iken bu grubu canlı
+        // Superset-legacy (warp-socks): varsayılan BSG domain satırları GPN-LAUNCHER
+        // seçim grubuna gider — GpnBypassEgressController faulted iken bu grubu canlı
         // (restart'sız) DIRECT'e çeker, sağlıklıyken warp-socks'a döner.
         var policy = new GpnSoftRoutingPolicy(
             GameTriggerModes.Manual,
@@ -555,17 +555,17 @@ public class GpnMihomoConfigServiceTests
             });
         var yaml = GenerateSuperset(Almanya, policy);
 
-        // Domain satırları GPN-BSG grubuna gider (eski warp-socks doğrudan hedefi değil).
-        yaml.Should().Contain("DOMAIN-SUFFIX,escapefromtarkov.com,GPN-BSG");
-        yaml.Should().Contain("DOMAIN-SUFFIX,battlestategames.com,GPN-BSG");
-        yaml.Should().Contain("DOMAIN-SUFFIX,tarkov.com,GPN-BSG");
-        yaml.Should().Contain("DOMAIN-SUFFIX,escapefromtarkov.ru,GPN-BSG");
-        yaml.Should().Contain("DOMAIN-SUFFIX,profile.tarkov.com,GPN-BSG");
+        // Domain satırları GPN-LAUNCHER grubuna gider (eski warp-socks doğrudan hedefi değil).
+        yaml.Should().Contain("DOMAIN-SUFFIX,escapefromtarkov.com,GPN-LAUNCHER");
+        yaml.Should().Contain("DOMAIN-SUFFIX,battlestategames.com,GPN-LAUNCHER");
+        yaml.Should().Contain("DOMAIN-SUFFIX,tarkov.com,GPN-LAUNCHER");
+        yaml.Should().Contain("DOMAIN-SUFFIX,escapefromtarkov.ru,GPN-LAUNCHER");
+        yaml.Should().Contain("DOMAIN-SUFFIX,profile.tarkov.com,GPN-LAUNCHER");
         yaml.Should().NotContain("DOMAIN-SUFFIX,escapefromtarkov.com,warp-socks");
 
-        // GPN-BSG grubu: warp-socks varsayılan seçim, DIRECT degrade yedeği.
-        yaml.Should().Contain("name: GPN-BSG");
-        GroupMembers(yaml, "GPN-BSG").Should().Equal(
+        // GPN-LAUNCHER grubu: warp-socks varsayılan seçim, DIRECT degrade yedeği.
+        yaml.Should().Contain("name: GPN-LAUNCHER");
+        GroupMembers(yaml, "GPN-LAUNCHER").Should().Equal(
             GpnMihomoConfigService.WarpProxyName, GpnSoftRouting.ClashDirect);
 
         // warp rotalı giriş hâlâ ao-1 grubuna gider (değişmedi); zincir duruyor.
@@ -573,7 +573,7 @@ public class GpnMihomoConfigServiceTests
         yaml.Should().Contain("name: warp-socks");
 
         // First-match-wins: BSG domain satırları process satırlarından ve MATCH'tan önce.
-        var bsgIdx = yaml.IndexOf("DOMAIN-SUFFIX,escapefromtarkov.com,GPN-BSG", StringComparison.Ordinal);
+        var bsgIdx = yaml.IndexOf("DOMAIN-SUFFIX,escapefromtarkov.com,GPN-LAUNCHER", StringComparison.Ordinal);
         var gameIdx = yaml.IndexOf("PROCESS-NAME,EscapeFromTarkov.exe,ao-0", StringComparison.Ordinal);
         bsgIdx.Should().BeGreaterThanOrEqualTo(0);
         gameIdx.Should().BeGreaterThan(bsgIdx);
@@ -856,9 +856,79 @@ public class GpnMihomoConfigServiceTests
 
         yaml.Should().Contain("name: GPN-MODE");
         yaml.Should().Contain("name: GPN-Nodes");
+        yaml.Should().Contain("name: GPN-CHECK");
         yaml.Should().NotContain("name: ao-");
         yaml.Should().Contain("MATCH,GPN-MODE");
         yaml.Should().NotContain("MATCH,DIRECT");
+    }
+
+    // ── IP doğrulama (GPN-CHECK) satırları ──────────────────────────────────
+
+    [Fact]
+    public void Superset_EmitsIpCheckRulesPinnedToCheckGroup_BeforeCatchAll()
+    {
+        // Beyaz liste (yakalayıcı DIRECT): uygulamanın kendi api.ip.sb doğrulama
+        // isteği giriş satırlarına/MATCH'e düşmeden GPN-CHECK'e gider — bağlıyken
+        // tünel çıkışı ölçülür, "IP değişmedi" yanlış alarmı üretilmez.
+        var policy = new GpnSoftRoutingPolicy(
+            GameTriggerModes.Manual,
+            InvertManualRouting: false,
+            new[] { AppEntry("chrome.exe", "vpn") });
+        var yaml = GenerateSuperset(Almanya, policy);
+
+        // Yerleşik host aileleri (ip.sb → api.ip.sb / api-ipv4/6.ip.sb; fallback'ler).
+        yaml.Should().Contain("DOMAIN-SUFFIX,ip.sb,GPN-CHECK");
+        yaml.Should().Contain("DOMAIN-SUFFIX,ipapi.is,GPN-CHECK");
+        yaml.Should().Contain("DOMAIN-SUFFIX,ipinfo.io,GPN-CHECK");
+        yaml.Should().Contain("DOMAIN-SUFFIX,ip-api.com,GPN-CHECK");
+        yaml.Should().Contain("DOMAIN-SUFFIX,ipify.org,GPN-CHECK");
+        // Satırlar yakalayıcıdan ÖNCE eşleşir (first-match-wins).
+        yaml.IndexOf("DOMAIN-SUFFIX,ip.sb,GPN-CHECK", StringComparison.Ordinal)
+            .Should().BeLessThan(yaml.IndexOf("MATCH,GPN-MODE", StringComparison.Ordinal),
+                "IP doğrulama satırı yakalayıcıdan önce gelir");
+        // GPN-CHECK grubu bağlı modda tünel grubuyla başlar (başlangıç seçimi).
+        GroupMembers(yaml, GpnSoftRouting.CheckGroupName).Should().Equal(
+            GpnMihomoConfigService.NodesGroupName, GpnSoftRouting.ClashDirect);
+        yaml.Should().NotContain("MATCH,DIRECT");
+    }
+
+    [Fact]
+    public void Superset_UserConfiguredIpApiUrl_AddsExtraPinnedDomain()
+    {
+        // Ayarlar → IPAPIUrl kullanıcının kendi ucuysa o host da GPN-CHECK'e bağlanır.
+        var policy = new GpnSoftRoutingPolicy(
+            GameTriggerModes.Manual,
+            InvertManualRouting: false,
+            new[] { AppEntry("chrome.exe", "vpn") },
+            IpCheckExtraDomains: ["my-ip.example"]);
+        var yaml = GenerateSuperset(Almanya, policy);
+
+        yaml.Should().Contain("DOMAIN-SUFFIX,my-ip.example,GPN-CHECK");
+        yaml.IndexOf("DOMAIN-SUFFIX,my-ip.example,GPN-CHECK", StringComparison.Ordinal)
+            .Should().BeLessThan(yaml.IndexOf("MATCH,GPN-MODE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Superset_Off_CheckGroupDefaultsToDirect_IspBaselineStaysHonest()
+    {
+        // Off'ta üretim (kesintisiz tünel canlı, her şey direct): GPN-CHECK DIRECT ile
+        // başlar — disconnected ölçümler tünel IP'sini ISP baz çizgisi olarak kaydetmez.
+        var policy = new GpnSoftRoutingPolicy(GameTriggerModes.Off, false, []);
+        var yaml = GenerateSuperset(Almanya, policy);
+
+        yaml.Should().Contain("DOMAIN-SUFFIX,ip.sb,GPN-CHECK");
+        GroupMembers(yaml, GpnSoftRouting.CheckGroupName).Should().Equal(
+            GpnSoftRouting.ClashDirect, GpnMihomoConfigService.NodesGroupName);
+    }
+
+    [Fact]
+    public void Superset_GlobalVpn_CheckGroupDefaultsToTunnel()
+    {
+        var policy = new GpnSoftRoutingPolicy(GameTriggerModes.Vpn, false, []);
+        var yaml = GenerateSuperset(Almanya, policy);
+
+        GroupMembers(yaml, GpnSoftRouting.CheckGroupName).Should().Equal(
+            GpnMihomoConfigService.NodesGroupName, GpnSoftRouting.ClashDirect);
     }
 
     // ── Launcher bypass genelleştirme (kullanıcı düzenlenebilir domain + egress) ──

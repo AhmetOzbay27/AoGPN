@@ -512,7 +512,17 @@ public class StatusBarViewModel : MyReactiveObject
         {
             NoticeManager.Instance.SendMessageEx(ResUI.TipChangeRouting);
             ReloadRequested.Publish();
-            await DispatcherRefreshIconInteraction.Handle(Unit.Default);
+            try
+            {
+                await DispatcherRefreshIconInteraction.Handle(Unit.Default);
+            }
+            catch (UnhandledInteractionException<Unit, Unit>)
+            {
+                // StatusBarView yalnızca görünür legacy yüzeyde aktive olur;
+                // WebView2 yerleşiminde görünüm hiç yüklenmeyebilir ve handler
+                // kayıtlı olmayabilir — tepsi ikonu zaten kendi güncellemesini
+                // ctor'da alır (bkz. ChangeSystemProxyAsync'teki aynı koruma).
+            }
         }
     }
 
@@ -549,7 +559,18 @@ public class StatusBarViewModel : MyReactiveObject
             }
             else
             {
-                var password = await PasswordInputInteraction.Handle(Unit.Default);
+                string? password;
+                try
+                {
+                    password = await PasswordInputInteraction.Handle(Unit.Default);
+                }
+                catch (UnhandledInteractionException<Unit, string?>)
+                {
+                    // Linux/macOS şifre istemi hiçbir görünüme kayıtlı değil
+                    // (WebView2 yerleşiminde StatusBarView aktive olmuyor) —
+                    // istem yoksa geçişi iptal et.
+                    password = null;
+                }
                 if (password.IsNullOrEmpty())
                 {
                     _config.TunModeItem.EnableTun = false;
@@ -617,7 +638,7 @@ public class StatusBarViewModel : MyReactiveObject
 
         try
         {
-            if (AppManager.Instance.IsRunningCore(ECoreType.sing_box))
+            if (AppManager.Instance.IsRunningCore(ECoreType.mihomo))
             {
                 SpeedProxyDisplay = string.Format(ResUI.SpeedDisplayText, EInboundProtocol.mixed, Utils.HumanFy(update.ProxyUp), Utils.HumanFy(update.ProxyDown));
                 SpeedDirectDisplay = string.Empty;

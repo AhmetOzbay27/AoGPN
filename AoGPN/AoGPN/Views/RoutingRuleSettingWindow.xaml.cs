@@ -12,10 +12,8 @@ public partial class RoutingRuleSettingWindow
         lstRules.MouseDoubleClick += LstRules_MouseDoubleClick;
         menuRuleSelectAll.Click += menuRuleSelectAll_Click;
         btnBrowseCustomIcon.Click += btnBrowseCustomIcon_Click;
-        btnBrowseCustomRulesetPath4Singbox.Click += btnBrowseCustomRulesetPath4Singbox_Click;
 
         cmbdomainStrategy.ItemsSource = Global.DomainStrategies.AppendEmpty();
-        cmbdomainStrategy4Singbox.ItemsSource = Global.DomainStrategies4Sbox;
 
         this.WhenActivated(disposables =>
         {
@@ -24,11 +22,9 @@ public partial class RoutingRuleSettingWindow
 
             this.Bind(ViewModel, vm => vm.SelectedRouting.Remarks, v => v.txtRemarks.Text).DisposeWith(disposables);
             this.Bind(ViewModel, vm => vm.SelectedRouting.DomainStrategy, v => v.cmbdomainStrategy.Text).DisposeWith(disposables);
-            this.Bind(ViewModel, vm => vm.SelectedRouting.DomainStrategy4Singbox, v => v.cmbdomainStrategy4Singbox.Text).DisposeWith(disposables);
 
             this.Bind(ViewModel, vm => vm.SelectedRouting.Url, v => v.txtUrl.Text).DisposeWith(disposables);
             this.Bind(ViewModel, vm => vm.SelectedRouting.CustomIcon, v => v.txtCustomIcon.Text).DisposeWith(disposables);
-            this.Bind(ViewModel, vm => vm.SelectedRouting.CustomRulesetPath4Singbox, v => v.txtCustomRulesetPath4Singbox.Text).DisposeWith(disposables);
             this.Bind(ViewModel, vm => vm.SelectedRouting.Sort, v => v.txtSort.Text).DisposeWith(disposables);
 
             this.BindCommand(ViewModel, vm => vm.RuleAddCmd, v => v.menuRuleAdd).DisposeWith(disposables);
@@ -157,21 +153,5 @@ public partial class RoutingRuleSettingWindow
         }
 
         txtCustomIcon.Text = fileName;
-    }
-
-    private void btnBrowseCustomRulesetPath4Singbox_Click(object sender, RoutedEventArgs e)
-    {
-        if (UI.OpenFileDialog(out var fileName,
-              "Config|*.json|All|*.*") != true)
-        {
-            return;
-        }
-
-        txtCustomRulesetPath4Singbox.Text = fileName;
-    }
-
-    private void linkCustomRulesetPath4Singbox(object sender, RoutedEventArgs e)
-    {
-        ProcUtils.ProcessStart("https://github.com/2dust/v2rayCustomRoutingList/blob/master/singbox_custom_ruleset_example.json");
     }
 }

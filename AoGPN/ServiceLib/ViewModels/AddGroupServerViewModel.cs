@@ -236,7 +236,7 @@ public class AddGroupServerViewModel : MyReactiveObject, ICloseable
             return;
         }
         SelectedSource.CoreType = CoreType.IsNullOrEmpty() ? ECoreType.Xray : Enum.Parse<ECoreType>(CoreType);
-        if (SelectedSource.CoreType is not (ECoreType.Xray or ECoreType.sing_box) ||
+        if (SelectedSource.CoreType is not (ECoreType.Xray or ECoreType.mihomo) ||
             SelectedSource.ConfigType is not (EConfigType.ProxyChain or EConfigType.PolicyGroup))
         {
             return;

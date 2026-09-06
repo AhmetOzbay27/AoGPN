@@ -28,7 +28,7 @@ public sealed class RealityCoreFallbackAdvisorTests
         node.StreamSecurity = "tls";
 
         var advice = RealityCoreFallbackAdvisor.Evaluate(
-            node, failedCoreType: ECoreType.sing_box,
+            node, failedCoreType: ECoreType.mihomo,
             tunEnabled: false, connectionUp: false, modeOff: false);
 
         advice.Should().Be(RealityFallbackAdvice.None);
@@ -52,7 +52,7 @@ public sealed class RealityCoreFallbackAdvisorTests
         var node = CreateRealityNode();
 
         var advice = RealityCoreFallbackAdvisor.Evaluate(
-            node, failedCoreType: ECoreType.sing_box,
+            node, failedCoreType: ECoreType.mihomo,
             tunEnabled: true, connectionUp: false, modeOff: false);
 
         advice.Should().Be(RealityFallbackAdvice.SuggestXray);
@@ -64,7 +64,7 @@ public sealed class RealityCoreFallbackAdvisorTests
         var node = CreateRealityNode();
 
         var advice = RealityCoreFallbackAdvisor.Evaluate(
-            node, failedCoreType: ECoreType.sing_box,
+            node, failedCoreType: ECoreType.mihomo,
             tunEnabled: false, connectionUp: false, modeOff: false);
 
         advice.Should().Be(RealityFallbackAdvice.SwitchToXray);
@@ -76,7 +76,7 @@ public sealed class RealityCoreFallbackAdvisorTests
         var node = CreateRealityNode();
 
         var advice = RealityCoreFallbackAdvisor.Evaluate(
-            node, failedCoreType: ECoreType.sing_box,
+            node, failedCoreType: ECoreType.mihomo,
             tunEnabled: false, connectionUp: true, modeOff: false);
 
         advice.Should().Be(RealityFallbackAdvice.None);
@@ -88,7 +88,7 @@ public sealed class RealityCoreFallbackAdvisorTests
         var node = CreateRealityNode();
 
         var advice = RealityCoreFallbackAdvisor.Evaluate(
-            node, failedCoreType: ECoreType.sing_box,
+            node, failedCoreType: ECoreType.mihomo,
             tunEnabled: false, connectionUp: false, modeOff: true);
 
         advice.Should().Be(RealityFallbackAdvice.None);
@@ -98,7 +98,7 @@ public sealed class RealityCoreFallbackAdvisorTests
     public void Evaluate_NullNode_ReturnsNone()
     {
         var advice = RealityCoreFallbackAdvisor.Evaluate(
-            null, failedCoreType: ECoreType.sing_box,
+            null, failedCoreType: ECoreType.mihomo,
             tunEnabled: false, connectionUp: false, modeOff: false);
 
         advice.Should().Be(RealityFallbackAdvice.None);
@@ -131,7 +131,7 @@ public sealed class RealityCoreFallbackAdvisorTests
     public void ApplyXraySwitch_SetsNodeCoreTypeToXray()
     {
         var node = CreateRealityNode();
-        node.CoreType = ECoreType.sing_box;
+        node.CoreType = ECoreType.mihomo;
 
         RealityCoreFallbackAdvisor.ApplyXraySwitch(node);
 

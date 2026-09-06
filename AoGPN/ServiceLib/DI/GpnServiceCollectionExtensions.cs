@@ -116,13 +116,12 @@ public static class GpnServiceCollectionExtensions
 
         // CoreManager strateji kayıtları (P0: Başlatma Yöneticisinin Parçalanması):
         // çekirdek başına başlatma politikası (mihomo own-TUN + WG host rotası,
-        // sing-box/Xray standart, openvpn native-tunnel varsayılanı). CoreManager
+        // Xray standart, openvpn native-tunnel varsayılanı). CoreManager
         // şu an Lazy singleton kompozisyonla CoreStartStrategyFactory üzerinden
         // çözer; DI'ya geçildiğinde buradan bağlanırlar (stateless — örnek paylaşımı
         // güvenlidir). Varsayılan strateji DI'da standart politikayla çözülür;
         // openvpn eşlemesi için CoreStartStrategyFactory kullanılmalıdır.
         services.AddSingleton<MihomoStartStrategy>(_ => MihomoStartStrategy.Instance);
-        services.AddSingleton<SingboxStartStrategy>(_ => SingboxStartStrategy.Instance);
         services.AddSingleton<XrayStartStrategy>(_ => XrayStartStrategy.Instance);
         services.AddSingleton<DefaultCoreStartStrategy>(_ => DefaultCoreStartStrategy.Instance);
 

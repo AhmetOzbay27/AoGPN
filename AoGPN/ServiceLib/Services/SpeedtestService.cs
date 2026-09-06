@@ -572,7 +572,12 @@ public class SpeedtestService(Config config, Func<SpeedTestResult, Task> updateF
 
         if (!IPAddress.TryParse(url, out var ipAddress))
         {
-            var ipHostInfo = await Dns.GetHostEntryAsync(url);
+            // DNS resolution must be bounded too: a stuck resolver (or an
+            // unreachable DNS server) would otherwise stall the whole test batch
+            // and the run would never finish — the node cards would stay on
+            // "Test ediliyor…" indefinitely.
+            var ipHostInfo = await Dns.GetHostEntryAsync(url)
+                .WaitAsync(TimeSpan.FromSeconds(5));
             ipAddress = ipHostInfo.AddressList.First();
         }
 
@@ -609,8 +614,10 @@ public class SpeedtestService(Config config, Func<SpeedTestResult, Task> updateF
             return lstTest;
         }
 
+        // sing-box kaldırıldı — hız testi yalnızca Xray config'iyle koşar
+        // (eski sing_box profilleri CoreManager'da doğal olarak Xray'e düşer).
         var lst1 = lstSelected.Where(t => t.CoreType == ECoreType.Xray).ToList();
-        var lst2 = lstSelected.Where(t => t.CoreType == ECoreType.sing_box).ToList();
+        var lst2 = lstSelected.Where(t => t.CoreType is not (ECoreType.Xray or ECoreType.v2fly or ECoreType.v2fly_v5)).ToList();
 
         for (var num = 0; num < (int)Math.Ceiling(lst1.Count * 1.0 / pageSize); num++)
         {

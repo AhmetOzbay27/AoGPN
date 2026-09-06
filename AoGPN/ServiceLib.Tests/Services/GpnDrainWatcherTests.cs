@@ -47,7 +47,8 @@ public class GpnDrainWatcherTests
         var result = await watcher.RunAsync(
             Italya, Almanya,
             fetchConnections: () => Task.FromResult(fetches.Count > 0 ? fetches.Dequeue() : EmptyConns()),
-            publish: published.Add);
+            publish: published.Add,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         // İlerleme anlık görüntüleri: 3 → 1 → 0, hepsi IsDraining.
         published.Where(s => s.IsDraining).Select(s => s.RemainingConnections)
@@ -73,7 +74,8 @@ public class GpnDrainWatcherTests
         var result = await watcher.RunAsync(
             Italya, Almanya,
             fetchConnections: () => Task.FromResult(Conns(["wg-it"], ["wg-it"])), // sürekli 2 kaldı
-            publish: published.Add);
+            publish: published.Add,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsDraining.Should().BeFalse();
         result.RemainingConnections.Should().Be(2);
@@ -123,7 +125,8 @@ public class GpnDrainWatcherTests
                 }
                 return Task.FromResult(EmptyConns()); // ikinci turda 0 kaldı
             },
-            publish: published.Add);
+            publish: published.Add,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         // İlk yoklama hata verdi → -1 (bilinmiyor), sonra 0 → bitti.
         published.Select(s => s.RemainingConnections).Should().Contain(-1);

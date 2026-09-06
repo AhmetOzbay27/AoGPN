@@ -155,16 +155,6 @@
                     Width="200"
                     Margin="{StaticResource Margin4}"
                     Style="{StaticResource DefComboBox}" />
-                <TextBlock
-                    Margin="{StaticResource Margin4}"
-                    VerticalAlignment="Center"
-                    Style="{StaticResource ToolbarTextBlock}"
-                    Text="{x:Static resx:ResUI.TbdomainStrategy4Singbox}" />
-                <ComboBox
-                    x:Name="cmbdomainStrategy4Singbox"
-                    Width="200"
-                    Margin="{StaticResource Margin4}"
-                    Style="{StaticResource DefComboBox}" />
             </StackPanel>
 
             <TextBlock
@@ -210,34 +200,6 @@
                 Content="{x:Static resx:ResUI.TbBrowse}"
                 Style="{StaticResource DefButton}" />
 
-            <TextBlock
-                Grid.Row="4"
-                Grid.Column="0"
-                Margin="{StaticResource Margin4}"
-                VerticalAlignment="Center"
-                Style="{StaticResource ToolbarTextBlock}">
-                <Hyperlink Click="linkCustomRulesetPath4Singbox">
-                    <TextBlock Text="{x:Static resx:ResUI.LvCustomRulesetPath4Singbox}" />
-                    <materialDesign:PackIcon Kind="Link" />
-                </Hyperlink>
-            </TextBlock>
-            <TextBox
-                x:Name="txtCustomRulesetPath4Singbox"
-                Grid.Row="4"
-                Grid.Column="1"
-                Width="600"
-                Margin="{StaticResource Margin4}"
-                VerticalAlignment="Center"
-                AcceptsReturn="True"
-                Style="{StaticResource DefTextBox}"
-                TextWrapping="Wrap" />
-            <Button
-                x:Name="btnBrowseCustomRulesetPath4Singbox"
-                Grid.Row="4"
-                Grid.Column="2"
-                Margin="{StaticResource MarginLeftRight4}"
-                Content="{x:Static resx:ResUI.TbBrowse}"
-                Style="{StaticResource DefButton}" />
         </Grid>
 
         <TabControl x:Name="tabAdvanced">

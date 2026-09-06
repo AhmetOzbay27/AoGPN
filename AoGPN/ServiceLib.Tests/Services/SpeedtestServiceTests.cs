@@ -102,7 +102,7 @@ public class SpeedtestServiceTests : IAsyncLifetime
     {
         var indexId = $"st-{Guid.NewGuid():N}";
         _createdIndexIds.Add(indexId);
-        return new ProfileItem
+        var node = new ProfileItem
         {
             IndexId = indexId,
             ConfigType = EConfigType.VMess,
@@ -110,8 +110,12 @@ public class SpeedtestServiceTests : IAsyncLifetime
             Address = "127.0.0.1",
             Port = 1,
             Remarks = $"speedtest-node-{seed}",
-            Ports = string.Empty,
         };
+        node.SetProtocolExtra(node.GetProtocolExtra() with
+        {
+            Ports = string.Empty,
+        });
+        return node;
     }
 
     private async Task WaitForAsync(Func<bool> condition, string what)
@@ -147,7 +151,7 @@ public class SpeedtestServiceTests : IAsyncLifetime
     public async Task ExitLoop_AfterFinishedRun_EmitsNoStopEvent()
     {
         // Empty selection: the run completes instantly without any network I/O.
-        _service.RunLoop(ESpeedActionType.Tcping, []);
+        _service.RunLoop(ESpeedActionType.Tcping, [], TestContext.Current.CancellationToken);
 
         await WaitForAsync(() => HasStatus(ResUI.SpeedtestingCompleted), "run completion");
         Assert.Equal(0, StopEventCount());
@@ -167,7 +171,7 @@ public class SpeedtestServiceTests : IAsyncLifetime
         // int cast threw OverflowException and the run reported "stopped" even
         // though nothing was being tested. It must finish with a normal
         // "completed" event and no stop event.
-        _service.RunLoop(ESpeedActionType.Tcping, []);
+        _service.RunLoop(ESpeedActionType.Tcping, [], TestContext.Current.CancellationToken);
 
         await WaitForAsync(() => HasStatus(ResUI.SpeedtestingCompleted), "run completion");
         Assert.Equal(0, StopEventCount());
@@ -181,12 +185,12 @@ public class SpeedtestServiceTests : IAsyncLifetime
         var node = CreateNode(1);
         _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _service.RunLoop(ESpeedActionType.Tcping, [node]);
+        _service.RunLoop(ESpeedActionType.Tcping, [node], TestContext.Current.CancellationToken);
 
         // The first per-item event fires inside RunAsync while the exit-loop
         // key is registered — the UI relies on HasActiveRun here to reject a
         // second start instead of cancelling the live one.
-        await _firstItemSeen.Task.WaitAsync(WaitTimeout);
+        await _firstItemSeen.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         Assert.True(_service.HasActiveRun);
 
         _gate.TrySetResult();
@@ -197,14 +201,14 @@ public class SpeedtestServiceTests : IAsyncLifetime
     [Fact]
     public async Task SequentialRuns_OnSameService_DoNotCrossCancel()
     {
-        _service.RunLoop(ESpeedActionType.Tcping, []);
+        _service.RunLoop(ESpeedActionType.Tcping, [], TestContext.Current.CancellationToken);
         await WaitForAsync(() => HasStatus(ResUI.SpeedtestingCompleted), "first run completion");
 
         var node = CreateNode(2);
         _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _service.RunLoop(ESpeedActionType.Tcping, [node]);
+        _service.RunLoop(ESpeedActionType.Tcping, [node], TestContext.Current.CancellationToken);
 
-        await _firstItemSeen.Task.WaitAsync(WaitTimeout);
+        await _firstItemSeen.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         Assert.True(_service.HasActiveRun);
 
         _gate.TrySetResult();
@@ -227,8 +231,8 @@ public class SpeedtestServiceTests : IAsyncLifetime
         var node = CreateNode(3);
         _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _service.RunLoop(ESpeedActionType.Tcping, [node]);
-        await _firstItemSeen.Task.WaitAsync(WaitTimeout);
+        _service.RunLoop(ESpeedActionType.Tcping, [node], TestContext.Current.CancellationToken);
+        await _firstItemSeen.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         Assert.True(_service.HasActiveRun);
 
         // Stop while the run is blocked on the first item event.
@@ -273,7 +277,7 @@ public class SpeedtestServiceTests : IAsyncLifetime
 
         var nodes = Enumerable.Range(0, 130).Select(CreateNode).ToList();
         var sw = Stopwatch.StartNew();
-        service.RunLoop(ESpeedActionType.Tcping, nodes);
+        service.RunLoop(ESpeedActionType.Tcping, nodes, TestContext.Current.CancellationToken);
         await WaitForAsync(() => HasStatus(ResUI.SpeedtestingCompleted), "capped run completion");
         sw.Stop();
 

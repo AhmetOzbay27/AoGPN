@@ -15,60 +15,82 @@ public class WinDivertEngineTests
 {
     // ── Filtre dizgesi üreticisi (pure) ───────────────────────────────────
 
-    [Theory]
-    [InlineData(42u)]
-    [InlineData(1234u)]
-    public void BuildFilter_SinglePid_ContainsOutboundUdpPid(uint pid)
+    [Fact]
+    public void BuildFilter_Default_OutboundUdpIpv4_NoPidClause()
     {
-        var filter = WinDivertFilterBuilder.BuildFilterForProcess(pid);
+        var filter = WinDivertFilterBuilder.BuildFilter();
 
         filter.Should().Contain("outbound");
         filter.Should().Contain("udp");
-        filter.Should().Contain($"processId == {pid}");
-        filter.Should().NotContain("ip6"); // varsayılan IPv4
+        filter.Should().Contain("(ip)");
+        // NETWORK katmanı processId tanımaz (gerçek WinDivert 2.2.2 bu sözcükle
+        // hata 87 döndürür — saha probe ile doğrulandı). Süreç filtresi asla
+        // dizgede OLMAMALI; PID ayrımı kullanıcı modunda port→PID tablosuyla yapılır.
+        filter.Should().NotContain("processId");
+        // Varsayılan IPv4 — yanlış alan adları da olmamalı.
+        filter.Should().NotContain("ip6");
+        filter.Should().NotContain("ipv6");
+        // Loopback dışlama (127.0.0.0/8) her zaman eklenir — WinDivert loopback
+        // UDP'yi yakalar ve geri enjeksiyon yerel döngüyü tamamlayamaz (canlı
+        // doğrulama: bağlıyken 127.0.0.1 echo timeout). CIDR/`not` gramerde yok,
+        // aralık (>,<) biçimi probe ile derleme doğrulandı.
+        filter.Should().Contain("ip.DstAddr < 127.0.0.0");
+        filter.Should().Contain("ip.DstAddr > 127.255.255.255");
+        filter.Should().NotContain("127.0.0.0/8");
     }
 
     [Fact]
-    public void BuildFilter_MultiplePids_JoinsWithOr()
+    public void BuildFilter_Ipv4AndIpv6_UsesOr()
     {
-        var filter = WinDivertFilterBuilder.BuildFilter(new[] { 111u, 222u, 333u });
+        var filter = WinDivertFilterBuilder.BuildFilter(ipv4: true, ipv6: true);
 
-        filter.Should().Contain("processId == 111 or processId == 222 or processId == 333");
-        filter.Should().NotContain("processId == 0");
+        filter.Should().Contain("(ip or ipv6)");
+        filter.Should().NotContain("ip6"); // resmî alan adı ipv6 — ip6 hata 87 üretir
+        // Çift aile: loopback dışlama her aile için AYRI cümlelerle (or) eklenir —
+        // tek cümle yanlış ailede tüm paketleri filtre dışı bırakırdı.
+        filter.Should().Contain("(ip and (ip.DstAddr < 127.0.0.0 or ip.DstAddr > 127.255.255.255))");
+        filter.Should().Contain("(ipv6 and (ipv6.DstAddr != ::1))");
     }
 
     [Fact]
-    public void BuildFilter_Ipv6Only_UsesIp6()
+    public void BuildFilter_Ipv6Only_UsesIpv6()
     {
-        const uint pid = 7;
-        var filter = WinDivertFilterBuilder.BuildFilter(new[] { pid }, ipv4: false, ipv6: true);
-        filter.Should().Contain("(ip6)");
+        var filter = WinDivertFilterBuilder.BuildFilter(ipv4: false, ipv6: true);
+
+        filter.Should().Contain("(ipv6)");
         filter.Should().NotContain("(ip)");
+        filter.Should().NotContain("ip6");
+        filter.Should().Contain("ipv6.DstAddr != ::1"); // IPv6 loopback dışlama
     }
 
     [Fact]
-    public void BuildFilter_ExcludedTunnelEndpoint_AddsNotClause()
+    public void BuildFilter_ExcludedTunnelEndpoint_UsesNotEqualsDeMorgan()
     {
         var filter = WinDivertFilterBuilder.BuildFilter(
-            new[] { 999u }, excludedDstHost: "92.4.220.236", excludedDstPort: 51820);
+            excludedDstHost: "92.4.220.236", excludedDstPort: 51820);
 
-        filter.Should().Contain("!("); // enjeksiyon döngüsünü engelleyen dışlama
-        filter.Should().Contain("ip.DstAddr == 92.4.220.236");
-        filter.Should().Contain("udp.DstPort == 51820");
-        filter.Should().Contain("processId == 999");
+        // WinDivert gramerinde mantıksal DEĞİL (!) YOKTUR — dışlama != ile De Morgan
+        // biçiminde yazılır (probe: !(...) hata 87, != biçimi derlenir).
+        filter.Should().NotContain("!(");
+        filter.Should().Contain("(ip.DstAddr != 92.4.220.236 or udp.DstPort != 51820)");
+        filter.Should().NotContain("processId");
     }
 
     [Fact]
-    public void BuildFilter_EmptyPids_Throws()
+    public void BuildFilter_InvalidExclusion_HasNoClause()
     {
-        var act = () => WinDivertFilterBuilder.BuildFilter(Array.Empty<uint>());
-        act.Should().Throw<ArgumentException>();
+        var filter = WinDivertFilterBuilder.BuildFilter(
+            excludedDstHost: "92.4.220.236", excludedDstPort: 0);
+
+        // Geçersiz port → uç nokta dışlaması EKLENMEZ (loopback dışlaması kalır).
+        filter.Should().NotContain("92.4.220.236");
+        filter.Should().Contain("ip.DstAddr < 127.0.0.0");
     }
 
     [Fact]
     public void BuildFilter_NoIPVersion_Throws()
     {
-        var act = () => WinDivertFilterBuilder.BuildFilter(new[] { 1u }, ipv4: false, ipv6: false);
+        var act = () => WinDivertFilterBuilder.BuildFilter(ipv4: false, ipv6: false);
         act.Should().Throw<ArgumentException>();
     }
 
@@ -90,11 +112,11 @@ public class WinDivertEngineTests
         var fake = new FakeWinDivertApi();
         using var engine = new WinDivertEngine(fake);
 
-        engine.Open("outbound and udp and (ip) and (processId == 1)");
+        engine.Open(WinDivertFilterBuilder.BuildFilter());
 
         fake.OpenCalls.Should().Be(1);
         engine.IsOpen.Should().BeTrue();
-        engine.Filter.Should().Contain("processId == 1");
+        engine.Filter.Should().Contain("outbound and udp");
     }
 
     [Fact]
@@ -136,7 +158,7 @@ public class WinDivertEngineTests
         var fake = new FakeWinDivertApi();
         using var engine = new WinDivertEngine(fake);
 
-        engine.OpenSniff("outbound and udp and (processId == 5)", WinDivertOpenParams.Default);
+        engine.OpenSniff(WinDivertFilterBuilder.BuildFilter(), WinDivertOpenParams.Default);
 
         fake.OpenExCalls.Should().Be(1);
         fake.OpenCalls.Should().Be(0);
@@ -151,7 +173,7 @@ public class WinDivertEngineTests
         var fake = new FakeWinDivertApi();
         using var engine = new WinDivertEngine(fake);
 
-        engine.OpenRecvOnly("outbound and udp and (processId == 5)", WinDivertOpenParams.Default);
+        engine.OpenRecvOnly(WinDivertFilterBuilder.BuildFilter(), WinDivertOpenParams.Default);
 
         fake.OpenExCalls.Should().Be(1);
         fake.OpenCalls.Should().Be(0);
@@ -170,6 +192,21 @@ public class WinDivertEngineTests
 
         (fake.LastOpenFlags & WinDivertNative.FlagRecvOnly).Should().NotBe(0ul);
         (fake.LastOpenFlags & WinDivertNative.FlagUseSequenceNumbers).Should().NotBe(0ul);
+    }
+
+    [Fact]
+    public void OpenDivert_NoSniffNoRecvOnly_SendStaysEnabled()
+    {
+        var fake = new FakeWinDivertApi();
+        using var engine = new WinDivertEngine(fake);
+
+        engine.OpenDivert(WinDivertFilterBuilder.BuildFilter(), WinDivertOpenParams.Default);
+
+        fake.OpenExCalls.Should().Be(1);
+        fake.OpenCalls.Should().Be(0);
+        (fake.LastOpenFlags & (WinDivertNative.FlagSniff | WinDivertNative.FlagRecvOnly)).Should().Be(0ul,
+            "düz divert: Send etkin kalır (hedef dışı paketler geri enjekte edilir)");
+        engine.IsOpen.Should().BeTrue();
     }
 
     [Fact]

@@ -15,7 +15,6 @@ public static class CoreStartStrategyFactory
     public static ICoreStartStrategy For(ECoreType coreType) => coreType switch
     {
         ECoreType.mihomo => MihomoStartStrategy.Instance,
-        ECoreType.sing_box => SingboxStartStrategy.Instance,
         ECoreType.Xray => XrayStartStrategy.Instance,
         ECoreType.openvpn => DefaultCoreStartStrategy.NativeTunnelInstance,
         _ => DefaultCoreStartStrategy.Instance,

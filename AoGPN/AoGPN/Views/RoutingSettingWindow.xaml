@@ -81,19 +81,7 @@
                 Margin="{StaticResource Margin4}"
                 Style="{StaticResource DefComboBox}" />
 
-            <TextBlock
-                Grid.Row="1"
-                Grid.Column="0"
-                Margin="{StaticResource Margin4}"
-                VerticalAlignment="Center"
-                Style="{StaticResource ToolbarTextBlock}">
-                <Hyperlink Click="linkdomainStrategy4Singbox_Click">
-                    <TextBlock Text="{x:Static resx:ResUI.TbdomainStrategy4Singbox}" />
-                    <materialDesign:PackIcon Kind="Link" />
-                </Hyperlink>
-            </TextBlock>
             <ComboBox
-                x:Name="cmbdomainStrategy4Singbox"
                 Grid.Row="1"
                 Grid.Column="1"
                 Width="300"

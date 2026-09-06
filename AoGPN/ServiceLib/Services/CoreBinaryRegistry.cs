@@ -21,7 +21,6 @@ public sealed class CoreBinaryRegistry
     public string BinaryRoot => _binaryRoot;
 
     public CoreBinaryValidationResult Validate(
-        bool requireSingBox = false,
         bool requireXray = false,
         bool requireTun = false,
         ECoreType? requiredCore = null)
@@ -30,20 +29,11 @@ public sealed class CoreBinaryRegistry
         var errors = new List<string>();
         var warnings = new List<string>();
 
-        var singBox = ResolveCoreBinary(
-            ECoreType.sing_box,
-            ["sing-box-client", "sing-box"]);
         var xray = ResolveCoreBinary(ECoreType.Xray, ["xray"]);
         var wintun = ResolveOptionalAsset("wintun.dll");
 
-        assets.Add(singBox);
         assets.Add(xray);
         assets.Add(wintun);
-
-        if (requireSingBox && !singBox.Exists)
-        {
-            errors.Add($"Core executable missing: sing-box executable not found under '{GetCoreDirectory(ECoreType.sing_box)}'.");
-        }
 
         if (requireXray && !xray.Exists)
         {
@@ -56,7 +46,7 @@ public sealed class CoreBinaryRegistry
         }
 
         // Keep the driver check diagnostic-only. Depending on the release archive,
-        // sing-box may load the driver from its own directory or use a bundled build.
+        // the core may load the driver from its own directory or use a bundled build.
         if (requireTun && _isWindows() && !wintun.Exists)
         {
             warnings.Add("No standalone wintun.dll was found; the selected core must provide its Windows TUN dependency.");
@@ -78,7 +68,6 @@ public sealed class CoreBinaryRegistry
     {
         var names = coreType switch
         {
-            ECoreType.sing_box => new[] { "sing-box-client", "sing-box" },
             ECoreType.Xray => new[] { "xray" },
             _ => CoreInfoManager.Instance.GetCoreInfo(coreType)?.CoreExes?
                 .Where(name => !string.IsNullOrWhiteSpace(name))
@@ -134,7 +123,6 @@ public sealed class CoreBinaryRegistry
     {
         var candidates = new[]
         {
-            Path.Combine(GetCoreDirectory(ECoreType.sing_box), name),
             Path.Combine(GetCoreDirectory(ECoreType.Xray), name),
             Path.Combine(_binaryRoot, name),
         };
@@ -174,7 +162,6 @@ public sealed class CoreBinaryRegistry
     private static string CoreDirectoryName(ECoreType coreType) =>
         coreType switch
         {
-            ECoreType.sing_box => "sing_box",
             ECoreType.Xray => "xray",
             _ => coreType.ToString().ToLowerInvariant(),
         };

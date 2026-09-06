@@ -108,9 +108,11 @@ public class GpnCaptureTests
     [Fact]
     public async Task CaptureLoop_RecvOnly_PumpsPackets_ThroughInjectHandler()
     {
-        // SniffFirst=false → doğrudan recv-only: paketler yığından çıkarılır ve
-        // enjeksiyon hattına pompalanır (tünel egress'i).
-        var packets = new[] { new byte[] { 1, 2, 3 }, new byte[] { 9, 9, 9, 9 } };
+        // SniffFirst=false → doğrudan recv-only: hedef süreçten gelen UDP paketleri
+        // yığından çıkarılır ve enjeksiyon hattına pompalanır (tünel egress'i).
+        // NETWORK katmanı filtre içinde süreç tanımadığı için paket sahipliği
+        // port→PID tablosuyla çözülür (havuz = {42}).
+        var packets = new[] { GpnPacketTestData.V4Udp(5000, 27015), GpnPacketTestData.V4Udp(5000, 27015) };
         var api = new FakeDivertApi(recvPackets: packets);
         using var engine = new WinDivertEngine(api);
 
@@ -131,6 +133,7 @@ public class GpnCaptureTests
                 }
                 return ValueTask.CompletedTask;
             },
+            portPidTable: new FakePortPidTable(5000, 42),
             options: new GpnCaptureOptions { SniffFirst = false });
 
         await loop.RunAsync(cts.Token);
@@ -138,8 +141,60 @@ public class GpnCaptureTests
         injected.Should().HaveCount(2);
         injected[0].Should().Equal(packets[0]);
         injected[1].Should().Equal(packets[1]);
-        api.OpenFlags.Should().OnlyContain(f => (f & WinDivertNative.FlagRecvOnly) != 0);
+        api.OpenFlags.Should().OnlyContain(f => (f & (WinDivertNative.FlagSniff | WinDivertNative.FlagRecvOnly)) == 0,
+            "düz divert açılır — Send etkin (hedef dışı paketler geri enjekte edilir)");
+        api.SendCount.Should().Be(0, "havuz içi paketler geri enjekte edilmez");
         engine.IsOpen.Should().BeFalse(); // kapanış temiz
+    }
+
+    [Fact]
+    public async Task CaptureLoop_NonTargetPacket_ReinjectedNotInjected()
+    {
+        // Port 5000 → PID 200, havuz = {100}: paket hedef DIŞI → tünele GİRMEZ,
+        // yığına geri enjekte edilir (diğer uygulamaların UDP trafiği yutulmaz).
+        var api = new FakeDivertApi(recvPackets: [GpnPacketTestData.V4Udp(5000, 27015)]);
+        using var engine = new WinDivertEngine(api);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        var injected = 0;
+        var loop = new GpnCaptureLoop(
+            new StubResolver(initial: Snap(100u), refresh: null),
+            engine,
+            inject: (_, _) =>
+            {
+                Interlocked.Increment(ref injected);
+                return ValueTask.CompletedTask;
+            },
+            portPidTable: new FakePortPidTable(5000, 200),
+            options: new GpnCaptureOptions { SniffFirst = false });
+
+        await loop.RunAsync(cts.Token);
+
+        injected.Should().Be(0, "hedef dışı paket tünele sokulmaz");
+        loop.ReinjectedPacketCount.Should().Be(1, "yığına geri enjekte edilir");
+        api.SendCount.Should().Be(1);
+        engine.IsOpen.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CaptureLoop_UnknownOwner_ReinjectedNotBlackholed()
+    {
+        // Port tablosunda kaydı olmayan (çözülemeyen) paket: ne tünellenir ne
+        // yutulur — güvenli varsayılan geri enjeksiyondur (bağlantı kopmaz).
+        var api = new FakeDivertApi(recvPackets: [GpnPacketTestData.V4Udp(6000, 27015)]);
+        using var engine = new WinDivertEngine(api);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        var loop = new GpnCaptureLoop(
+            new StubResolver(initial: Snap(100u), refresh: null),
+            engine,
+            options: new GpnCaptureOptions { SniffFirst = false });
+
+        await loop.RunAsync(cts.Token);
+
+        loop.ConsumedPacketCount.Should().Be(0);
+        loop.ReinjectedPacketCount.Should().Be(1);
+        engine.IsOpen.Should().BeFalse();
     }
 
     // ── GpnCaptureLoop — PID değişince filtre yeniden derlenir ────────────
@@ -158,11 +213,14 @@ public class GpnCaptureTests
         await loop.RunAsync(cts.Token);
 
         // İlk açılış (PID 100) + tazeleme sonrası yeniden derleme (PID 100 ve 200).
+        // Filtre süreç İÇERMEZ (NETWORK katmanı processId tanımaz) — her iki açılış
+        // da aynı geçerli outbound-UDP dizgesini kullanır; PID ayrımı kullanıcı
+        // modundadır (RoutePacketAsync).
         api.OpenFilters.Should().HaveCount(2);
-        api.OpenFilters[0].Should().Contain("processId == 100");
-        api.OpenFilters[1].Should().Contain("processId == 200");
-        api.OpenFilters[1].Should().NotBe(api.OpenFilters[0]);
-        api.OpenFlags.Should().OnlyContain(f => (f & WinDivertNative.FlagRecvOnly) != 0);
+        api.OpenFilters.Should().OnlyContain(f => f.Contains("outbound and udp and (ip)"));
+        api.OpenFilters.Should().OnlyContain(f => !f.Contains("processId"));
+        api.OpenFlags.Should().OnlyContain(f => (f & (WinDivertNative.FlagSniff | WinDivertNative.FlagRecvOnly)) == 0,
+            "düz divert — Send etkin");
         engine.IsOpen.Should().BeFalse();
     }
 
@@ -174,6 +232,8 @@ public class GpnCaptureTests
         // Sınırsız paket üreten sahte sürücü: sniff aşaması VerifyPacketCount paketi
         // gözlemler (yakala-bırak), sonra OpenEx recv-only'ye geçilir ve paketler
         // enjeksiyon hattına pompalanır.
+        // Sınırsız UDP paketi (kaynak port 5000): sniff eşiğine ve recv-only
+        // pompasına yetecek kadar üretir; port tablosu PID 42'yi havuzda sayar.
         var api = new FakeDivertApi(infinitePackets: true);
         using var engine = new WinDivertEngine(api);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -192,6 +252,7 @@ public class GpnCaptureTests
                 }
                 return ValueTask.CompletedTask;
             },
+            portPidTable: new FakePortPidTable(5000, 42),
             options: new GpnCaptureOptions
             {
                 SniffFirst = true,
@@ -203,9 +264,11 @@ public class GpnCaptureTests
 
         api.OpenFilters.Should().HaveCount(2, "sniff + recv-only açılışı");
         (api.OpenFlags[0] & WinDivertNative.FlagSniff).Should().NotBe(0ul);
-        (api.OpenFlags[1] & WinDivertNative.FlagRecvOnly).Should().NotBe(0ul);
+        (api.OpenFlags[1] & (WinDivertNative.FlagSniff | WinDivertNative.FlagRecvOnly)).Should().Be(0ul,
+            "recv-only aşaması düz divert açar — hedef dışı paketler geri enjekte edilir");
         loop.SniffedPacketCount.Should().BeGreaterThanOrEqualTo(3, "sniff doğrulama eşiği");
         consumed.Count.Should().BeGreaterThanOrEqualTo(2, "recv-only paketleri inject'e pompalanır");
+        api.SendCount.Should().Be(0, "tüm paketler havuz içi (42) — geri enjeksiyon yok");
         engine.IsOpen.Should().BeFalse();
     }
 
@@ -266,7 +329,8 @@ public class GpnCaptureTests
 
         api.OpenFilters.Should().HaveCount(2);
         (api.OpenFlags[0] & WinDivertNative.FlagSniff).Should().NotBe(0ul);
-        (api.OpenFlags[1] & WinDivertNative.FlagRecvOnly).Should().NotBe(0ul);
+        (api.OpenFlags[1] & (WinDivertNative.FlagSniff | WinDivertNative.FlagRecvOnly)).Should().Be(0ul,
+            "recv-only aşaması düz divert açar");
         loop.SniffedPacketCount.Should().Be(1, "tek paket görüldü ama eşik aşılmadı");
         engine.IsOpen.Should().BeFalse();
     }
@@ -415,11 +479,12 @@ public class GpnCaptureTests
             await loop1.RunAsync(cts.Token);
         }
 
-        // Varsayılan sniff-önce akışı: sniff + recv-only açılışı — ikisi de aynı options.
+        // Varsayılan sniff-önce akışı: sniff + düz divert açılışı — ikisi de aynı options.
         api1.OpenParamsList.Should().HaveCount(2, "sniff + recv-only açılışı");
         api1.OpenParamsList.Should().OnlyContain(p => p.QueueLen2 == 4096 && p.QueueTime2 == 500 && p.QueueSize2 == 1048576);
         (api1.OpenFlags[0] & WinDivertNative.FlagSniff).Should().NotBe(0ul);
-        (api1.OpenFlags[1] & WinDivertNative.FlagRecvOnly).Should().NotBe(0ul);
+        (api1.OpenFlags[1] & (WinDivertNative.FlagSniff | WinDivertNative.FlagRecvOnly)).Should().Be(0ul,
+            "yakalama aşaması düz divert — Send etkin (hedef dışı geri enjekte edilir)");
         api1.OpenFlags.Should().OnlyContain(f => (f & WinDivertNative.FlagQueueSize) != 0);
         api1.OpenFlags.Should().OnlyContain(f => (f & WinDivertNative.FlagQueueLength) != 0);
 
@@ -453,7 +518,8 @@ public class GpnCaptureTests
         api2.OpenParamsList.Should().OnlyContain(p => p.QueueLen1 == 32768 && p.QueueTime1 == 2000);
         api2.OpenFlags.Should().OnlyContain(f => (f & WinDivertNative.FlagQueueSize) == 0, "EnableQueueSize kapatıldı → bayrak yok");
         api2.OpenFlags.Should().OnlyContain(f => (f & WinDivertNative.FlagQueueLength) != 0, "EnableQueueLen varsayılan açık");
-        api2.OpenFlags.Should().OnlyContain(f => (f & WinDivertNative.FlagRecvOnly) != 0 || (f & WinDivertNative.FlagSniff) != 0);
+        api2.OpenFlags.Should().OnlyContain(f => (f & WinDivertNative.FlagSniff) != 0 || (f & (WinDivertNative.FlagSniff | WinDivertNative.FlagRecvOnly)) == 0,
+            "sniff veya düz divert — RECV_ONLY hiçbir açılışta yok");
     }
 
     // ── Test donanımı ────────────────────────────────────────────────────
@@ -540,6 +606,8 @@ public class GpnCaptureTests
         /// ayarlarla açıldığını doğrulamak için sırayla kaydedilir.</summary>
         public List<WinDivertOpenParams> OpenParamsList { get; } = new();
 
+        public int SendCount { get; private set; }
+
         public FakeDivertApi(byte[][]? recvPackets = null, bool infinitePackets = false)
         {
             _recvPackets = recvPackets ?? Array.Empty<byte[]>();
@@ -568,8 +636,9 @@ public class GpnCaptureTests
             recvLen = 0;
             if (_infinite)
             {
-                // Sonsuz paket akışı — sniff eşiğine ve recv-only pompasına yetecek kadar üretir.
-                var data = new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 };
+                // Sonsuz geçerli UDP paket akışı (kaynak port 5000) — sniff eşiğine ve
+                // recv-only pompasına yetecek kadar üretir; route edilebilir.
+                var data = GpnPacketTestData.V4Udp(5000, 27015);
                 Marshal.Copy(data, 0, packet, data.Length);
                 recvLen = data.Length;
                 address.Direction = WinDivertNative.DirectionOutbound;
@@ -588,6 +657,7 @@ public class GpnCaptureTests
 
         public bool Send(IntPtr handle, IntPtr packet, int length, out int sendLen, ref WinDivertAddress address)
         {
+            SendCount++;
             sendLen = length;
             return true;
         }

@@ -187,12 +187,6 @@ public static class ConfigHandler
             XudpProxyUDP443 = "reject"
         };
 
-        config.Mux4SboxItem ??= new()
-        {
-            Protocol = Global.SingboxMuxs.First(),
-            MaxConnections = 8
-        };
-
         config.HysteriaItem ??= new()
         {
             UpMbps = 100,
@@ -882,7 +876,7 @@ public static class ConfigHandler
     /// <summary>
     /// Add or edit a TUIC server
     /// Validates and processes TUIC-specific settings
-    /// Sets the core type to sing_box as required by TUIC
+    /// Sets the core type to mihomo as required by TUIC
     /// </summary>
     /// <param name="config">Current configuration</param>
     /// <param name="profileItem">TUIC profile to add</param>
@@ -891,7 +885,7 @@ public static class ConfigHandler
     public static async Task<int> AddTuicServer(Config config, ProfileItem profileItem, bool toFile = true)
     {
         profileItem.ConfigType = EConfigType.TUIC;
-        profileItem.CoreType = ECoreType.sing_box;
+        profileItem.CoreType = ECoreType.mihomo;
 
         profileItem.Address = profileItem.Address.TrimEx();
         profileItem.Username = profileItem.Username.TrimEx();
@@ -988,7 +982,6 @@ public static class ConfigHandler
     public static async Task<int> AddAnytlsServer(Config config, ProfileItem profileItem, bool toFile = true)
     {
         profileItem.ConfigType = EConfigType.Anytls;
-        profileItem.CoreType = ECoreType.sing_box;
 
         profileItem.Address = profileItem.Address.TrimEx();
         profileItem.Password = profileItem.Password.TrimEx();
@@ -1016,7 +1009,6 @@ public static class ConfigHandler
     public static async Task<int> AddNaiveServer(Config config, ProfileItem profileItem, bool toFile = true)
     {
         profileItem.ConfigType = EConfigType.Naive;
-        profileItem.CoreType = ECoreType.sing_box;
 
         profileItem.Address = profileItem.Address.TrimEx();
         profileItem.Username = profileItem.Username.TrimEx();
@@ -1673,14 +1665,17 @@ public static class ConfigHandler
     {
         ProfileItem? itemSocks = null;
         var enableLegacyProtect = config.TunModeItem.EnableLegacyProtect;
+        // sing-box kaldırıldı — legacy protect yardımcı çekirdeği Xray ile koşar
+        // (SOCKS profili Xray'de de üretilir). mihomo zaten BuildPreSocksIfNeeded'da
+        // elenir (kendi TUN'unu yönetir).
         if (node.ConfigType != EConfigType.Custom
-            && coreType != ECoreType.sing_box
+            && coreType != ECoreType.mihomo
             && config.TunModeItem.EnableTun
             && enableLegacyProtect)
         {
             itemSocks = new ProfileItem()
             {
-                CoreType = ECoreType.sing_box,
+                CoreType = ECoreType.Xray,
                 ConfigType = EConfigType.SOCKS,
                 Address = Global.Loopback,
                 Port = AppManager.Instance.GetLocalPort(EInboundProtocol.socks)
@@ -1690,7 +1685,7 @@ public static class ConfigHandler
             && node.PreSocksPort is > 0 and <= 65535)
         {
             var customPreCoreType = AppManager.Instance.GetCoreType(null, EConfigType.Custom);
-            var preCoreType = (enableLegacyProtect && config.TunModeItem.EnableTun) ? ECoreType.sing_box : customPreCoreType;
+            var preCoreType = (enableLegacyProtect && config.TunModeItem.EnableTun) ? ECoreType.Xray : customPreCoreType;
             itemSocks = new ProfileItem()
             {
                 CoreType = preCoreType,
@@ -1891,11 +1886,6 @@ public static class ConfigHandler
         var preSocksPort = subItem?.PreSocksPort;
 
         List<ProfileItem>? lstProfiles = null;
-        //Is sing-box array configuration
-        if (lstProfiles is null || lstProfiles.Count <= 0)
-        {
-            lstProfiles = SingboxFmt.ResolveFullArray(strData, subRemarks);
-        }
         //Is v2ray array configuration
         if (lstProfiles is null || lstProfiles.Count <= 0)
         {
@@ -1921,8 +1911,6 @@ public static class ConfigHandler
         }
 
         ProfileItem? profileItem = null;
-        //Is sing-box configuration
-        profileItem ??= SingboxFmt.ResolveFull(strData, subRemarks);
         //Is v2ray configuration
         profileItem ??= V2rayFmt.ResolveFull(strData, subRemarks);
         //Is Html Page
@@ -2516,14 +2504,23 @@ public static class ConfigHandler
     /// <returns>0 if successful</returns>
     public static async Task<int> SetDefaultRouting(Config config, RoutingItem routingItem)
     {
-        var items = await AppManager.Instance.RoutingItems();
-        if (items.Any(t => t.Id == routingItem.Id && t.IsActive == true))
+        if (routingItem is null)
+        {
+            return -1;
+        }
+
+        var items = await AppManager.Instance.RoutingItems() ?? [];
+        if (items.Any(t => t is not null && t.Id == routingItem.Id && t.IsActive == true))
         {
             return -1;
         }
 
         foreach (var item in items)
         {
+            if (item is null)
+            {
+                continue;
+            }
             if (item.Id == routingItem.Id)
             {
                 item.IsActive = true;
@@ -2551,7 +2548,10 @@ public static class ConfigHandler
         if (item is null)
         {
             var item2 = await SQLiteHelper.Instance.TableAsync<RoutingItem>().FirstOrDefaultAsync();
-            await SetDefaultRouting(config, item2);
+            if (item2 is not null)
+            {
+                await SetDefaultRouting(config, item2);
+            }
             return item2;
         }
 
@@ -2764,13 +2764,6 @@ public static class ConfigHandler
             };
             await SaveDNSItems(config, item);
 
-            var item2 = new DNSItem()
-            {
-                Remarks = "sing-box",
-                CoreType = ECoreType.sing_box,
-                Enabled = false,
-            };
-            await SaveDNSItems(config, item2);
         }
 
         return 0;
@@ -2899,12 +2892,6 @@ public static class ConfigHandler
             };
             await SaveFullConfigTemplate(config, item);
 
-            var item2 = new FullConfigTemplateItem()
-            {
-                Remarks = "sing-box",
-                CoreType = ECoreType.sing_box,
-            };
-            await SaveFullConfigTemplate(config, item2);
         }
 
         return 0;
@@ -2960,17 +2947,14 @@ public static class ConfigHandler
 
             case EPresetType.Russia:
                 config.ConstItem.GeoSourceUrl = Global.GeoFilesSources[1];
-                config.ConstItem.SrsSourceUrl = Global.SingboxRulesetSources[1];
                 config.ConstItem.RouteRulesTemplateSourceUrl = Global.RoutingRulesSources[1];
 
                 var xrayDnsRussia = await GetExternalDNSItem(ECoreType.Xray, Global.DNSTemplateSources[1] + "v2ray.json");
-                var singboxDnsRussia = await GetExternalDNSItem(ECoreType.sing_box, Global.DNSTemplateSources[1] + "sing_box.json");
                 var simpleDnsRussia = await GetExternalSimpleDNSItem(Global.DNSTemplateSources[1] + "simple_dns.json");
 
                 if (simpleDnsRussia == null)
                 {
                     xrayDnsRussia.Enabled = true;
-                    singboxDnsRussia.Enabled = true;
                     config.SimpleDNSItem = InitBuiltinSimpleDNS();
                 }
                 else
@@ -2978,22 +2962,18 @@ public static class ConfigHandler
                     config.SimpleDNSItem = simpleDnsRussia;
                 }
                 await SaveDNSItems(config, xrayDnsRussia);
-                await SaveDNSItems(config, singboxDnsRussia);
                 break;
 
             case EPresetType.Iran:
                 config.ConstItem.GeoSourceUrl = Global.GeoFilesSources[2];
-                config.ConstItem.SrsSourceUrl = Global.SingboxRulesetSources[2];
                 config.ConstItem.RouteRulesTemplateSourceUrl = Global.RoutingRulesSources[2];
 
                 var xrayDnsIran = await GetExternalDNSItem(ECoreType.Xray, Global.DNSTemplateSources[2] + "v2ray.json");
-                var singboxDnsIran = await GetExternalDNSItem(ECoreType.sing_box, Global.DNSTemplateSources[2] + "sing_box.json");
                 var simpleDnsIran = await GetExternalSimpleDNSItem(Global.DNSTemplateSources[2] + "simple_dns.json");
 
                 if (simpleDnsIran == null)
                 {
                     xrayDnsIran.Enabled = true;
-                    singboxDnsIran.Enabled = true;
                     config.SimpleDNSItem = InitBuiltinSimpleDNS();
                 }
                 else
@@ -3001,7 +2981,6 @@ public static class ConfigHandler
                     config.SimpleDNSItem = simpleDnsIran;
                 }
                 await SaveDNSItems(config, xrayDnsIran);
-                await SaveDNSItems(config, singboxDnsIran);
                 break;
         }
 

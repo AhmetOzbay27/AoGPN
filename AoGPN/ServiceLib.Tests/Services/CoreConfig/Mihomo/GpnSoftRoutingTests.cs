@@ -287,4 +287,54 @@ public class GpnSoftRoutingTests
         GpnSoftRouting.AppGroupName(12).Should().Be("ao-12");
         GpnSoftRouting.AppGroupName(0).Should().NotBe(GpnSoftRouting.AppGroupName(1));
     }
+
+    [Fact]
+    public void CheckGroupTarget_OffDirect_ConnectedModesTunnel()
+    {
+        // IP doğrulama hostları bağlıyken WG tünelinden çıkar (beyaz listede bile),
+        // Off'ta DIRECT'e döner — ISP baz çizgisi tünel IP'siyle kirlenmez.
+        GpnSoftRouting.CheckGroupTarget(GameTriggerModes.Off).Should().Be(GpnSoftRouting.ClashDirect);
+        GpnSoftRouting.CheckGroupTarget(GameTriggerModes.Vpn).Should().Be(GpnMihomoConfigService.NodesGroupName);
+        GpnSoftRouting.CheckGroupTarget(GameTriggerModes.Manual).Should().Be(GpnMihomoConfigService.NodesGroupName);
+    }
+
+    [Fact]
+    public void ResolveIpCheckExtraDomains_HostExtractionIsConservative()
+    {
+        // Geçerli mutlak URL → küçük harfli host (ayrıca yerleşiklerle çakışsa bile
+        // üretici tekrarları eler).
+        GpnSoftRouting.ResolveIpCheckExtraDomains("https://IpInfo.io/json")
+            .Should().Equal("ipinfo.io");
+        GpnSoftRouting.ResolveIpCheckExtraDomains("https://api.ip.sb/geoip")
+            .Should().Equal("api.ip.sb");
+        // Boş / çözümlenemeyen / saf IP → null (yalnızca yerleşik hostlar basılır).
+        GpnSoftRouting.ResolveIpCheckExtraDomains(null).Should().BeNull();
+        GpnSoftRouting.ResolveIpCheckExtraDomains("").Should().BeNull();
+        GpnSoftRouting.ResolveIpCheckExtraDomains("api.ip.sb/geoip").Should().BeNull();
+        GpnSoftRouting.ResolveIpCheckExtraDomains("https://93.184.216.34/json").Should().BeNull();
+    }
+
+    [Fact]
+    public void BuildPolicy_CarriesConfiguredIpApiUrlAsExtraDomain()
+    {
+        var config = new Config
+        {
+            ConnectionItem = new ConnectionSettingsItem
+            {
+                Mode = GameTriggerModes.Manual,
+                ManualRoutes =
+                [
+                    new ManualRouteSetting { EntryType = "app", Value = "EscapeFromTarkov.exe", Action = "vpn" },
+                ],
+            },
+            SpeedTestItem = new SpeedTestItem { IPAPIUrl = "https://my-ip.example/json" },
+        };
+
+        var policy = GpnSoftRouting.BuildPolicy(config);
+
+        policy.IpCheckExtraDomains.Should().Equal("my-ip.example");
+        // Varsayılan (ayar boş) politikada ek domain yok — yalnızca yerleşik hostlar.
+        GpnSoftRouting.BuildPolicy(new Config { ConnectionItem = new ConnectionSettingsItem() })
+            .IpCheckExtraDomains.Should().BeNull();
+    }
 }

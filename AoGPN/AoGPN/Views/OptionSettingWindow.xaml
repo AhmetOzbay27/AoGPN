@@ -304,35 +304,6 @@
                             Text="{x:Static resx:ResUI.TbSettingsDefUserAgentTips}" />
 
                         <TextBlock
-                            Grid.Row="17"
-                            Grid.Column="0"
-                            Margin="{StaticResource Margin8}"
-                            VerticalAlignment="Center"
-                            Style="{StaticResource ToolbarTextBlock}"
-                            Text="{x:Static resx:ResUI.TbSettingsMux4SboxProtocol}" />
-                        <ComboBox
-                            x:Name="cmbmux4SboxProtocol"
-                            Grid.Row="17"
-                            Grid.Column="1"
-                            Width="200"
-                            Margin="{StaticResource Margin8}"
-                            Style="{StaticResource DefComboBox}" />
-
-                        <TextBlock
-                            Grid.Row="18"
-                            Grid.Column="0"
-                            Margin="{StaticResource Margin8}"
-                            VerticalAlignment="Center"
-                            Style="{StaticResource ToolbarTextBlock}"
-                            Text="{x:Static resx:ResUI.TbSettingsEnableCacheFile4Sbox}" />
-                        <ToggleButton
-                            x:Name="togenableCacheFile4Sbox"
-                            Grid.Row="18"
-                            Grid.Column="1"
-                            Margin="{StaticResource Margin8}"
-                            HorizontalAlignment="Left" />
-
-                        <TextBlock
                             Grid.Row="19"
                             Grid.Column="0"
                             Margin="{StaticResource Margin8}"

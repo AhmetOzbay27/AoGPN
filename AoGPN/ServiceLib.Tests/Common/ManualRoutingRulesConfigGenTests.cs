@@ -1,27 +1,32 @@
 using AwesomeAssertions;
 using ServiceLib.Common;
 using ServiceLib.Enums;
+using ServiceLib.Handler;
+using ServiceLib.Handler.Builder;
 using ServiceLib.Helper;
 using ServiceLib.Models;
-using ServiceLib.Models.CoreConfigs;
 using ServiceLib.Models.Dto;
 using ServiceLib.Models.Entities;
+using ServiceLib.Services;
 using ServiceLib.Services.CoreConfig;
+using ServiceLib.Services.CoreConfig.Mihomo;
 using Xunit;
 
 namespace ServiceLib.Tests.Common;
 
 /// <summary>
 /// Integration tests that verify the end-to-end flow from managed routing rules
-/// through the sing-box config generator. Rather than stopping at the database,
+/// through the mihomo (GPN) config generator. Rather than stopping at the database,
 /// these tests round-trip through
-/// <see cref="CoreConfigSingboxService.GenerateClientConfigContent"/> and inspect
-/// the emitted <c>route.rules</c> for per-app <c>process_name</c> entries and
-/// correct catch-all routing.
+/// <see cref="CoreConfigHandler.GenerateClientConfig"/> and inspect the emitted
+/// mihomo <c>rules</c> rows for per-app PROCESS-NAME entries and correct catch-all
+/// routing (MATCH → wg-&lt;id&gt; / DIRECT).
 /// </summary>
 [Collection("SharedDatabase")]
 public class ManualRoutingRulesConfigGenTests
 {
+    private const string ServerId = "de";
+
     private static async Task CleanRoutingItemsAsync()
     {
         // Tabloları AppManager.InitApp yaratır ama test host'u onu hiç çalıştırmaz;
@@ -43,7 +48,6 @@ public class ManualRoutingRulesConfigGenTests
             RoutingBasicItem = new RoutingBasicItem
             {
                 DomainStrategy = Global.AsIs,
-                DomainStrategy4Singbox = string.Empty,
                 RoutingIndexId = string.Empty,
             },
             GuiItem = new GUIItem { EnableStatistics = false },
@@ -76,7 +80,6 @@ public class ManualRoutingRulesConfigGenTests
                 UdpEnabled = true,
                 SniffingEnabled = true,
             }],
-            CoreTypeItem = [new CoreTypeItem { ConfigType = EConfigType.VMess, CoreType = ECoreType.sing_box }],
         };
     }
 
@@ -102,33 +105,28 @@ public class ManualRoutingRulesConfigGenTests
         };
     }
 
+    private static GpnServerProfile Server() => new(
+        ServerId: ServerId,
+        Name: "Almanya",
+        EndpointHost: "130.61.223.36",
+        EndpointPort: 51820,
+        ServerPublicKey: "xQZLxeDqYrCcM7oDYbFxDszWnCk4SzwYYXWsrib8S3A=",
+        ClientPrivateKey: "ICsMC9b6W0uzw7NXNlWMgSqQu1W8ZkNvOKt9vlIzyFw=",
+        ClientAddress: "10.66.66.2/24",
+        Mtu: 1420,
+        PersistentKeepalive: 25);
+
     private static CoreConfigContext BuildContext(
         Config config,
         List<RulesItem> managedRules)
     {
-        var node = new ProfileItem
-        {
-            IndexId = "node-1",
-            ConfigType = EConfigType.VMess,
-            CoreType = ECoreType.sing_box,
-            Remarks = "test-node",
-            Address = "example.com",
-            Port = 443,
-            Password = Guid.NewGuid().ToString(),
-            Network = nameof(ETransport.raw),
-            StreamSecurity = string.Empty,
-            Subid = string.Empty,
-        };
-        node.SetProtocolExtra(node.GetProtocolExtra() with
-        {
-            AlterId = "0",
-            VmessSecurity = Global.DefaultSecurity,
-        });
+        var node = GpnCoreLauncher.BuildWireGuardProfile(Server());
+        node.Remarks = "test-node";
 
         return new CoreConfigContext
         {
             Node = node,
-            RunCoreType = ECoreType.sing_box,
+            RunCoreType = ECoreType.mihomo,
             AppConfig = config,
             RoutingItem = new RoutingItem
             {
@@ -136,7 +134,6 @@ public class ManualRoutingRulesConfigGenTests
                 Remarks = "gpn-managed-routing",
                 RuleSet = JsonUtils.Serialize(managedRules, false),
                 DomainStrategy = Global.AsIs,
-                DomainStrategy4Singbox = string.Empty,
             },
             RawDnsItem = null,
             SimpleDnsItem = config.SimpleDNSItem,
@@ -147,16 +144,18 @@ public class ManualRoutingRulesConfigGenTests
         };
     }
 
-    private static SingboxConfig GenerateAndAssert(IReadOnlyList<RulesItem> managed, Config config)
+    private static async Task<List<string>> GenerateAndAssert(IReadOnlyList<RulesItem> managed, Config config)
     {
         var context = BuildContext(config, [.. managed]);
-        var result = new CoreConfigSingboxService(context).GenerateClientConfigContent();
+        var result = await CoreConfigHandler.GenerateClientConfig(context, null);
 
-        result.Success.Should().BeTrue("sing-box config generation must succeed: " + result.Msg);
-        var cfg = JsonUtils.Deserialize<SingboxConfig>(result.Data!.ToString())!;
-        cfg.Should().NotBeNull();
-        return cfg;
+        result.Success.Should().BeTrue("mihomo config generation must succeed: " + result.Msg);
+        var rules = RouteTesterService.ExtractRules(result.Data!.ToString()!);
+        rules.Should().NotBeEmpty("generated mihomo config must carry route rules");
+        return rules;
     }
+
+    private static string TunnelTarget() => GpnMihomoConfigService.WireGuardProxyName(Server());
 
     // ----- Tests -----
 
@@ -172,49 +171,12 @@ public class ManualRoutingRulesConfigGenTests
 
         managed.Should().HaveCount(3);
 
-        var cfg = GenerateAndAssert(managed, config);
-        var rules = cfg.route.rules;
+        var rules = await GenerateAndAssert(managed, config);
 
-        // The QUIC preemption emits an outbound-less reject rule for the same
-        // process (UDP/443), so pick the actual routing rule (outbound != null).
-        var chromeRule = rules.FirstOrDefault(r =>
-            r.process_name != null && r.process_name.Contains("chrome.exe") && r.outbound != null);
-        chromeRule.Should().NotBeNull("GPN mode must emit a process_name rule for chrome.exe");
-        chromeRule!.outbound.Should().Be(Global.ProxyTag);
-
-        // QUIC preemption must accompany the proxy route: an outbound-less reject
-        // rule blocks UDP/443 for the proxy-routed process, forcing it to fall
-        // back to TCP which the TUN captures with process attribution.
-        var quicRule = rules.FirstOrDefault(r =>
-            r.process_name != null
-            && r.process_name.Contains("chrome.exe")
-            && r.outbound == null
-            && r.action == "reject");
-        quicRule.Should().NotBeNull("QUIC preemption must emit an outbound-less reject rule for proxy-routed chrome.exe");
-        quicRule!.network.Should().Contain("udp");
-        quicRule.port.Should().Contain(443);
-
-        // Direct-routed processes must NOT get the QUIC reject rule: their
-        // traffic already flows to direct, so nothing needs forcing back to TCP.
-        var edgeQuic = rules.FirstOrDefault(r =>
-            r.process_name != null
-            && r.process_name.Contains("msedge.exe")
-            && r.outbound == null
-            && r.action == "reject");
-        edgeQuic.Should().BeNull("direct-routed msedge.exe must not get a QUIC preemption reject rule");
-
-        var edgeRule = rules.FirstOrDefault(r =>
-            r.process_name != null && r.process_name.Contains("msedge.exe"));
-        edgeRule.Should().NotBeNull("GPN mode must emit a process_name rule for msedge.exe");
-        edgeRule!.outbound.Should().Be(Global.DirectTag);
-
-        var catchAll = rules.FirstOrDefault(r =>
-            r.port_range != null && r.port_range.Contains("0:65535") && r.outbound == Global.DirectTag);
-        catchAll.Should().NotBeNull("GPN whitelist: catch-all must be direct");
-
-        var tunnelAll = rules.Where(r =>
-            r.port_range != null && r.port_range.Contains("0:65535") && r.outbound == Global.ProxyTag);
-        tunnelAll.Should().BeEmpty("whitelist catch-all must not tunnel unlisted apps");
+        rules.Should().Contain($"PROCESS-NAME,chrome.exe,{TunnelTarget()}");
+        rules.Should().Contain("PROCESS-NAME,msedge.exe,DIRECT");
+        rules.Should().Contain("MATCH,DIRECT");
+        rules.Should().NotContain("MATCH," + TunnelTarget());
     }
 
     [Fact]
@@ -230,15 +192,11 @@ public class ManualRoutingRulesConfigGenTests
         managed.Should().HaveCount(1);
         managed[0].OutboundTag.Should().Be(Global.ProxyTag);
 
-        var cfg = GenerateAndAssert(managed, config);
-        var rules = cfg.route.rules;
+        var rules = await GenerateAndAssert(managed, config);
 
-        var processRules = rules.Where(r => r.process_name != null && r.process_name.Count > 0);
-        processRules.Should().BeEmpty("Global VPN must not emit per-app process_name rules");
-
-        var catchAll = rules.FirstOrDefault(r =>
-            r.port_range != null && r.port_range.Contains("0:65535") && r.outbound == Global.ProxyTag);
-        catchAll.Should().NotBeNull("Global VPN must emit catch-all proxy");
+        rules.Where(r => r.StartsWith("PROCESS-NAME,", StringComparison.OrdinalIgnoreCase))
+            .Should().BeEmpty("Global VPN must not emit per-app PROCESS-NAME rules");
+        rules.Should().Contain($"MATCH,{TunnelTarget()}");
     }
 
     [Fact]
@@ -253,14 +211,9 @@ public class ManualRoutingRulesConfigGenTests
 
         managed.Should().HaveCount(2);
 
-        var cfg = GenerateAndAssert(managed, config);
-        var rules = cfg.route.rules;
+        var rules = await GenerateAndAssert(managed, config);
 
-        var blockRule = rules.FirstOrDefault(r =>
-            r.process_name != null && r.process_name.Contains("adware.exe"));
-        blockRule.Should().NotBeNull("GPN mode must emit a process_name rule for adware.exe");
-        blockRule!.action.Should().Be("reject", "Block action must map to sing-box reject");
-        blockRule.outbound.Should().BeNull("Block rules use action=reject, not outbound");
+        rules.Should().Contain("PROCESS-NAME,adware.exe,REJECT");
     }
 
     [Fact]
@@ -277,14 +230,10 @@ public class ManualRoutingRulesConfigGenTests
         managed[0].Domain.Should().ContainSingle("discord.gg");
         managed[0].Process.Should().BeNull();
 
-        var cfg = GenerateAndAssert(managed, config);
-        var rules = cfg.route.rules;
+        var rules = await GenerateAndAssert(managed, config);
 
-        var domainRule = rules.FirstOrDefault(r =>
-            r.domain_keyword != null && r.domain_keyword.Contains("discord.gg"));
-        domainRule.Should().NotBeNull("A domain entry must produce a domain_keyword rule");
-        domainRule!.outbound.Should().Be(Global.ProxyTag);
-        domainRule.process_name.Should().BeNull("Domain rules must not carry a process_name list");
+        rules.Should().Contain($"DOMAIN-SUFFIX,discord.gg,{TunnelTarget()}");
+        rules.Should().NotContain(r => r.StartsWith("PROCESS-NAME,", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -301,17 +250,10 @@ public class ManualRoutingRulesConfigGenTests
         managed[0].OutboundTag.Should().Be(Global.DirectTag);
         managed[1].OutboundTag.Should().Be(Global.ProxyTag);
 
-        var cfg = GenerateAndAssert(managed, config);
-        var rules = cfg.route.rules;
+        var rules = await GenerateAndAssert(managed, config);
 
-        var steamRule = rules.FirstOrDefault(r =>
-            r.process_name != null && r.process_name.Contains("steam.exe"));
-        steamRule.Should().NotBeNull();
-        steamRule!.outbound.Should().Be(Global.DirectTag, "blacklist: VPN entry becomes direct exception");
-
-        var catchAll = rules.FirstOrDefault(r =>
-            r.port_range != null && r.port_range.Contains("0:65535") && r.outbound == Global.ProxyTag);
-        catchAll.Should().NotBeNull("blacklist: catch-all must be proxy");
+        rules.Should().Contain("PROCESS-NAME,steam.exe,DIRECT");
+        rules.Should().Contain($"MATCH,{TunnelTarget()}");
     }
 
     [Fact]
@@ -351,14 +293,10 @@ public class ManualRoutingRulesConfigGenTests
         final[1].Remarks.Should().Be("stray", "user-defined rule must be preserved");
         final[1].OutboundTag.Should().Be(Global.DirectTag);
 
-        var cfg = GenerateAndAssert(final, config);
-        var rules = cfg.route.rules;
+        var rules = await GenerateAndAssert(final, config);
 
-        rules.Should().Contain(r =>
-            r.port_range != null && r.port_range.Contains("0:65535") && r.outbound == Global.ProxyTag);
-        rules.Should().NotContain(r =>
-            r.port_range != null && r.port_range.Contains("0:65535") && r.outbound == Global.DirectTag,
-            "stale direct catch-all must be gone in Global VPN");
+        rules.Should().Contain($"MATCH,{TunnelTarget()}");
+        rules.Should().NotContain("MATCH,DIRECT", "stale direct catch-all must be gone in Global VPN");
     }
 
     [Fact]
@@ -374,63 +312,27 @@ public class ManualRoutingRulesConfigGenTests
         var vpnManaged = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Vpn, apps);
         vpnManaged.Should().HaveCount(1);
 
-        var vpnCfg = GenerateAndAssert(vpnManaged, config);
-        var vpnRules = vpnCfg.route.rules;
-
-        vpnRules.Where(r => r.process_name != null && r.process_name.Count > 0)
+        var vpnRules = await GenerateAndAssert(vpnManaged, config);
+        vpnRules.Where(r => r.StartsWith("PROCESS-NAME,", StringComparison.OrdinalIgnoreCase))
             .Should().BeEmpty();
-        vpnRules.Should().Contain(r =>
-            r.port_range != null && r.port_range.Contains("0:65535") && r.outbound == Global.ProxyTag);
+        vpnRules.Should().Contain($"MATCH,{TunnelTarget()}");
 
         // Step 2: Switch to GPN
         var gpnManaged = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: false);
         gpnManaged.Should().HaveCount(3);
 
-        var gpnCfg = GenerateAndAssert(gpnManaged, config);
-        var gpnRules = gpnCfg.route.rules;
-
-        // Skip the QUIC preemption reject rule (outbound-less) for the same process.
-        var chromeRule = gpnRules.FirstOrDefault(r =>
-            r.process_name != null && r.process_name.Contains("chrome.exe") && r.outbound != null);
-        chromeRule.Should().NotBeNull();
-        chromeRule!.outbound.Should().Be(Global.ProxyTag);
-
-        // GPN mode must also carry the QUIC preemption reject rule (UDP/443).
-        var quicRule = gpnRules.FirstOrDefault(r =>
-            r.process_name != null
-            && r.process_name.Contains("chrome.exe")
-            && r.outbound == null
-            && r.action == "reject");
-        quicRule.Should().NotBeNull("QUIC preemption reject rule must survive the VPN→GPN switch");
-        quicRule!.network.Should().Contain("udp");
-        quicRule.port.Should().Contain(443);
-
-        // Direct-routed processes must not carry the QUIC reject rule.
-        var edgeQuic = gpnRules.FirstOrDefault(r =>
-            r.process_name != null
-            && r.process_name.Contains("msedge.exe")
-            && r.outbound == null
-            && r.action == "reject");
-        edgeQuic.Should().BeNull("direct-routed msedge.exe must not get a QUIC preemption reject rule after the switch");
-
-        var edgeRule = gpnRules.FirstOrDefault(r =>
-            r.process_name != null && r.process_name.Contains("msedge.exe"));
-        edgeRule.Should().NotBeNull();
-        edgeRule!.outbound.Should().Be(Global.DirectTag);
-
-        gpnRules.Should().Contain(r =>
-            r.port_range != null && r.port_range.Contains("0:65535") && r.outbound == Global.DirectTag);
+        var gpnRules = await GenerateAndAssert(gpnManaged, config);
+        gpnRules.Should().Contain($"PROCESS-NAME,chrome.exe,{TunnelTarget()}");
+        gpnRules.Should().Contain("PROCESS-NAME,msedge.exe,DIRECT");
+        gpnRules.Should().Contain("MATCH,DIRECT");
 
         // Step 3: Off
         var offManaged = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Off, apps);
         offManaged.Should().HaveCount(1);
 
-        var offCfg = GenerateAndAssert(offManaged, config);
-        var offRules = offCfg.route.rules;
-
-        offRules.Where(r => r.process_name != null && r.process_name.Count > 0)
+        var offRules = await GenerateAndAssert(offManaged, config);
+        offRules.Where(r => r.StartsWith("PROCESS-NAME,", StringComparison.OrdinalIgnoreCase))
             .Should().BeEmpty();
-        offRules.Should().Contain(r =>
-            r.port_range != null && r.port_range.Contains("0:65535") && r.outbound == Global.DirectTag);
+        offRules.Should().Contain("MATCH,DIRECT");
     }
 }

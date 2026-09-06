@@ -120,30 +120,24 @@ public sealed class GpnMihomoConfigService
     public const string WarpProxyName = "warp-socks";
 
     /// <summary>
-    /// BSG launcher/API alan adları — Tarkov kimlik doğrulama trafiği her zaman
-    /// launcher-egress çıkışından gider (Çift Bağlantıda vless-launcher, legacy'de
-    /// warp-socks). Apex domain aileleri (escapefromtarkov.com, battlestategames.com,
-    /// tarkov.com, escapefromtarkov.ru) DOMAIN-SUFFIX eşleşmesiyle tüm alt
-    /// domainlerini kapsar — .ru ailesi canlı oturum kaydında görülen RU launcher
-    /// aynası (launcher.escapefromtarkov.ru) için eklendi. Launcher'ın CefSharp arka
-    /// plan web motorunun kullandığı bilinen auth/API hostları (prod/launcher/gw-pvp/
-    /// www.escapefromtarkov.com, launcher.escapefromtarkov.ru, profile.tarkov.com)
-    /// da açıkça listelenir — WireGuard tüneline sızıp "Fatal Error" vermesinler.
-    /// Bu satırlar kural listesinin EN ÜSTÜNE yazılır (first-match-wins), böylece UI
-    /// düğmelerinden bağımsız olarak çekirdeğe doğrudan işlenirler.
+    /// Uygulamanın kendi IP doğrulama isteklerinin host domainleri — ConnectionHandler
+    /// GetIPInfo adaylarının domain aileleri (ip.sb ailesi + ipinfo.io / ip-api.com /
+    /// ipify.org fallback'leri). Superset config'te bu domainlere yakalayıcıdan ÖNCE
+    /// sabit DOMAIN-SUFFIX satırları basılır; hedef GPN-CHECK grubudur: bağlıyken
+    /// (mod ≠ Off) grup GPN-Nodes seçili olduğundan doğrulama isteği (AoGPN.exe →
+    /// api.ip.sb) aktif WG tünelinden çıkar ve beyaz listede bile "IP değişmedi"
+    /// yanlış alarmı üretilmez; Off'ta grup DIRECT'e döner (GpnSoftPolicyApplier) ki
+    /// ISP baz çizgisi ölçümü tünel IP'siyle kirlenmesin. Kullanıcının Ayarlar →
+    /// IPAPIUrl hostu politika üzerinden (<see cref="GpnSoftRoutingPolicy.IpCheckExtraDomains"/>)
+    /// eklenir; bu liste yalnızca yerleşik adayları taşır.
     /// </summary>
-    private static readonly string[] BsgLauncherDomains =
+    private static readonly string[] IpCheckDomainSuffixes =
     [
-        "escapefromtarkov.com",
-        "battlestategames.com",
-        "tarkov.com",
-        "escapefromtarkov.ru", // RU launcher ailesi — canlı oturum kaydında launcher.escapefromtarkov.ru görüldü
-        "prod.escapefromtarkov.com",
-        "launcher.escapefromtarkov.com",
-        "launcher.escapefromtarkov.ru",
-        "gw-pvp.escapefromtarkov.com",
-        "www.escapefromtarkov.com",
-        "profile.tarkov.com",
+        "ip.sb",
+        "ipapi.is",
+        "ipinfo.io",
+        "ip-api.com",
+        "ipify.org",
     ];
 
     /// <summary>
@@ -273,11 +267,6 @@ public sealed class GpnMihomoConfigService
         // Superset: warp-socks her zaman tanımlanır (ao grupları üye olarak
         // gösterebilir). Legacy: yalnızca en az bir warp kuralı varsa.
         var needWarp = !dual && (superset || rules.Any(r => r.Enabled && r.OutboundTag == Global.WarpTag));
-        // BSG launcher/API domain kuralları yalnızca hedefleri TANIMLIYSA üretilir:
-        // Çift Bağlantıda vless-launcher her zaman vardır; legacy'de warp-socks
-        // yalnızca needWarp ile üretilir — tanımsız outbound'a kural yazılmaz
-        // (mihomo config'i reddeder).
-        var emitBsgDomains = dual || needWarp;
         var gateway = DeriveWireGuardGateway(server.ClientAddress);
         // "warp" egress'in çözüleceği proxy adı: Çift Bağlantıda ikincil VLESS
         // düğümü, legacy'de WARP SOCKS zinciri.
@@ -426,6 +415,19 @@ public sealed class GpnMihomoConfigService
                 ["type"] = "select",
                 ["proxies"] = OrderMembers(modeTarget, GpnSoftRouting.ModeMemberOrder),
             });
+            // IP doğrulama grubu: ilk üye = politikanın istediği başlangıç seçimi
+            // (bağlı modlar → GPN-Nodes, Off → DIRECT). GpnSoftPolicyApplier bu grubu
+            // modla birlikte PUT'lar — sabit satırlar config'e yazılır, çalışma zamanı
+            // seçimi değişir.
+            groups.Add(new Dictionary<string, object?>
+            {
+                ["name"] = GpnSoftRouting.CheckGroupName,
+                ["type"] = "select",
+                ["proxies"] = OrderMembers(
+                    GpnSoftRouting.CheckGroupTarget(policy!.Mode),
+                    new[] { NodesGroupName, GpnSoftRouting.ClashDirect }),
+            });
+            // Launcher egress grubu (yalnızca superset-legacy): warp egress'li launcher
             // satırları bu gruba işaret eder; varsayılan seçim warp egress (sağlıklı),
             // degrade durumda GpnBypassEgressController DIRECT'e PUT eder.
             if (emitLauncherGroup)
@@ -464,11 +466,24 @@ public sealed class GpnMihomoConfigService
             var target = ResolveLauncherTarget(launcher, dual, needWarp, warpTarget, launcherGroupTarget);
             if (target is null)
             {
-                clashRules.Add($"DOMAIN-SUFFIX,{domain},{bsgRuleTarget}");
+                continue;
+            }
+            foreach (var domain in launcher.Domains)
+            {
+                clashRules.Add($"DOMAIN-SUFFIX,{domain},{target}");
             }
         }
         if (superset)
         {
+            // 0) IP doğrulama hostları → GPN-CHECK (ilk eşleşme kazanır): uygulamanın
+            //    kendi doğrulama isteği (AoGPN.exe → api.ip.sb vb.) beyaz listede bile
+            //    giriş satırlarına/MATCH'e düşmeden burada yakalanır ve bağlıyken WG
+            //    tünelinden çıkar. Politikanın ek domainleri (Ayarlar → IPAPIUrl) da
+            //    yerleşik listeye eklenir — kullanıcının kendi doğrulama ucu da tünellenir.
+            foreach (var domain in EnumerateIpCheckDomains(policy!))
+            {
+                clashRules.Add($"DOMAIN-SUFFIX,{domain},{GpnSoftRouting.CheckGroupName}");
+            }
             // 1) Giriş satırları (sıra = politika sırası): hedef her zaman kendi ao-<i>.
             for (var i = 0; i < policy!.Entries.Count; i++)
             {
@@ -544,6 +559,33 @@ public sealed class GpnMihomoConfigService
             }
         }
         return members;
+    }
+
+    /// <summary>
+    /// IP doğrulama host listesini üretir: yerleşik <see cref="IpCheckDomainSuffixes"/>
+    /// + politikanın ek domainleri (Ayarlar → IPAPIUrl hostu), tekrarsız ve küçük
+    /// harfle. Yerleşik liste her zaman vardır — superset config'te GPN-CHECK satırları
+    /// boş kalmaz.
+    /// </summary>
+    private static IEnumerable<string> EnumerateIpCheckDomains(GpnSoftRoutingPolicy policy)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var domain in IpCheckDomainSuffixes)
+        {
+            seen.Add(domain);
+            yield return domain;
+        }
+        if (policy?.IpCheckExtraDomains is null)
+        {
+            yield break;
+        }
+        foreach (var domain in policy.IpCheckExtraDomains)
+        {
+            if (domain.IsNotEmpty() && seen.Add(domain))
+            {
+                yield return domain;
+            }
+        }
     }
 
     /// <summary>

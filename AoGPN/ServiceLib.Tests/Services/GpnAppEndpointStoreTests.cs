@@ -32,10 +32,10 @@ public class GpnAppEndpointStoreTests : IAsyncLifetime
         store.Observe("EscapeFromTarkov.exe", "1.2.3.4:51820", "UDP");
         store.Observe("EscapeFromTarkov.exe", "5.6.7.8:443", "TCP");
 
-        var affected = await store.FlushAsync();
+        var affected = await store.FlushAsync(TestContext.Current.CancellationToken);
         Assert.True(affected > 0);
 
-        var rows = await store.LoadForAppsAsync(["EscapeFromTarkov.exe"]);
+        var rows = await store.LoadForAppsAsync(["EscapeFromTarkov.exe"], TestContext.Current.CancellationToken);
         Assert.Equal(2, rows.Count);
 
         var udp = rows.Single(r => r.Endpoint == "1.2.3.4:51820");
@@ -45,8 +45,8 @@ public class GpnAppEndpointStoreTests : IAsyncLifetime
 
         // İkinci flush aynı satırı GÜNCELLER (yeni satır açmaz) — HitCount artar.
         store.Observe("EscapeFromTarkov.exe", "1.2.3.4:51820", "UDP");
-        await store.FlushAsync();
-        var again = await store.LoadForAppsAsync(["EscapeFromTarkov.exe"]);
+        await store.FlushAsync(TestContext.Current.CancellationToken);
+        var again = await store.LoadForAppsAsync(["EscapeFromTarkov.exe"], TestContext.Current.CancellationToken);
         Assert.Equal(2, again.Count);
         Assert.Equal(3, again.Single(r => r.Endpoint == "1.2.3.4:51820").HitCount);
     }
@@ -55,16 +55,16 @@ public class GpnAppEndpointStoreTests : IAsyncLifetime
     public async Task Flush_WithoutObservations_DoesNothing()
     {
         var store = new GpnAppEndpointStore();
-        Assert.Equal(0, await store.FlushAsync());
+        Assert.Equal(0, await store.FlushAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
-    public void Observe_IgnoresEmptyValues()
+    public async Task Observe_IgnoresEmptyValues()
     {
         var store = new GpnAppEndpointStore();
         store.Observe("", "1.2.3.4:1", "UDP"); // fırlatmaz
         store.Observe("app.exe", "", "UDP");   // fırlatmaz
-        Assert.Equal(0, store.FlushAsync().GetAwaiter().GetResult());
+        Assert.Equal(0, await store.FlushAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -74,9 +74,9 @@ public class GpnAppEndpointStoreTests : IAsyncLifetime
         await store.EnsureSchemaAsync();
         store.Observe("GameOne.exe", "1.1.1.1:1000", "UDP");
         store.Observe("GameTwo.exe", "2.2.2.2:2000", "UDP");
-        await store.FlushAsync();
+        await store.FlushAsync(TestContext.Current.CancellationToken);
 
-        var rows = await store.LoadForAppsAsync(["gameone.exe"]);
+        var rows = await store.LoadForAppsAsync(["gameone.exe"], TestContext.Current.CancellationToken);
         var row = Assert.Single(rows);
         Assert.Equal("GameOne.exe", row.AppName);
     }
@@ -100,9 +100,9 @@ public class GpnAppEndpointStoreTests : IAsyncLifetime
         store.Observe("Game.exe", "10.0.0.1:1000", "UDP");
         store.Observe("Game.exe", "10.0.0.2:2000", "UDP");
         store.Observe("Other.exe", "10.0.0.3:3000", "TCP");
-        await store.FlushAsync();
+        await store.FlushAsync(TestContext.Current.CancellationToken);
 
-        var results = await store.MeasureRealPingAsync(["Game.exe", "Other.exe"], maxEndpointsPerApp: 4);
+        var results = await store.MeasureRealPingAsync(["Game.exe", "Other.exe"], maxEndpointsPerApp: 4, ct: TestContext.Current.CancellationToken);
 
         var game = Assert.Single(results, r => r.AppName == "Game.exe");
         Assert.Equal(40, game.BestMs); // iki sondan en düşüğü (en iyi)
@@ -131,9 +131,9 @@ public class GpnAppEndpointStoreTests : IAsyncLifetime
         store.Observe("Game.exe", "10.0.0.2:2", "UDP");
         store.Observe("Game.exe", "10.0.0.3:3", "UDP");
         store.Observe("Game.exe", "10.0.0.4:4", "UDP");
-        await store.FlushAsync();
+        await store.FlushAsync(TestContext.Current.CancellationToken);
 
-        await store.MeasureRealPingAsync(["Game.exe"], maxEndpointsPerApp: 2);
+        await store.MeasureRealPingAsync(["Game.exe"], maxEndpointsPerApp: 2, ct: TestContext.Current.CancellationToken);
         Assert.Equal(2, probeCalls); // uygulama başına en fazla 2 uç nokta ölçülür
     }
 
@@ -141,8 +141,8 @@ public class GpnAppEndpointStoreTests : IAsyncLifetime
     public async Task MeasureRealPingAsync_EmptyAppsOrNoRows_ReturnsEmpty()
     {
         var store = new GpnAppEndpointStore(probe: (_, _) => Task.FromResult(10));
-        Assert.Empty(await store.MeasureRealPingAsync([]));
-        Assert.Empty(await store.MeasureRealPingAsync(["NeverSeen.exe"]));
+        Assert.Empty(await store.MeasureRealPingAsync([], ct: TestContext.Current.CancellationToken));
+        Assert.Empty(await store.MeasureRealPingAsync(["NeverSeen.exe"], ct: TestContext.Current.CancellationToken));
     }
 
     [Fact]

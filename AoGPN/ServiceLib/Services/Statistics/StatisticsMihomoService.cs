@@ -2,16 +2,20 @@ using System.Net.WebSockets;
 
 namespace ServiceLib.Services.Statistics;
 
-public class StatisticsSingboxService
+/// <summary>
+/// mihomo canlı trafik istatistikleri — Clash API'nin WS /traffic ucundan
+/// (sing-box ile aynı sözleşme, mihomo'nun external-controller'ında da vardır).
+/// </summary>
+public class StatisticsMihomoService
 {
     private readonly Config _config;
     private bool _exitFlag;
     private ClientWebSocket? webSocket;
     private readonly Func<ServerSpeedItem, Task>? _updateFunc;
     private string Url => $"ws://{Global.Loopback}:{AppManager.Instance.StatePort2}/traffic";
-    private static readonly string _tag = "StatisticsSingboxService";
+    private static readonly string _tag = "StatisticsMihomoService";
 
-    public StatisticsSingboxService(Config config, Func<ServerSpeedItem, Task> updateFunc)
+    public StatisticsMihomoService(Config config, Func<ServerSpeedItem, Task> updateFunc)
     {
         _config = config;
         _updateFunc = updateFunc;
@@ -61,7 +65,7 @@ public class StatisticsSingboxService
             await Task.Delay(1000);
             try
             {
-                if (!AppManager.Instance.IsRunningCore(ECoreType.sing_box))
+                if (!AppManager.Instance.IsRunningCore(ECoreType.mihomo))
                 {
                     continue;
                 }

@@ -61,7 +61,10 @@ public interface IDashboardBridge
     Task SelectNodeAsync(string indexId);
     Task CopyNodesAsync(string[] indexIds);
     Task PasteNodesAsync();
+    Task EditNodeAsync(string indexId);
+    Task ImportWireGuardConfsAsync(List<WireGuardConfFile> files);
     Task DeleteNodesAsync(string[] indexIds);
+    Task MoveNodeAsync(string indexId, string targetIndexId);
     Task StartNodeSpeedtestAsync(string[] indexIds, string? testType = null, long requestedRunId = 0);
     void StopNodeSpeedtest();
     Task DisableNodesAsync(string[] indexIds);

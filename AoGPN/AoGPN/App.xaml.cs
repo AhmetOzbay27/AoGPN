@@ -13,7 +13,6 @@ public partial class App
 {
     public static EventWaitHandle ProgramStarted;
     private bool _startupCompleted;
-    private AoGPN.Views.SplashWindow? _splash;
 
     /// <summary>
     /// How long the OnExit dispatch (HWA disarm + Application.Exit event
@@ -57,8 +56,8 @@ public partial class App
             return;
         }
 
-        // Decide the WPF render mode for this session before the splash or any
-        // other window is created: hardware by default, with automatic software
+        // Decide the WPF render mode for this session before any window is
+        // created: hardware by default, with automatic software
         // fallbacks (no GPU path, or a crash budget exceeded — see
         // HardwareAccelerationGuard). WebView2 is not affected.
         HardwareAccelerationGuard.ApplyOnStartup();
@@ -74,29 +73,15 @@ public partial class App
             return;
         }
 
-        // Show the boot splash over the (cold) config/reactive initialization below.
-        // It deliberately skips headless/one-shot modes, and is faded out just
-        // before the main window renders in the success path lower in this method.
-        if (!rebootas)
-        {
-            _splash = new AoGPN.Views.SplashWindow();
-            _splash.Show();
-            _splash.SetStage("Başlatılıyor…", 10);
-        }
-
         // Apply the configured UI font (config is loaded now; a static x:Static would
         // run too early, before the config exists, so the font is applied via a resource).
         Resources[MaterialDesignFonts.FontResourceKey] = MaterialDesignFonts.GetFont(AppManager.Instance.Config.UiItem.CurrentFontFamily);
-
-        _splash?.SetStage("Arayüz yükleniyor…", 30);
 
         // Keep the font live-updating from any settings window (no restart needed).
         AppEvents.FontFamilyChanged.AsObservable().Subscribe(fontFamily =>
             Resources[MaterialDesignFonts.FontResourceKey] = MaterialDesignFonts.GetFont(fontFamily));
 
         AppManager.Instance.WindowDialog = new WindowDialog();
-
-        _splash?.SetStage("Bileşenler başlatılıyor…", 45);
 
         // A previous run that was killed before its exit cleanup ran (crash,
         // Task Manager, hard shutdown) can leave its core processes behind
@@ -109,11 +94,21 @@ public partial class App
         if (!rebootas)
         {
             _ = Task.Run(CoreManager.KillOrphanCoreProcesses);
+
+            // The same dead-session leftovers can leave Wintun adapters behind
+            // (e.g. an IP-less "AoGPN-<server>" native adapter on 169.254.x.x).
+            // The app is single-instance (see the EventWaitHandle above), so at
+            // startup — before this instance opens its own tunnel — every
+            // adapter under our name prefix belongs to a dead process and can be
+            // removed safely (WintunOpenAdapter + CloseAdapter removes the PnP
+            // device). Best-effort: without admin rights removal is skipped with
+            // a log entry. Skipped in reboot-as-admin for the same reason as the
+            // orphan-core sweep above.
+            _ = Task.Run(async () =>
+                await WintunOrphanSweeper.SweepOrphanedAsync(AppManager.Instance.Config?.GpnWintunItem));
         }
 
         AppManager.Instance.InitComponents();
-
-        _splash?.SetStage("Arayüz başlatılıyor…", 60);
 
         RxAppBuilder.CreateReactiveUIBuilder()
             .WithWpf()
@@ -121,17 +116,17 @@ public partial class App
 
         base.OnStartup(e);
 
-        _splash?.SetStage("Hazırlanıyor…", 85);
-
         var mainWindowViewModel = new MainWindowViewModel();
         var viewFor = SimpleViewLocator.Instance.ResolveView(mainWindowViewModel);
         viewFor!.ViewModel = mainWindowViewModel;
 
         var mainWindow = (MainWindow)viewFor;
 
-        // Complete the bar, fade the splash out while the window comes up, then close it.
-        _splash?.SetStage("Hazır", 100);
-        _splash?.FadeOut();
+        // Show the window already invisible: WebView2 needs the window created (its
+        // Loaded handler initializes the dashboard), but painting the raw frame first
+        // would flash an empty black window while the dashboard boots. MainWindow
+        // reveals itself (RevealStartupWindow) once the dashboard has rendered.
+        mainWindow.Opacity = 0;
         mainWindow.Show();
         MainWindow = mainWindow;
         _startupCompleted = true;
@@ -155,14 +150,8 @@ public partial class App
         Logging.SaveLog("App_DispatcherUnhandledException", e.Exception);
         if (!_startupCompleted)
         {
-            // Startup failed before the main window appeared. Drop the splash so it
-            // can't cover the error dialog, then exit with a visible error instead of
-            // running headless with no window (silent failure mode).
-            if (_splash != null)
-            {
-                _splash.Close();
-                _splash = null;
-            }
+            // Startup failed before the main window appeared. Exit with a visible
+            // error instead of running headless with no window (silent failure mode).
             UI.Show($"Startup failed: {e.Exception.Message}{Environment.NewLine}Başlangıç başarısız: {e.Exception.Message}");
             Environment.Exit(1);
             return;

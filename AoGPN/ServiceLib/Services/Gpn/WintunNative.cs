@@ -36,6 +36,7 @@ internal static partial class WintunNative
     internal const int ErrorNoMoreItems = 259;        // ERROR_NO_MORE_ITEMS — alım tamponu boş
     internal const int ErrorBufferOverflow = 111;     // ERROR_BUFFER_OVERFLOW — gönderim tamponu dolu
     internal const int ErrorHandleEof = 38;           // ERROR_HANDLE_EOF — adapter kapatılıyor
+    internal const int ErrorNotFound = 1168;          // ERROR_NOT_FOUND — adla eşleşen adapter yok (süpürme doğrulaması)
 
     // ── Adapter yaşam döngüsü ────────────────────────────────────────────
 

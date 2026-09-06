@@ -36,7 +36,7 @@ public sealed class SystemProxyWpfFlowIntegrationTests
         var config = CreateConfig(ESysProxyType.ForcedClear);
         var harness = new Harness(config);
         harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(
-            CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+            CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
 
         // Status bar: "Sistem proxy → Ayarla" with the connection off.
         await harness.RequestAsync(config, ESysProxyType.ForcedChange);
@@ -53,7 +53,7 @@ public sealed class SystemProxyWpfFlowIntegrationTests
         var config = CreateConfig(ESysProxyType.ForcedClear);
         var harness = new Harness(config);
         harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(
-            CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+            CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
 
         await harness.RequestAsync(config, ESysProxyType.Pac);
 
@@ -68,7 +68,7 @@ public sealed class SystemProxyWpfFlowIntegrationTests
         var config = CreateConfig(ESysProxyType.ForcedClear);
         var harness = new Harness(config);
         harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(
-            CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+            CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
 
         await harness.RequestAsync(config, ESysProxyType.ForcedChange);
         harness.Service.IsRunning.Should().BeTrue();
@@ -102,7 +102,7 @@ public sealed class SystemProxyWpfFlowIntegrationTests
         var config = CreateConfig(ESysProxyType.ForcedChange, GameTriggerModes.Vpn);
         var harness = new Harness(config);
         harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(
-            CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+            CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
 
         await harness.RequestAsync(config, ESysProxyType.ForcedChange);
 
@@ -164,8 +164,8 @@ public sealed class SystemProxyWpfFlowIntegrationTests
         public Harness(Config config)
         {
             _config = config;
-            Directory.CreateDirectory(Path.Combine(_root, "sing_box"));
-            File.WriteAllText(Path.Combine(_root, "sing_box", "sing-box-client"), string.Empty);
+            Directory.CreateDirectory(Path.Combine(_root, "mihomo"));
+            File.WriteAllText(Path.Combine(_root, "mihomo", "mihomo-windows-amd64-v1"), string.Empty);
 
             Service = new SystemProxyOnlyService(
                 msg =>
@@ -175,7 +175,7 @@ public sealed class SystemProxyWpfFlowIntegrationTests
                 },
                 config => NodeResolver(config),
                 (config, node) => Task.FromResult(new CoreConfigContextBuilderResult(
-                    new CoreConfigContext { Node = node, RunCoreType = ECoreType.sing_box },
+                    new CoreConfigContext { Node = node, RunCoreType = ECoreType.mihomo },
                     NodeValidatorResult.Empty())),
                 (config, update) => new CoreEngineHost(
                     config,
@@ -259,7 +259,7 @@ public sealed class SystemProxyWpfFlowIntegrationTests
             _health[CoreHealthRole.Main] = new CoreHealthSnapshot(
                 CoreHealthRole.Main,
                 CoreHealthState.Ready,
-                ECoreType.sing_box,
+                ECoreType.mihomo,
                 port: 10808);
         }
 

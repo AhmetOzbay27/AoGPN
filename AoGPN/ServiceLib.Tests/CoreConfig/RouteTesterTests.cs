@@ -1,122 +1,102 @@
+using System.Net;
 using AwesomeAssertions;
 using ServiceLib.Common;
 using ServiceLib.Enums;
+using ServiceLib.Handler;
+using ServiceLib.Handler.Builder;
 using ServiceLib.Helper;
 using ServiceLib.Models;
-using ServiceLib.Models.CoreConfigs;
 using ServiceLib.Models.Dto;
 using ServiceLib.Models.Entities;
+using ServiceLib.Services;
 using ServiceLib.Services.CoreConfig;
+using ServiceLib.Services.CoreConfig.Mihomo;
 using Xunit;
 
 namespace ServiceLib.Tests.CoreConfig;
 
 /// <summary>
-/// Pure unit tests for the offline sing-box route simulator. No database or process
-/// is involved: rules are constructed directly and matched against synthetic probes.
+/// Route-tester coverage: the pure mihomo rule simulator
+/// (<see cref="MihomoRouteSimulator"/>) and end-to-end simulation against the
+/// mihomo YAML the GPN generator emits for managed routing rules.
 /// </summary>
-public class SingboxRouteSimulatorTests
+[Collection("SharedDatabase")]
+public class RouteTesterTests
 {
     // ---- helpers ----
 
-    private static Rule4Sbox SimpleRule(string? outbound = null, string? action = null)
-    {
-        return new Rule4Sbox { outbound = outbound, action = action };
-    }
-
     private static RouteProbe Probe(
-        string processName = "",
-        string domain = "",
+        string processName = "chrome.exe",
+        string? domain = null,
         string? ip = null,
-        int? port = null,
-        string network = "",
-        string protocol = "",
-        string clashMode = "Rule")
+        int? port = null)
     {
         return new RouteProbe
         {
             ProcessName = processName,
-            Domain = domain,
+            Domain = domain ?? string.Empty,
             IpAddress = ip is null ? null : IPAddress.Parse(ip),
             Port = port,
-            Network = network,
-            Protocol = protocol,
-            ClashMode = clashMode,
         };
     }
 
-    private static RouteTestResult Simulate(
-        List<Rule4Sbox> rules,
-        RouteProbe probe,
-        SingboxRouteSimulator.RuleSetMatcher? matcher = null,
-        string? final = null)
-    {
-        // FindFirstMatch stores the provided list in the result, so the warnings
-        // surface on the returned RouteTestResult directly.
-        return SingboxRouteSimulator.FindFirstMatch(rules, probe, matcher, final, warnings: new List<string>());
-    }
+    private static RouteTestMatch? Simulate(IReadOnlyList<string> rules, RouteProbe probe)
+        => MihomoRouteSimulator.FindFirstMatch(rules, probe);
+
+    private static string ProxyTarget() => GpnMihomoConfigService.WireGuardProxyName(Server());
+
+    private static GpnServerProfile Server() => new(
+        ServerId: "de",
+        Name: "Almanya",
+        EndpointHost: "130.61.223.36",
+        EndpointPort: 51820,
+        ServerPublicKey: "xQZLxeDqYrCcM7oDYbFxDszWnCk4SzwYYXWsrib8S3A=",
+        ClientPrivateKey: "ICsMC9b6W0uzw7NXNlWMgSqQu1W8ZkNvOKt9vlIzyFw=",
+        ClientAddress: "10.66.66.2/24",
+        Mtu: 1420,
+        PersistentKeepalive: 25);
 
     // ---- process matching ----
 
     [Fact]
     public void ProcessName_MatchesFirstTerminalRule()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { process_name = ["chrome.exe"], outbound = Global.ProxyTag },
-            new() { port_range = ["0:65535"], outbound = Global.DirectTag },
-        };
+        var rules = new[] { "PROCESS-NAME,chrome.exe,proxy", "MATCH,DIRECT" };
+        var match = Simulate(rules, Probe("chrome.exe"));
 
-        var result = Simulate(rules, Probe(processName: "chrome.exe"));
-
-        result.Matched.Should().BeTrue();
-        result.Match!.RuleIndex.Should().Be(1);
-        result.Match.OutcomeRaw.Should().Be(Global.ProxyTag);
-        result.Match.Outcome.Should().Be("Proxy");
-        result.Match.Criteria.Should().Contain("process_name: chrome.exe");
+        match.Should().NotBeNull();
+        match!.RuleIndex.Should().Be(1);
+        match.Outcome.Should().Be("proxy");
     }
 
     [Fact]
     public void ProcessName_IsCaseInsensitive()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { process_name = ["Chrome.EXE"], outbound = Global.ProxyTag },
-        };
-
-        var result = Simulate(rules, Probe(processName: "chrome.exe"));
-        result.Matched.Should().BeTrue();
+        var rules = new[] { "PROCESS-NAME,CHROME.EXE,proxy", "MATCH,DIRECT" };
+        Simulate(rules, Probe("chrome.exe"))!.Outcome.Should().Be("proxy");
     }
 
     [Fact]
     public void ProcessName_UnknownProcess_FallsThroughToNextRule()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { process_name = ["chrome.exe"], outbound = Global.ProxyTag },
-            new() { port_range = ["0:65535"], outbound = Global.DirectTag },
-        };
+        var rules = new[] { "PROCESS-NAME,chrome.exe,proxy", "MATCH,DIRECT" };
+        var match = Simulate(rules, Probe("notepad.exe"));
 
-        var result = Simulate(rules, Probe(processName: "msedge.exe"), final: Global.DirectTag);
-
-        result.Matched.Should().BeTrue();
-        result.Match!.RuleIndex.Should().Be(2);
-        result.Match.OutcomeRaw.Should().Be(Global.DirectTag);
+        match.Should().NotBeNull();
+        match!.RuleIndex.Should().Be(2);
+        match.Outcome.Should().Be("DIRECT");
     }
 
     [Fact]
     public void NoMatch_ReportsFinalFallback()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { process_name = ["chrome.exe"], outbound = Global.ProxyTag },
-        };
+        // MATCH is terminal and always present in generated configs — the fallback
+        // is the MATCH row itself.
+        var rules = new[] { "MATCH,DIRECT" };
+        var match = Simulate(rules, Probe("anything.exe", domain: "example.com"));
 
-        var result = Simulate(rules, Probe(processName: "msedge.exe"), final: Global.DirectTag);
-
-        result.Matched.Should().BeFalse();
-        result.Match.Should().BeNull();
-        result.FinalFallback.Should().Be(Global.DirectTag);
+        match.Should().NotBeNull();
+        match!.Outcome.Should().Be("DIRECT");
     }
 
     // ---- domain matching ----
@@ -124,51 +104,36 @@ public class SingboxRouteSimulatorTests
     [Fact]
     public void DomainSuffix_MatchesSubdomainsAndExact()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { domain_suffix = ["google.com"], outbound = Global.ProxyTag },
-        };
+        var rules = new[] { "DOMAIN-SUFFIX,discord.gg,proxy", "MATCH,DIRECT" };
 
-        Simulate(rules, Probe(domain: "www.google.com")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(domain: "google.com")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(domain: "notgoogle.com")).Matched.Should().BeFalse();
+        Simulate(rules, Probe(domain: "discord.gg"))!.Outcome.Should().Be("proxy");
+        Simulate(rules, Probe(domain: "cdn.discord.gg"))!.Outcome.Should().Be("proxy");
+        Simulate(rules, Probe(domain: "evil-discord.gg.attacker.com"))!.Outcome.Should().Be("DIRECT");
     }
 
     [Fact]
     public void DomainKeyword_MatchesSubstring()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { domain_keyword = ["discord"], outbound = Global.ProxyTag },
-        };
+        var rules = new[] { "DOMAIN-KEYWORD,tarkov,proxy", "MATCH,DIRECT" };
 
-        var result = Simulate(rules, Probe(domain: "cdn.discordapp.com"));
-        result.Matched.Should().BeTrue();
-        result.Match!.Criteria.Should().Contain("domain_keyword: [discord]");
+        Simulate(rules, Probe(domain: "launcher.escapefromtarkov.com"))!.Outcome.Should().Be("proxy");
+        Simulate(rules, Probe(domain: "example.com"))!.Outcome.Should().Be("DIRECT");
     }
 
     [Fact]
     public void DomainRegex_MatchesPattern()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { domain_regex = ["(^|\\.)example\\.com$"], outbound = Global.ProxyTag },
-        };
+        var rules = new[] { "DOMAIN-REGEX,^.*\\.tarkov\\.com$,proxy", "MATCH,DIRECT" };
 
-        Simulate(rules, Probe(domain: "sub.example.com")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(domain: "example.org")).Matched.Should().BeFalse();
+        Simulate(rules, Probe(domain: "www.tarkov.com"))!.Outcome.Should().Be("proxy");
+        Simulate(rules, Probe(domain: "tarkov.org"))!.Outcome.Should().Be("DIRECT");
     }
 
     [Fact]
     public void DomainProbe_NeverMatchesIpOnlyRules()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { ip_cidr = ["10.0.0.0/8"], outbound = Global.ProxyTag },
-        };
-
-        var result = Simulate(rules, Probe(domain: "example.com"), final: Global.DirectTag);
-        result.Matched.Should().BeFalse("a domain probe must not be matched against IP rules without DNS resolution");
+        var rules = new[] { "IP-CIDR,10.0.0.0/8,DIRECT", "MATCH,proxy" };
+        Simulate(rules, Probe(domain: "example.com"))!.Outcome.Should().Be("proxy");
     }
 
     // ---- IP matching ----
@@ -176,226 +141,79 @@ public class SingboxRouteSimulatorTests
     [Fact]
     public void IpCidr_MatchesWithinRange()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { ip_cidr = ["10.0.0.0/8"], outbound = Global.DirectTag },
-        };
+        var rules = new[] { "IP-CIDR,10.0.0.0/8,DIRECT", "MATCH,proxy" };
 
-        Simulate(rules, Probe(ip: "10.1.2.3")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(ip: "11.1.2.3")).Matched.Should().BeFalse();
+        Simulate(rules, Probe(ip: "10.1.2.3"))!.Outcome.Should().Be("DIRECT");
+        Simulate(rules, Probe(ip: "11.1.2.3"))!.Outcome.Should().Be("proxy");
+    }
+
+    [Fact]
+    public void IpCidr6_MatchesV6AndNotV4()
+    {
+        var rules = new[] { "IP-CIDR6,fd00::/8,DIRECT", "MATCH,proxy" };
+
+        Simulate(rules, Probe(ip: "fd12::1"))!.Outcome.Should().Be("DIRECT");
+        Simulate(rules, Probe(ip: "10.0.0.1"))!.Outcome.Should().Be("proxy");
     }
 
     [Fact]
     public void IpCidr_PlainIpMatchesItself()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { ip_cidr = ["1.2.3.4"], outbound = Global.DirectTag },
-        };
+        var rules = new[] { "IP-CIDR,1.2.3.4/32,DIRECT", "MATCH,proxy" };
 
-        Simulate(rules, Probe(ip: "1.2.3.4")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(ip: "1.2.3.5")).Matched.Should().BeFalse();
+        Simulate(rules, Probe(ip: "1.2.3.4"))!.Outcome.Should().Be("DIRECT");
+        Simulate(rules, Probe(ip: "1.2.3.5"))!.Outcome.Should().Be("proxy");
     }
 
     [Fact]
-    public void IpIsPrivate_MatchesPrivateAddresses()
+    public void IpCidr_NoResolveSuffix_IsTolerated()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { ip_is_private = true, outbound = Global.DirectTag },
-        };
-
-        Simulate(rules, Probe(ip: "192.168.1.1")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(ip: "10.0.0.5")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(ip: "8.8.8.8")).Matched.Should().BeFalse();
+        var rules = new[] { "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve", "MATCH,proxy" };
+        Simulate(rules, Probe(ip: "10.9.9.9"))!.Outcome.Should().Be("DIRECT");
     }
 
-    // ---- port / network / protocol ----
+    // ---- port matching ----
 
     [Fact]
-    public void PortAndPortRange_MatchProbePort()
+    public void DstPort_MatchesPortAndRange()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { port = [443], outbound = Global.ProxyTag },
-            new() { port_range = ["8000:9000"], outbound = Global.DirectTag },
-        };
+        var rules = new[] { "DST-PORT,80,443,proxy", "DST-PORT,1000-2000,DIRECT", "MATCH,block" };
 
-        Simulate(rules, Probe(port: 443)).Matched.Should().BeTrue();
-        Simulate(rules, Probe(port: 80)).Matched.Should().BeFalse("no rule matches port 80");
-
-        var rangeResult = Simulate(
-            [new Rule4Sbox { port_range = ["8000:9000"], outbound = Global.DirectTag }],
-            Probe(port: 8500));
-        rangeResult.Matched.Should().BeTrue();
-    }
-
-    [Fact]
-    public void Network_MustMatch()
-    {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { network = ["udp"], outbound = Global.DirectTag },
-        };
-
-        Simulate(rules, Probe(network: "udp")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(network: "tcp")).Matched.Should().BeFalse();
-    }
-
-    [Fact]
-    public void Protocol_MustMatch()
-    {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { protocol = ["dns"], outbound = Global.DirectTag },
-        };
-
-        Simulate(rules, Probe(protocol: "dns")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(protocol: "tls")).Matched.Should().BeFalse();
+        Simulate(rules, Probe(port: 80))!.Outcome.Should().Be("proxy");
+        Simulate(rules, Probe(port: 443))!.Outcome.Should().Be("proxy");
+        Simulate(rules, Probe(port: 1500))!.Outcome.Should().Be("DIRECT");
+        Simulate(rules, Probe(port: 8080))!.Outcome.Should().Be("block");
     }
 
     // ---- rule semantics ----
 
     [Fact]
-    public void CatchAllRule_WithNoFields_MatchesEverything()
+    public void CatchAll_Match_MatchesEverything()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            SimpleRule(outbound: Global.DirectTag),
-        };
-
-        var result = Simulate(rules, Probe(processName: "anything.exe", domain: "whatever.com"));
-        result.Matched.Should().BeTrue();
-        result.Match!.Description.Should().Contain("match-all");
+        var rules = new[] { "MATCH,DIRECT" };
+        Simulate(rules, Probe("chrome.exe", domain: "a.com", ip: "1.2.3.4", port: 443))!.Outcome.Should().Be("DIRECT");
     }
 
     [Fact]
-    public void LogicalOr_MatchesAnySubRule()
+    public void RuleLine_Parse_TargetFromLastToken()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new()
-            {
-                type = "logical",
-                mode = "or",
-                outbound = Global.ProxyTag,
-                rules =
-                [
-                    new Rule4Sbox { domain_keyword = ["alpha"] },
-                    new Rule4Sbox { domain_keyword = ["beta"] },
-                ],
-            },
-        };
-
-        Simulate(rules, Probe(domain: "beta.example.com")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(domain: "gamma.example.com")).Matched.Should().BeFalse();
+        var rule = MihomoRuleLine.Parse("DOMAIN-SUFFIX,cdn.example.com,wg-de");
+        rule.Type.Should().Be("DOMAIN-SUFFIX");
+        rule.Payload.Should().Be("cdn.example.com");
+        rule.Target.Should().Be("wg-de");
     }
 
     [Fact]
-    public void Invert_FlipsTheMatch()
+    public void RuleLine_Parse_DstPortPayload_KeepsCommaSeparatedPorts()
     {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { domain = ["google.com"], invert = true, outbound = Global.DirectTag },
-        };
-
-        Simulate(rules, Probe(domain: "example.com")).Matched.Should().BeTrue();
-        Simulate(rules, Probe(domain: "google.com")).Matched.Should().BeFalse();
+        var rule = MihomoRuleLine.Parse("DST-PORT,80,443,proxy");
+        rule.Type.Should().Be("DST-PORT");
+        rule.Payload.Should().Be("80,443");
+        rule.Target.Should().Be("proxy");
     }
 
-    [Fact]
-    public void SniffModifier_AppliesThenEvaluationContinues()
-    {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { action = "sniff" },
-            new() { process_name = ["chrome.exe"], outbound = Global.ProxyTag },
-        };
+    // ---- integration: generated mihomo config ----
 
-        var result = Simulate(rules, Probe(processName: "chrome.exe"));
-
-        result.Matched.Should().BeTrue();
-        result.Modifiers.Should().ContainSingle(m => m.OutcomeRaw == "sniff");
-        result.Match!.RuleIndex.Should().Be(2);
-        result.Match.OutcomeRaw.Should().Be(Global.ProxyTag);
-    }
-
-    [Fact]
-    public void RejectAction_IsTerminalAndReportsAction()
-    {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { process_name = ["adware.exe"], action = "reject" },
-        };
-
-        var result = Simulate(rules, Probe(processName: "adware.exe"));
-
-        result.Matched.Should().BeTrue();
-        result.Match!.OutcomeKind.Should().Be("action");
-        result.Match.OutcomeRaw.Should().Be("reject");
-        result.Match.Outcome.Should().Be("Reject (block)");
-    }
-
-    [Fact]
-    public void ClashMode_RuleByDefault_DoesNotMatchGlobalOrDirectRules()
-    {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { outbound = Global.DirectTag, clash_mode = nameof(ERuleMode.Direct) },
-            new() { outbound = Global.ProxyTag, clash_mode = nameof(ERuleMode.Global) },
-        };
-
-        var result = Simulate(rules, Probe(), final: Global.ProxyTag);
-        result.Matched.Should().BeFalse();
-        result.FinalFallback.Should().Be(Global.ProxyTag);
-    }
-
-    // ---- rule-sets ----
-
-    [Fact]
-    public void RuleSet_MatchedViaInjectedEvaluator()
-    {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { rule_set = ["geosite-cn"], outbound = Global.DirectTag },
-        };
-
-        var result = Simulate(
-            rules,
-            Probe(domain: "baidu.com"),
-            matcher: (tag, p) => new SingboxRouteSimulator.RuleSetEvaluation(true, true));
-
-        result.Matched.Should().BeTrue();
-        result.Match!.OutcomeRaw.Should().Be(Global.DirectTag);
-        result.Warnings.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void RuleSet_UnavailableLocalData_AddsWarningAndDoesNotMatch()
-    {
-        var rules = new List<Rule4Sbox>
-        {
-            new() { rule_set = ["geosite-cn"], outbound = Global.DirectTag },
-        };
-
-        var result = Simulate(
-            rules,
-            Probe(domain: "baidu.com"),
-            matcher: (tag, p) => new SingboxRouteSimulator.RuleSetEvaluation(false, false),
-            final: Global.ProxyTag);
-
-        result.Matched.Should().BeFalse();
-        result.Warnings.Should().Contain(w => w.Contains("geosite-cn", StringComparison.OrdinalIgnoreCase));
-    }
-}
-
-/// <summary>
-/// Integration tests: managed per-app rules flow through the real sing-box config
-/// generator and the simulator picks the exact rule the core would apply.
-/// </summary>
-[Collection("SharedDatabase")]
-public class RouteTesterConfigGenTests
-{
     private static async Task CleanRoutingItemsAsync()
     {
         // Tabloları AppManager.InitApp yaratır ama test host'u onu hiç çalıştırmaz;
@@ -417,7 +235,6 @@ public class RouteTesterConfigGenTests
             RoutingBasicItem = new RoutingBasicItem
             {
                 DomainStrategy = Global.AsIs,
-                DomainStrategy4Singbox = string.Empty,
                 RoutingIndexId = string.Empty,
             },
             GuiItem = new GUIItem { EnableStatistics = false },
@@ -450,7 +267,6 @@ public class RouteTesterConfigGenTests
                 UdpEnabled = true,
                 SniffingEnabled = true,
             }],
-            CoreTypeItem = [new CoreTypeItem { ConfigType = EConfigType.VMess, CoreType = ECoreType.sing_box }],
         };
     }
 
@@ -471,39 +287,20 @@ public class RouteTesterConfigGenTests
         };
     }
 
-    private static CoreConfigContext BuildContext(Config config, List<RulesItem> managedRules)
+    private static async Task<List<string>> Generate(IReadOnlyList<RulesItem> managed, Config config)
     {
-        var node = new ProfileItem
-        {
-            IndexId = "node-1",
-            ConfigType = EConfigType.VMess,
-            CoreType = ECoreType.sing_box,
-            Remarks = "test-node",
-            Address = "example.com",
-            Port = 443,
-            Password = Guid.NewGuid().ToString(),
-            Network = nameof(ETransport.raw),
-            StreamSecurity = string.Empty,
-            Subid = string.Empty,
-        };
-        node.SetProtocolExtra(node.GetProtocolExtra() with
-        {
-            AlterId = "0",
-            VmessSecurity = Global.DefaultSecurity,
-        });
-
-        return new CoreConfigContext
+        var node = GpnCoreLauncher.BuildWireGuardProfile(Server());
+        var context = new CoreConfigContext
         {
             Node = node,
-            RunCoreType = ECoreType.sing_box,
+            RunCoreType = ECoreType.mihomo,
             AppConfig = config,
             RoutingItem = new RoutingItem
             {
                 Id = Utils.GetGuid(false),
                 Remarks = "gpn-managed-routing",
-                RuleSet = JsonUtils.Serialize(managedRules, false),
+                RuleSet = JsonUtils.Serialize(managed, false),
                 DomainStrategy = Global.AsIs,
-                DomainStrategy4Singbox = string.Empty,
             },
             RawDnsItem = null,
             SimpleDnsItem = config.SimpleDNSItem,
@@ -512,15 +309,10 @@ public class RouteTesterConfigGenTests
             IsTunEnabled = config.TunModeItem.EnableTun,
             ProtectDomainList = [],
         };
-    }
 
-    private static SingboxConfig Generate(IReadOnlyList<RulesItem> managed, Config config)
-    {
-        var context = BuildContext(config, [.. managed]);
-        var result = new CoreConfigSingboxService(context).GenerateClientConfigContent();
-
-        result.Success.Should().BeTrue("sing-box config generation must succeed: " + result.Msg);
-        return JsonUtils.Deserialize<SingboxConfig>(result.Data!.ToString())!;
+        var result = await CoreConfigHandler.GenerateClientConfig(context, null);
+        result.Success.Should().BeTrue("mihomo config generation must succeed: " + result.Msg);
+        return RouteTesterService.ExtractRules(result.Data!.ToString()!);
     }
 
     [Fact]
@@ -530,25 +322,13 @@ public class RouteTesterConfigGenTests
         var config = CreateConfig(enableTun: true);
         BindConfig(config);
 
-        var apps = new[] { App("chrome.exe", action: "vpn"), App("msedge.exe", action: "direct") };
+        var apps = new[] { App("chrome.exe", action: "vpn") };
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: false);
-        var cfg = Generate(managed, config);
+        var rules = await Generate(managed, config);
 
-        var probe = new RouteProbe
-        {
-            ProcessName = "chrome.exe",
-            Domain = "discord.gg",
-            Port = 443,
-            Network = "tcp",
-        };
-        var result = SingboxRouteSimulator.FindFirstMatch(
-            cfg.route.rules, probe, finalFallback: cfg.route.final, configMode: "gpn");
-
-        result.Matched.Should().BeTrue();
-        result.Match!.OutcomeRaw.Should().Be(Global.ProxyTag);
-        result.Match.Criteria.Should().Contain("process_name: chrome.exe");
-        // The TUN path always sniffs first; it must be reported as an applied modifier.
-        result.Modifiers.Should().Contain(m => m.OutcomeRaw == "sniff");
+        var match = Simulate(rules, Probe("chrome.exe", domain: "discord.gg"));
+        match.Should().NotBeNull();
+        match!.Outcome.Should().Be(ProxyTarget());
     }
 
     [Fact]
@@ -558,22 +338,13 @@ public class RouteTesterConfigGenTests
         var config = CreateConfig(enableTun: true);
         BindConfig(config);
 
-        var apps = new[] { App("chrome.exe", action: "vpn"), App("msedge.exe", action: "direct") };
+        var apps = new[] { App("msedge.exe", action: "direct") };
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: false);
-        var cfg = Generate(managed, config);
+        var rules = await Generate(managed, config);
 
-        var probe = new RouteProbe
-        {
-            ProcessName = "msedge.exe",
-            Domain = "discord.gg",
-            Port = 443,
-            Network = "tcp",
-        };
-        var result = SingboxRouteSimulator.FindFirstMatch(
-            cfg.route.rules, probe, finalFallback: cfg.route.final, configMode: "gpn");
-
-        result.Matched.Should().BeTrue();
-        result.Match!.OutcomeRaw.Should().Be(Global.DirectTag);
+        var match = Simulate(rules, Probe("msedge.exe", domain: "bing.com"));
+        match.Should().NotBeNull();
+        match!.Outcome.Should().Be("DIRECT");
     }
 
     [Fact]
@@ -585,21 +356,11 @@ public class RouteTesterConfigGenTests
 
         var apps = new[] { App("chrome.exe", action: "vpn") };
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: false);
-        var cfg = Generate(managed, config);
+        var rules = await Generate(managed, config);
 
-        var probe = new RouteProbe
-        {
-            ProcessName = "firefox.exe",
-            Domain = "example.com",
-            Port = 443,
-            Network = "tcp",
-        };
-        var result = SingboxRouteSimulator.FindFirstMatch(
-            cfg.route.rules, probe, finalFallback: cfg.route.final, configMode: "gpn");
-
-        result.Matched.Should().BeTrue("GPN whitelist mode ends with a direct catch-all rule");
-        result.Match!.OutcomeRaw.Should().Be(Global.DirectTag);
-        result.Match.Description.Should().Contain("port_range");
+        var match = Simulate(rules, Probe("notepad.exe", domain: "example.com"));
+        match.Should().NotBeNull();
+        match!.Outcome.Should().Be("DIRECT", "whitelist catch-all keeps unlisted apps direct");
     }
 
     [Fact]
@@ -611,21 +372,11 @@ public class RouteTesterConfigGenTests
 
         var apps = new[] { App("adware.exe", action: "block") };
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: false);
-        var cfg = Generate(managed, config);
+        var rules = await Generate(managed, config);
 
-        var probe = new RouteProbe
-        {
-            ProcessName = "adware.exe",
-            Domain = "ads.example.com",
-            Port = 80,
-            Network = "tcp",
-        };
-        var result = SingboxRouteSimulator.FindFirstMatch(
-            cfg.route.rules, probe, finalFallback: cfg.route.final, configMode: "gpn");
-
-        result.Matched.Should().BeTrue();
-        result.Match!.OutcomeKind.Should().Be("action");
-        result.Match.OutcomeRaw.Should().Be("reject");
+        var match = Simulate(rules, Probe("adware.exe", domain: "ads.example.com"));
+        match.Should().NotBeNull();
+        match!.Outcome.Should().Be("REJECT");
     }
 
     [Fact]
@@ -635,52 +386,31 @@ public class RouteTesterConfigGenTests
         var config = CreateConfig(enableTun: true);
         BindConfig(config);
 
-        var apps = new[]
-        {
-            App("chrome.exe", action: "vpn"),
-            App("10.0.0.7", action: "direct", entryType: "ip"),
-        };
+        var apps = new[] { App("203.0.113.0/24", entryType: "ip", action: "vpn") };
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: false);
-        var cfg = Generate(managed, config);
+        var rules = await Generate(managed, config);
 
-        var probe = new RouteProbe
-        {
-            ProcessName = "firefox.exe",
-            IpAddress = IPAddress.Parse("10.0.0.7"),
-            Port = 443,
-            Network = "tcp",
-        };
-        var result = SingboxRouteSimulator.FindFirstMatch(
-            cfg.route.rules, probe, finalFallback: cfg.route.final, configMode: "gpn");
-
-        result.Matched.Should().BeTrue();
-        result.Match!.OutcomeRaw.Should().Be(Global.DirectTag);
-        result.Match.Criteria.Should().Contain("ip_cidr: 10.0.0.7");
+        var match = Simulate(rules, Probe("chrome.exe", ip: "203.0.113.55", port: 443));
+        match.Should().NotBeNull();
+        match!.Outcome.Should().Be(ProxyTarget());
     }
 
     [Fact]
     public async Task GlobalVpnMode_AllTraffic_MatchesProxyCatchAll()
     {
         await CleanRoutingItemsAsync();
-        var config = CreateConfig(enableTun: false);
+        var config = CreateConfig(enableTun: true);
         BindConfig(config);
 
         var apps = new[] { App("chrome.exe", action: "vpn") };
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Vpn, apps);
-        var cfg = Generate(managed, config);
+        var rules = await Generate(managed, config);
 
-        var probe = new RouteProbe
-        {
-            ProcessName = "chrome.exe",
-            Domain = "discord.gg",
-            Port = 443,
-            Network = "tcp",
-        };
-        var result = SingboxRouteSimulator.FindFirstMatch(
-            cfg.route.rules, probe, finalFallback: cfg.route.final, configMode: "global");
+        rules.Where(r => r.StartsWith("PROCESS-NAME,", StringComparison.OrdinalIgnoreCase))
+            .Should().BeEmpty();
 
-        result.Matched.Should().BeTrue("Global VPN mode ends with a proxy catch-all rule");
-        result.Match!.OutcomeRaw.Should().Be(Global.ProxyTag);
-        result.ConfigMode.Should().Be("global");
+        var match = Simulate(rules, Probe("notepad.exe", domain: "example.com"));
+        match.Should().NotBeNull();
+        match!.Outcome.Should().Be(ProxyTarget(), "Global VPN catch-all routes everything to the tunnel");
     }
 }

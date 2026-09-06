@@ -110,7 +110,7 @@ internal sealed class DashboardSettingsService
     /// <summary>
     /// Pushes the running build/version to the dashboard so the About &amp; Help
     /// page always reports the real application version (it lifts it straight out
-    /// of the assembly, exactly like the window title and splash screen).
+    /// of the assembly, exactly like the window title).
     /// </summary>
     internal async Task PushAppInfoAsync()
     {
@@ -265,7 +265,6 @@ internal sealed class DashboardSettingsService
                 logLevels = Global.LogLevels,
                 fingerprints = Global.Fingerprints,
                 userAgents = Global.UserAgent,
-                singboxMuxs = Global.SingboxMuxs,
                 tunMtus = Global.TunMtus.Select(t => t.ToString()).ToList(),
                 tunStacks = Global.TunStacks,
                 tunIcmpRoutingPolicies = Global.TunIcmpRoutingPolicies,
@@ -278,7 +277,6 @@ internal sealed class DashboardSettingsService
                 udpTestTargets = Global.UdpTestTargets,
                 subConvertUrls = Global.SubConvertUrls,
                 geoFilesSources = Global.GeoFilesSources,
-                singboxRulesetSources = Global.SingboxRulesetSources,
                 routingRulesSources = Global.RoutingRulesSources,
                 ipapiUrls = Global.IPAPIUrls,
                 rootCertProviders = Global.RootCertProviders,

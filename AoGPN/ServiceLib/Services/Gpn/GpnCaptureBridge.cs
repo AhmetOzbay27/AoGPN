@@ -62,6 +62,7 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
     private readonly Func<GpnServerProfile, IWireGuardTransport> _transportFactory;
     private readonly ForeignTunnelDetector _foreignDetector;
     private readonly Func<IReadOnlyList<string>, int> _connectionFlusher;
+    private readonly IGpnPortPidTable _portPidTable;
 
     private readonly Func<string, Task>? _onFailure;
 
@@ -135,6 +136,11 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
     /// atlanan durumlarda çağrılmaz — yalnızca gerçek hatalarda. Best-effort'tur: geri
     /// çağrı hata verse bile köprü akışı bozulmaz.
     /// </param>
+    /// <param name="portPidTable">
+    /// UDP port→PID köprüsü (NETWORK katmanı süreç tanımadığı için hedef-atfı bu
+    /// tabloyla kullanıcı modunda yapılır — GpnCaptureLoop'u GpnPortPidTable besler).
+    /// Verilmezse Windows IP Helper tablosu; testler sabit harita enjekte eder.
+    /// </param>
     public GpnCaptureBridge(
         Func<IReadOnlyList<string>> targetNames,
         WinDivertEngine engine,
@@ -146,7 +152,8 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
         Func<GpnServerProfile, IWireGuardTransport>? transportFactory = null,
         ForeignTunnelDetector? foreignDetector = null,
         Func<IReadOnlyList<string>, int>? connectionFlusher = null,
-        Func<string, Task>? onFailure = null)
+        Func<string, Task>? onFailure = null,
+        IGpnPortPidTable? portPidTable = null)
     {
         _targetNames = targetNames ?? throw new ArgumentNullException(nameof(targetNames));
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
@@ -158,6 +165,7 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
         _transportFactory = transportFactory ?? BuildNoiseTransport;
         _foreignDetector = foreignDetector ?? new ForeignTunnelDetector();
         _onFailure = onFailure;
+        _portPidTable = portPidTable ?? new GpnPortPidTable();
         // Varsayılan flusher Windows'a özgü bir API kullanır (WinSock/GetExtendedTcpTable);
         // CA1416'yı bastırmak için çağrı OperatingSystem.IsWindows() ile korunur. Windows
         // dışında ağ bağlantısı temizliği yoktur — 0 (hiçbir bağlantı kapatılmadı) döner.
@@ -325,11 +333,20 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
             // izlerken ham ':' içeren adla sanitleştirilmiş adı yan yana görürsünüz.
             DiagLog.Write($"GPN_BRIDGE adapter raw=\"{rawAdapterName}\" sanitized=\"{adapterName}\" ring={wintun.RingCapacity}");
             _tunnel.Open(adapterName, "AoGPN", wintun.RingCapacity);
+            // Yakalama seçenekleri + ZORUNLU kendi-tünel-egress dışlaması: filtre
+            // geniş (tüm outbound UDP) kurulduğu için uygulamanın sunucuya giden
+            // şifreli paketleri tekrar yakalanıp sonsuz döngüye girmesin.
+            var captureOptions = _settings.CaptureOptions with
+            {
+                ExcludedDstHost = server.EndpointHost,
+                ExcludedDstPort = server.EndpointPort,
+            };
             var loop = new GpnCaptureLoop(
                 resolver,
                 _engine,
                 inject: _tunnel.CreateInjectHandler(),
-                options: _settings.CaptureOptions);
+                options: captureOptions,
+                portPidTable: _portPidTable);
 
             var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             lock (_gate)
@@ -366,13 +383,14 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
             _ = ObserveFaultAsync(_loopTask, "yakalama döngüsü");
             _ = ObserveFaultAsync(_receiveTask, "alım döngüsü");
 
-            // Bayat bağlantı temizliği: tünel canlıya alındıktan sonra hedef süreçlerin
-            // (seçili oyun/"vpn" eylemli uygulamalar) tünel açılmadan ÖNCE kurulmuş mevcut
-            // TCP bağlantılarını kes — yeni bağlantılar kendi tünelimiz üzerinden kurulsun.
-            // Arka planda koşar (Bağlan akışını bloklamaz); kapanışta iptal edilir.
-            _ = ObserveFaultAsync(
-                FlushTargetConnectionsAsync(names, token),
-                "bağlantı temizleyici");
+            // Not: Bayat TCP bağlantı temizliği (FlushTargetConnectionsAsync) NATIVE
+            // yakalama modunda KASITLI OLARAK çalıştırılmaz. Köprü yalnızca hedef
+            // uygulamaların OUTBOUND UDP trafiğini yakalar (NETWORK katmanı filtresi
+            // udp) — TCP bağlantıları hiçbir zaman tünele alınmaz, yeniden kurulsalar
+            // bile doğrudan giderler. Bu yüzden bağlantı anında tarayıcı/Discord TCP
+            // soketlerini kesmek saf aksaklıktır: ERR_NETWORK_CHANGED üretir, hiçbir
+            // trafiği tünele kazandırmaz (canlı gözlenen). UDP oturumları bağlantısız
+            // olduğundan flush gerektirmez.
 
             DiagLog.Write($"GPN_BRIDGE live server={server.ServerId} pids={initial.Pids.Length} adapter={_tunnel.AdapterName} ring={_tunnel.LastRingCapacity}");
             // Tier 3 — canlı oturum da denetlenir: hedef oyun kapanınca Ready-idle'a
@@ -685,35 +703,6 @@ public sealed class GpnCaptureBridge : IAsyncDisposable
     /// yoldan sızıp IP'yi eski gösterir (tarayıcı yenilemesiz görülmez). Hatalar köprüyü
     /// düşürmez — temizlik best-effort'tur.
     /// </summary>
-    private async Task FlushTargetConnectionsAsync(IReadOnlyList<string> targetNames, CancellationToken cancellationToken)
-    {
-        if (targetNames.Count == 0)
-        {
-            return;
-        }
-
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        int killed;
-        try
-        {
-            // Thread pool'e paşaların — ağ yığını taraması senkron ve hızlıdır.
-            killed = await Task.Run(() => _connectionFlusher(targetNames), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return; // kapanış — tamamlanmadan iptal
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog($"[GpnBridge] Bağlantı temizliği hatası: {ex.Message}");
-            return;
-        }
-        sw.Stop();
-        Logging.SaveLog($"[GpnBridge] Bayat bağlantı temizliği: {killed} bağlantı kesildi ({sw.ElapsedMilliseconds}ms) targets=[{string.Join(",", targetNames)}]");
-        DiagLog.Write($"GPN_BRIDGE flush killed={killed} ms={sw.ElapsedMilliseconds} targets=[{string.Join(",", targetNames)}]");
-    }
-
     /// <summary>
     /// El sıkışmayı sunucuya karşı tamamlar (arka plan). Başarısızlık günlüğe düşer
     /// — köprü ayakta kalır, oturum gelmeyince paketler injectFailed sayılır

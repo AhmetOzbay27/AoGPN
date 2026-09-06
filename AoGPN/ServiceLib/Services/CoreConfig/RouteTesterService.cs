@@ -1,20 +1,21 @@
 namespace ServiceLib.Services.CoreConfig;
 
+using ServiceLib.Handler;
+using ServiceLib.Handler.Builder;
+
 /// <summary>
-/// Offline sing-box route tester. Rebuilds the exact sing-box config the active core
-/// would use (same context builder + generator as a live connect), then simulates
-/// first-match-wins routing for a synthetic connection. No sockets are opened and no
-/// DNS is resolved. geosite/geoip rule-set membership is evaluated through the bundled
-/// sing-box binary's offline <c>rule-set match</c> subcommand against local .srs files
-/// when the data is available.
+/// Offline mihomo route tester. Rebuilds the exact mihomo YAML the active core
+/// would use (same context builder + generator as a live connect — GPN WireGuard
+/// veya Global VPN), then simulates first-match-wins routing for a synthetic
+/// connection. No sockets are opened and no DNS is resolved; geosite/geoip
+/// rule-set evaluation is unnecessary because the mihomo generator never emits
+/// those rule types (it skips geosite:/geoip: prefixes).
 /// </summary>
 public sealed class RouteTesterService
 {
     private static readonly string _tag = "RouteTesterService";
 
     private readonly Config _config;
-    private readonly Dictionary<string, SingboxRouteSimulator.RuleSetEvaluation> _ruleSetCache =
-        new(StringComparer.Ordinal);
 
     public RouteTesterService(Config config)
     {
@@ -22,7 +23,7 @@ public sealed class RouteTesterService
     }
 
     /// <summary>
-    /// Tests which sing-box route rule would match traffic from <paramref name="exeName"/>
+    /// Tests which mihomo route rule would match traffic from <paramref name="exeName"/>
     /// to <paramref name="destination"/> (domain or IP, optional <c>:port</c>).
     /// </summary>
     public async Task<RouteTestResult> TestAsync(
@@ -45,7 +46,7 @@ public sealed class RouteTesterService
                 return Error("Enter a destination domain or IP, e.g. discord.gg or 1.2.3.4:443.");
             }
 
-            // The process name sing-box matches carries the ".exe" suffix on Windows.
+            // The process name mihomo matches carries the ".exe" suffix on Windows.
             var processName = Utils.GetExeName(Path.GetFileName(exe));
             var processPath = (exePath ?? string.Empty).Trim();
 
@@ -104,45 +105,61 @@ public sealed class RouteTesterService
                     + string.Join("; ", builderResult.ValidatorResult.Errors));
             }
 
-            if (builderResult.Context.RunCoreType != ECoreType.sing_box)
+            if (builderResult.Context.RunCoreType != ECoreType.mihomo)
             {
-                return Error($"Route testing is sing-box only (current node core: {builderResult.Context.RunCoreType}).");
+                return Error($"Route testing is mihomo only (current node core: {builderResult.Context.RunCoreType}).");
             }
 
-            var generated = new CoreConfigSingboxService(builderResult.Context).GenerateClientConfigContent();
+            var generated = await CoreConfigHandler.GenerateClientConfig(builderResult.Context, null);
             if (!generated.Success || generated.Data is null)
             {
-                return Error("Cannot generate the sing-box config: " + generated.Msg);
+                return Error("Cannot generate the mihomo config: " + generated.Msg);
             }
 
-            var singboxConfig = JsonUtils.Deserialize<SingboxConfig>(generated.Data.ToString());
-            if (singboxConfig?.route?.rules is not { Count: > 0 } rules)
+            var rules = ExtractRules(generated.Data.ToString());
+            if (rules.Count == 0)
             {
-                return Error("Generated sing-box config has no route rules.");
+                return Error("Generated mihomo config has no route rules.");
             }
 
-            // Pre-evaluate every referenced rule-set (async, offline) so the pure
-            // simulator can consume the results synchronously.
-            var tags = new HashSet<string>(StringComparer.Ordinal);
-            CollectRuleSetTags(rules, tags);
-            foreach (var tag in tags)
+            var match = MihomoRouteSimulator.FindFirstMatch(rules, probe);
+            var finalFallback = match is null ? null : match.Outcome;
+            return new RouteTestResult
             {
-                _ruleSetCache[tag] = await EvaluateRuleSetAsync(tag, probe);
-            }
-
-            var warnings = new List<string>();
-            return SingboxRouteSimulator.FindFirstMatch(
-                rules,
-                probe,
-                ruleSetMatcher: (tag, p) => _ruleSetCache.TryGetValue(tag, out var cached) ? cached : new(false, false),
-                finalFallback: singboxConfig.route.final,
-                configMode: builderResult.Context.IsTunEnabled ? "gpn" : "global",
-                warnings: warnings);
+                Success = true,
+                ConfigMode = builderResult.Context.IsTunEnabled ? "gpn" : "global",
+                Matched = match is not null,
+                Match = match,
+                FinalFallback = finalFallback,
+                Warnings = [],
+            };
         }
         catch (Exception ex)
         {
             Logging.SaveLog(_tag, ex);
             return Error("Route test failed: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Üretilen YAML'den rules bloğunu çıkarır (YamlDotNet dictionary). Sıra
+    /// anlamlıdır ve olduğu gibi korunur.
+    /// </summary>
+    internal static List<string> ExtractRules(string yaml)
+    {
+        try
+        {
+            var doc = YamlUtils.FromYaml<Dictionary<string, object?>>(yaml);
+            if (doc is null || !doc.TryGetValue("rules", out var rulesObj) || rulesObj is not IEnumerable<object> list)
+            {
+                return [];
+            }
+            return list.OfType<string>().Where(r => r.IsNotEmpty()).ToList();
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("RouteTesterService", ex);
+            return [];
         }
     }
 
@@ -162,125 +179,5 @@ public sealed class RouteTesterService
             return null;
         }
         return port is >= 1 and <= 65535 ? port : null;
-    }
-
-    private static void CollectRuleSetTags(IEnumerable<Rule4Sbox> rules, HashSet<string> tags)
-    {
-        foreach (var rule in rules)
-        {
-            if (rule is null)
-            {
-                continue;
-            }
-            if (rule.rule_set is { Count: > 0 })
-            {
-                foreach (var tag in rule.rule_set)
-                {
-                    if (tag.IsNotEmpty())
-                    {
-                        tags.Add(tag);
-                    }
-                }
-            }
-            if (rule.rules is { Count: > 0 })
-            {
-                CollectRuleSetTags(rule.rules, tags);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Runs <c>sing-box rule-set match &lt;srs&gt; &lt;domain-or-ip&gt;</c> for one rule-set
-    /// tag. Reads a local .srs file only — no network. Returns Available=false when the
-    /// file, the binary, or the subcommand is unavailable.
-    /// </summary>
-    private async Task<SingboxRouteSimulator.RuleSetEvaluation> EvaluateRuleSetAsync(string tag, RouteProbe probe)
-    {
-        var srsPath = Path.Combine(Utils.GetBinPath("srss"), $"{tag}.srs");
-        if (!File.Exists(srsPath))
-        {
-            return new(false, false);
-        }
-
-        var coreInfo = CoreInfoManager.Instance.GetCoreInfo(ECoreType.sing_box);
-        var singBoxExe = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
-        if (singBoxExe.IsNullOrEmpty())
-        {
-            return new(false, false);
-        }
-
-        var domainOrIp = probe.Domain.IsNotEmpty() ? probe.Domain : probe.IpAddress?.ToString();
-        if (domainOrIp.IsNullOrEmpty())
-        {
-            return new(false, false);
-        }
-
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = singBoxExe,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            psi.ArgumentList.Add("rule-set");
-            psi.ArgumentList.Add("match");
-            psi.ArgumentList.Add(srsPath);
-            psi.ArgumentList.Add(domainOrIp);
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return new(false, false);
-            }
-
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            try
-            {
-                await process.WaitForExitAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                TryKill(process);
-                return new(false, false);
-            }
-
-            var stdout = await stdoutTask;
-            _ = await stderrTask;
-            if (process.ExitCode != 0)
-            {
-                // Unreadable file or an older sing-box without "rule-set match".
-                return new(false, false);
-            }
-
-            var matched = stdout.Contains("match rules.", StringComparison.OrdinalIgnoreCase);
-            Logging.Verbose("GPN", "rule_set_match",
-                ("tag", tag), ("target", domainOrIp), ("matched", matched), ("exit", process.ExitCode));
-            return new(matched, true);
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog(_tag, ex);
-            return new(false, false);
-        }
-    }
-
-    private static void TryKill(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(true);
-            }
-        }
-        catch
-        {
-            // Best effort.
-        }
     }
 }

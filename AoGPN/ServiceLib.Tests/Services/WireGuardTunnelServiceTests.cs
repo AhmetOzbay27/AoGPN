@@ -419,6 +419,76 @@ public class WireGuardTunnelServiceTests
     }
 
     /// <summary>Encrypt her zaman başarısız — şifreleme hatası yolunu doğrular.</summary>
+    // ── Native yaşam döngüsü (seam'li — sürücüsüz) ──────────────────────
+
+    [Fact]
+    public async Task Close_RealNativePath_ClosesAdapterExactlyOnce()
+    {
+        // Regresyon (saha çökmesi 0xc0000374 — ntdll heap corruption):
+        // WintunSession.Dispose adaptörü de WintunCloseAdapter ile kapatıyordu;
+        // WireGuardTunnelService.Close aynı adaptörü İKİNCİ kez kapatıyordu →
+        // çift-free. Adaptör sahipliği YALNIZCA servistedir; Dispose yalnızca
+        // session'ı bitirir (WintunEndSession).
+        var closes = 0;
+        var ends = 0;
+        await using var service = new WireGuardTunnelService(
+            createAdapter: (_, _, _) => new IntPtr(0x1000),
+            closeAdapter: _ => closes++,
+            endSession: _ => ends++,
+            getAdapterLuid: _ => 12345,
+            startSession: (_, _) => new IntPtr(0x2000));
+
+        service.Open("AoGPN-Test");
+        service.IsOpen.Should().BeTrue();
+
+        service.Close();
+
+        closes.Should().Be(1, "adaptörün tek sahibi servistir — tek WintunCloseAdapter (çift-free yok)");
+        ends.Should().Be(1, "session Dispose'ta bir kez WintunEndSession ile sonlandırılır");
+        service.IsOpen.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Open_StartSessionFails_ClosesAdapterOnce_AndLaterCloseIsNoOp()
+    {
+        // Açılış hatası yolunda adaptör bir kez kapatılır ve _adapter sıfırlanır;
+        // ardından Close çağrısı ek kapatma YAPMAMALIDIR (aynı çift-free regresyonu).
+        var closes = 0;
+        await using var service = new WireGuardTunnelService(
+            createAdapter: (_, _, _) => new IntPtr(0x1000),
+            getAdapterLuid: _ => 12345,
+            startSession: (_, _) => IntPtr.Zero,
+            closeAdapter: _ => closes++);
+
+        service.Invoking(s => s.Open("AoGPN-Test")).Should().Throw<WintunException>();
+
+        closes.Should().Be(1, "başarısız Open adaptörü bir kez temizler");
+        service.Close();
+        closes.Should().Be(1, "hata sonrası Close ek kapatma yapmaz");
+        service.IsOpen.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Dispose_RealNativePath_ClosesAdapterExactlyOnce()
+    {
+        // DisposeAsync → Close aynı tek-kapatma sözleşmesini korur (smoke testleri
+        // gerçek sürücüyle adaptör oluşturup Dispose eder — bu sözleşme onları da korur).
+        var closes = 0;
+        var ends = 0;
+        var service = new WireGuardTunnelService(
+            createAdapter: (_, _, _) => new IntPtr(0x1000),
+            closeAdapter: _ => closes++,
+            endSession: _ => ends++,
+            getAdapterLuid: _ => 12345,
+            startSession: (_, _) => new IntPtr(0x2000));
+
+        service.Open("AoGPN-Test");
+        await service.DisposeAsync();
+
+        closes.Should().Be(1);
+        ends.Should().Be(1);
+    }
+
     private sealed class RejectingTransport : IWireGuardTransport
     {
         public List<byte[]> SentWire { get; } = new();

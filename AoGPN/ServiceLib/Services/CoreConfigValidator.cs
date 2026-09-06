@@ -14,7 +14,6 @@ public static class CoreConfigValidator
         {
             ECoreType.Xray => $"run -test -config {quotedPath}",
             ECoreType.v2fly_v5 => $"run -test -c {quotedPath} -format jsonv5",
-            ECoreType.sing_box => $"check -c {quotedPath}",
             ECoreType.mihomo => $"-t -f {quotedPath}",
             _ => null
         };
@@ -34,9 +33,19 @@ public static class CoreConfigValidator
             return CoreValidationResult.Valid();
         }
 
+        // A hanging core check (e.g. a stuck `sing-box check` on an edge-case
+        // speedtest config) must never block the app forever: bound the
+        // validation subprocess and kill it on expiry. A check that does not
+        // answer within the window is a failed check — the caller falls back to
+        // its normal failure path instead of hanging the caller (observed live:
+        // the dashboard "TCP + UDP" node test stuck on "Test ediliyor…" because
+        // the UDP phase's core validation never returned).
+        const int ValidationTimeoutSeconds = 15;
+
+        Process? process = null;
         try
         {
-            using var process = new Process
+            process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
@@ -62,9 +71,11 @@ public static class CoreConfigValidator
             }
 
             process.Start();
-            var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(ValidationTimeoutSeconds));
+            var stdout = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            var stderr = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+            await process.WaitForExitAsync(timeoutCts.Token);
             var output = (await stdout) + Environment.NewLine + (await stderr);
             if (process.ExitCode == 0)
             {
@@ -75,12 +86,26 @@ public static class CoreConfigValidator
         }
         catch (OperationCanceledException)
         {
+            // The check subprocess hung — kill it (with its tree) so it cannot
+            // linger, then report the timeout as a failed validation.
+            try
+            {
+                process?.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // The process already exited between the timeout and the kill.
+            }
             return new CoreValidationResult(false, "Core configuration validation timed out.");
         }
         catch (Exception ex)
         {
             Logging.SaveLog("CoreConfigValidator", ex);
             return new CoreValidationResult(false, ex.Message);
+        }
+        finally
+        {
+            process?.Dispose();
         }
     }
 }

@@ -1,5 +1,6 @@
 using AwesomeAssertions;
 using ServiceLib.Services.CoreConfig;
+using ServiceLib.Services.CoreConfig.Mihomo;
 using Xunit;
 
 namespace ServiceLib.Tests.CoreConfig;
@@ -58,57 +59,56 @@ public class ConnectionProtocolMatrixTests
     [Theory]
     [InlineData(EConfigType.VMess, "vmess")]
     [InlineData(EConfigType.VLESS, "vless")]
-    [InlineData(EConfigType.Shadowsocks, "shadowsocks")]
+    [InlineData(EConfigType.Shadowsocks, "ss")]
     [InlineData(EConfigType.Trojan, "trojan")]
     [InlineData(EConfigType.Hysteria2, "hysteria2")]
     [InlineData(EConfigType.TUIC, "tuic")]
-    [InlineData(EConfigType.Anytls, "anytls")]
-    [InlineData(EConfigType.Naive, "naive")]
-    [InlineData(EConfigType.WireGuard, "wireguard")]
-    [InlineData(EConfigType.SOCKS, "socks")]
+    [InlineData(EConfigType.SOCKS, "socks5")]
     [InlineData(EConfigType.HTTP, "http")]
-    public void Singbox_GeneratesOutboundForEverySupportedProtocol(EConfigType configType, string expectedType)
+    public void MihomoGlobal_GeneratesSingleProxyForEverySupportedProtocol(EConfigType configType, string expectedType)
     {
-        var config = CoreConfigTestFactory.CreateConfig(ECoreType.sing_box);
-        CoreConfigTestFactory.BindAppManagerConfig(config);
-        var node = CreateNode(configType, ECoreType.sing_box);
-        var context = CoreConfigTestFactory.CreateContext(config, node, ECoreType.sing_box);
+        // Global VPN (mihomo): seçili profil tek proxy'ye çevrilir — WireGuard
+        // GPN'e özgüdür (GpnMihomoConfigService kapsar), Anytls/Naive mihomo'da
+        // yoktur ve MihomoSupportConfigType dışındadır.
+        var node = CreateNode(configType, ECoreType.mihomo);
+        var yaml = MihomoGlobalConfigService.GenerateGlobalYaml(node,
+            new GpnMihomoOptions { MixedPort = 10808 }, tunEnabled: true);
 
-        var result = new CoreConfigSingboxService(context).GenerateClientConfigContent();
-
-        result.Success.Should().BeTrue($"{configType}: {result.Msg}");
-        var generated = JsonUtils.Deserialize<SingboxConfig>(result.Data!.ToString());
+        yaml.Should().NotBeNullOrEmpty();
+        var generated = YamlUtils.FromYaml<Dictionary<string, object?>>(yaml);
         generated.Should().NotBeNull();
-        if (configType == EConfigType.WireGuard)
-        {
-            generated!.endpoints.Should().Contain(endpoint =>
-                endpoint.tag == Global.ProxyTag && endpoint.type == expectedType);
-        }
-        else
-        {
-            generated!.outbounds.Should().Contain(outbound =>
-                outbound.tag == Global.ProxyTag && outbound.type == expectedType);
-        }
+
+        var proxies = generated!["proxies"] as List<object?>;
+        proxies.Should().NotBeNull();
+        var proxy = proxies!.Single() as Dictionary<object, object?>;
+        proxy.Should().NotBeNull();
+        proxy!["name"]!.ToString().Should().Be(MihomoGlobalConfigService.GlobalProxyName);
+        proxy["type"]!.ToString().Should().Be(expectedType);
+
+        // Global mod: tek MATCH → proxy kuralı, split-tunnel kuralı YOK.
+        var rules = (generated["rules"] as List<object?>)!;
+        rules.Should().ContainSingle();
+        rules[0]!.ToString().Should().Be($"MATCH,{MihomoGlobalConfigService.GlobalProxyName}");
     }
 
     [Fact]
-    public void Singbox_PreSocksHelper_DoesNotClaimMainApiOrCache()
+    public void MihomoGlobal_ProxyTransport_TunDisabled_MixedPortOnly()
     {
-        var config = CoreConfigTestFactory.CreateConfig(ECoreType.sing_box);
-        CoreConfigTestFactory.BindAppManagerConfig(config);
-        var node = CreateNode(EConfigType.SOCKS, ECoreType.sing_box);
-        var context = CoreConfigTestFactory.CreateContext(config, node, ECoreType.sing_box) with
-        {
-            IsTunEnabled = true,
-            IsPreSocks = true,
-        };
+        // Global + Proxy: TUN kapalı — mixed-port (HTTP+SOCKS5) dinler, tun.enable=false.
+        var node = CreateNode(EConfigType.VLESS, ECoreType.mihomo);
+        var yaml = MihomoGlobalConfigService.GenerateGlobalYaml(node,
+            new GpnMihomoOptions { MixedPort = 10808 }, tunEnabled: false);
 
-        var result = new CoreConfigSingboxService(context).GenerateClientConfigContent();
-
-        result.Success.Should().BeTrue($"{result.Msg}");
-        var generated = JsonUtils.Deserialize<SingboxConfig>(result.Data!.ToString());
-        generated.Should().NotBeNull();
-        generated!.experimental.Should().BeNull();
+        yaml.Should().NotBeNullOrEmpty();
+        // YamlDotNet, object hedefli ayrıştırmada skalerleri string olarak döndürür
+        // (JSON tipi zorlaması yapmaz) — değerler ham metin sözleşmesiyle doğrulanır.
+        var generated = YamlUtils.FromYaml<Dictionary<string, object?>>(yaml);
+        generated!.Should().ContainKey("mixed-port");
+        generated["mixed-port"]!.ToString().Should().Be("10808");
+        generated.Should().ContainKey("tun");
+        var tun = (Dictionary<object, object?>)generated["tun"]!;
+        tun["enable"]!.ToString().Should().Be("false"); // YAML skaleri — küçük harf
+        tun["device"]!.ToString().Should().Be(Global.MihomoTunInterfaceName);
     }
 
     [Fact]
@@ -246,6 +246,7 @@ public class ConnectionProtocolMatrixTests
 
             case EConfigType.VLESS:
                 node.Password = Guid.NewGuid().ToString();
+                node.Id = Guid.NewGuid().ToString();
                 node.SetProtocolExtra(node.GetProtocolExtra() with
                 {
                     Flow = string.Empty,
@@ -275,20 +276,21 @@ public class ConnectionProtocolMatrixTests
                 node.Network = string.Empty;
                 node.StreamSecurity = Global.StreamSecurity;
                 node.Alpn = "h3";
-                node.CoreType = ECoreType.sing_box;
+                node.Id = Guid.NewGuid().ToString();
+                node.CoreType = ECoreType.mihomo;
                 break;
 
             case EConfigType.Anytls:
                 node.Network = string.Empty;
                 node.StreamSecurity = Global.StreamSecurity;
-                node.CoreType = ECoreType.sing_box;
+                node.CoreType = ECoreType.mihomo;
                 break;
 
             case EConfigType.Naive:
                 node.Username = "naive-user";
                 node.Network = string.Empty;
                 node.StreamSecurity = Global.StreamSecurity;
-                node.CoreType = ECoreType.sing_box;
+                node.CoreType = ECoreType.mihomo;
                 break;
 
             case EConfigType.WireGuard:

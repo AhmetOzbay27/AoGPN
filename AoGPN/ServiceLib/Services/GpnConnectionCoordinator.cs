@@ -308,7 +308,7 @@ public sealed class GpnConnectionCoordinator : IGpnConnectionCoordinator
         // failover ölçümü bile ad sezgisel eşleşmesine (IsTunLikeName) güvenmeden
         // tünel durumunu bilir ve probe'lar kendi tünelinin içine yakalanmaz.
         // (macOS utun{N} rastgele olduğu için sezgisel eşleşme orada devrededir.)
-        ProbeEgressNic.SetKnownTunnelNames([Global.SingboxTunInterfaceName]);
+        ProbeEgressNic.SetKnownTunnelNames([Global.MihomoTunInterfaceName]);
 
         _monitorTask = Task.Run(() => _selector.RunFailoverMonitorAsync(
             active,

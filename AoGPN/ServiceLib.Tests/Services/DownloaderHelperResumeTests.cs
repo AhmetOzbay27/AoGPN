@@ -51,7 +51,7 @@ public class DownloaderHelperResumeTests
             await DownloaderHelper.Instance.DownloadFileAsync(
                 null, $"http://127.0.0.1:{server.Port}/core.zip", target, new Progress<double>(), timeout: 4);
 
-            (await File.ReadAllBytesAsync(target)).Should().Equal(payload, "final content must be intact");
+            (await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken)).Should().Equal(payload, "final content must be intact");
             server.ResumeRanges.Should().NotBeEmpty(
                 "a mid-stream drop must be resumed from the saved position, not restarted from 0");
             server.ResumeRanges.Should().OnlyContain(r => r > 0 && r < payload.Length);
@@ -75,12 +75,12 @@ public class DownloaderHelperResumeTests
         var target = TempTarget();
         try
         {
-            await File.WriteAllBytesAsync(target, new byte[1234]);
+            await File.WriteAllBytesAsync(target, new byte[1234], TestContext.Current.CancellationToken);
 
             await DownloaderHelper.Instance.DownloadFileAsync(
                 null, $"http://127.0.0.1:{server.Port}/core.bin", target, new Progress<double>(), timeout: 4);
 
-            (await File.ReadAllBytesAsync(target)).Should().Equal(payload);
+            (await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken)).Should().Equal(payload);
         }
         finally
         {
@@ -101,12 +101,12 @@ public class DownloaderHelperResumeTests
         try
         {
             var partial = payload.AsSpan(0, 400_000).ToArray();
-            await File.WriteAllBytesAsync(target, partial);
+            await File.WriteAllBytesAsync(target, partial, TestContext.Current.CancellationToken);
 
             await DownloaderHelper.DownloadSingleStreamResumableAsync(
                 null, $"http://127.0.0.1:{server.Port}/core.bin", target, new Progress<double>(), timeout: 4);
 
-            (await File.ReadAllBytesAsync(target)).Should().Equal(payload);
+            (await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken)).Should().Equal(payload);
             server.ResumeRanges.Should().Contain(400_000, "the Range request must start at the partial length");
         }
         finally
@@ -127,12 +127,12 @@ public class DownloaderHelperResumeTests
         var target = TempTarget();
         try
         {
-            await File.WriteAllBytesAsync(target, Enumerable.Repeat((byte)0xFF, 400_000).ToArray());
+            await File.WriteAllBytesAsync(target, Enumerable.Repeat((byte)0xFF, 400_000).ToArray(), TestContext.Current.CancellationToken);
 
             await DownloaderHelper.DownloadSingleStreamResumableAsync(
                 null, $"http://127.0.0.1:{server.Port}/core.bin", target, new Progress<double>(), timeout: 4);
 
-            (await File.ReadAllBytesAsync(target)).Should().Equal(payload,
+            (await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken)).Should().Equal(payload,
                 "a server ignoring Range must cause a full rewrite, not an append over garbage");
             server.LastRangeRequested.Should().BeTrue("the fallback must still ask for a resume range");
         }

@@ -9,7 +9,6 @@ public enum ECoreType
     hysteria = 21,
     naiveproxy = 22,
     tuic = 23,
-    sing_box = 24,
     juicity = 25,
     hysteria2 = 26,
     brook = 27,

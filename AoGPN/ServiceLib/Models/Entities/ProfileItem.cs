@@ -106,7 +106,7 @@ public class ProfileItem
                 }
 
                 if (string.IsNullOrEmpty(GetProtocolExtra().SsMethod)
-                    || !Global.SsSecuritiesInSingbox.Contains(GetProtocolExtra().SsMethod))
+                    || !Global.SsSecuritiesInMihomo.Contains(GetProtocolExtra().SsMethod))
                 {
                     return false;
                 }

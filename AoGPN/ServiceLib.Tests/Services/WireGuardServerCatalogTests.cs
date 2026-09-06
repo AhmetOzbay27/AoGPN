@@ -17,6 +17,26 @@ public class WireGuardServerCatalogTests : IAsyncLifetime
     public async ValueTask InitializeAsync()
     {
         SQLiteHelper.Instance.CreateTable<GpnServerItem>();
+        // Diğer seri DB sınıfları profileitems tablosuna WireGuard profili bırakabilir
+        // (örn. RoutingDrift e2e testleri 'gpn-de' düğümünü). SeedFromProfileItemsAsync
+        // bu kalıntıları tohumlar ve şablon tohumlamasına (İtalya dahil) hiç sıra
+        // bırakmaz — beklentiyi bozan yabancı WG profillerini her testten önce kaldır.
+        try
+        {
+            SQLiteHelper.Instance.CreateTable<ProfileItem>();
+            var profiles = await SQLiteHelper.Instance.TableAsync<ProfileItem>().ToListAsync();
+            foreach (var p in profiles ?? [])
+            {
+                if (p.ConfigType == EConfigType.WireGuard)
+                {
+                    await SQLiteHelper.Instance.DeleteAsync(p);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("WireGuardServerCatalogTests", ex);
+        }
         await Task.CompletedTask;
     }
 

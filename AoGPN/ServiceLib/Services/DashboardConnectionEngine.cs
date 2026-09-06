@@ -108,7 +108,7 @@ public sealed class DashboardConnectionEngine
     private async Task<(List<TrafficMonitorItem> byType, List<TrafficMonitorItem> byApp, List<CountryTrafficItem> byCountry, long download, long upload, string status)> LoadTrafficAsync(string? trafficFilter)
     {
         var empty = (new List<TrafficMonitorItem>(), new List<TrafficMonitorItem>(), new List<CountryTrafficItem>(), 0L, 0L, ResUI.MonitorTrafficUnavailable);
-        if (!AppManager.Instance.IsRunningCore(ECoreType.sing_box))
+        if (!AppManager.Instance.IsRunningCore(ECoreType.mihomo))
         {
             return empty;
         }
@@ -459,7 +459,7 @@ public sealed class DashboardConnectionEngine
     }
     private static readonly HashSet<string> _excludeProcesses = new(StringComparer.OrdinalIgnoreCase)
     {
-        "AoGPN", "AoGPN", "xray", "sing-box", "mihomo", "AmazTool", "EnableLoopback"
+        "AoGPN", "AoGPN", "xray", "mihomo", "AmazTool", "EnableLoopback"
     };
     private static bool TryGetAppInfo(int pid, out (string name, string path, string display) info)
     {

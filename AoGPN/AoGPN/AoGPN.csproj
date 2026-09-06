@@ -12,6 +12,11 @@
 		<SupportedOSPlatformVersion>7.0</SupportedOSPlatformVersion>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<CETCompat>false</CETCompat>
+		<!-- Uygulamanın GERÇEKTEN sunduğu diller dışındaki uydu (satellite) derlemelerini
+		     çıktıya kopyalama (TaskScheduler vb. paketlerin de/es/it/ja/pl/sv/zh-CN gibi
+		     dilleri — çıktıda dolu dil klasörleri bırakırdı). Liste Dil/*.json ve
+		     ServiceLib Resx kültürleriyle birebir aynıdır. -->
+		<SatelliteResourceLanguages>fa;fr;hu;id;ru;tr;zh-Hans;zh-Hant</SatelliteResourceLanguages>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -53,11 +58,6 @@
 		<Resource Include="Resources\NotifyIcon3.ico" />
 		<Resource Include="Resources\NotifyIcon4.ico" />
 		<Resource Include="Resources\AoGPN.ico" />
-		<!-- Splash screen art shown while the app boots (the transparent high-res
-		     AO GPN logo). Rendered by the dedicated SplashWindow (see App.OnStartup)
-		     so its close can fade out smoothly on a transparent window; kept as a
-		     plain Resource so the image is reachable at runtime. -->
-		<Resource Include="Resources\Splash.png" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -309,6 +309,30 @@
 		<!-- Tanıyı açık tut: eksik WinDivert DLL'i köprüyü sessizce öldürmesin. -->
 		<Warning Condition="'$(_WinDivertPresent)' != 'true' And (!Exists('$(OutDir)WinDivert.dll') Or !Exists('$(OutDir)WinDivert64.sys')) And (('$(_WinDivertFetchExit)' != '' And '$(_WinDivertFetchExit)' != '0') Or ('$(_WinDivertExtractExit)' != '' And '$(_WinDivertExtractExit)' != '0'))"
 		         Text="WinDivert.dll / WinDivert64.sys are missing from '$(OutDir)' and the vendored Libs\WinDivert distribution could not be extracted (nor downloaded as fallback). The GPN capture bridge stays dead until they are provided; the next build retries." />
+	</Target>
+
+	<!--
+	  Çıktıyı yalnızca Windows x64'ün gerçekten yüklediği yerel kitaplıklarla bırak:
+	  SQLitePCLRaw / SkiaSharp / WebView2Loader, NuGet paketlerinde runtimes/ altında
+	  android/ios/linux/mac/freebsd dahil ~40+ platform klasörü taşır ve hepsi her
+	  derlemede çıktıya kopyalanır (~87 MB ölü dosya). Yalnızca win-x64/native
+      (e_sqlite3 + WebView2Loader + libSkiaSharp) çalışma anında okunur — gerisi
+      her derlemede temizlenir. Uygulama Windows x64'e özgüdür (WinDivert64.sys +
+      wintun x64); win-arm64 gerektiren bir dağıtım zaten ayrı RID ile paketlenir.
+	-->
+	<Target Name="PruneCrossPlatformRuntimeAssets"
+	        AfterTargets="Build;CopyCoreBinariesFromReleaseOutput;DownloadCoreBinariesIntoReleaseOutput;DownloadCoreBinariesIntoDebugOutput"
+	        Condition="!$(MSBuildProjectFile.EndsWith('_wpftmp.csproj')) And Exists('$(OutDir)runtimes')">
+		<ItemGroup>
+			<_RuntimeRootDir Include="$([System.IO.Directory]::GetDirectories('$(OutDir)runtimes'))" />
+		</ItemGroup>
+		<ItemGroup>
+			<_RuntimeToRemove Include="@(_RuntimeRootDir)" Exclude="$(OutDir)runtimes\win-x64" />
+		</ItemGroup>
+		<RemoveDir Directories="@(_RuntimeToRemove)" />
+		<!-- runtimes klasörü yalnızca win-x64 kaldıysa onu da çıktı köküne "gömme" —
+		     runtimes/win-x64/native düzeni .NET'in yerel kitaplık arama kuralıdır ve
+		     korunmalıdır (klasörü kaldırma, İÇİNDEKİLERİ sakla). -->
 	</Target>
 
 </Project>

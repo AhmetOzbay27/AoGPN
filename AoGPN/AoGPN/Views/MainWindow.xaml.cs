@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Windows.Controls;
 using Microsoft.Web.WebView2.Core;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using MaterialDesignThemes.Wpf;
 using AoGPN.ViewModels;
 using ServiceLib.Handler.Fmt;
@@ -28,8 +29,6 @@ public partial class MainWindow : IDashboardBridge
 {
     private static Config _config;
     private readonly SerialDisposable _layoutBindingsDisposable = new();
-    private CheckUpdateView? _checkUpdateView;
-    private BackupAndRestoreView? _backupAndRestoreView;
     private ThemeSettingViewModel? _sidebarThemeVm;
 
     // Route-test results are pushed to the renderer with camelCase keys to match the
@@ -46,14 +45,6 @@ public partial class MainWindow : IDashboardBridge
     private bool _webViewReady;
     private bool _connectionState;
     private bool _connectionStarting;
-
-    // Bağlantı kurulamayınca dashboard hata kartına taşınan başarısızlık bilgisi:
-    // ana çekirdeğin son Failed durumu (kullanıcı dostu Error mesajı) + son
-    // başlatma teşhisi (teknik ayrıntı / kod) + GPN koordinatörünün son Failed
-    // anlık görüntüsü (seçim/launcher hatası — çekirdek hiç başlamamış olabilir).
-    private CoreHealthSnapshot? _lastMainCoreFailure;
-    private CoreStartupDiagnostic? _lastMainCoreDiagnostic;
-    private GpnConnectionSnapshot? _lastGpnFailedSnapshot;
 
 
     // WARP egress otomatik kurtarma — WARP dial sağlığı faulted olunca aktif WG
@@ -74,6 +65,12 @@ public partial class MainWindow : IDashboardBridge
     // (see OnLoaded); while this is true, StateChanged ignores the minimize so
     // the window is not hidden before the tray icon exists.
     private bool _startupTrayPending;
+
+    // App.OnStartup shows the window with Opacity 0 so a launch never flashes an
+    // empty black frame while WebView2 boots the dashboard (a startup splash used
+    // to mask that gap). True until the dashboard has rendered its first frame
+    // (see RevealStartupWindow).
+    private bool _dashboardFirstPaintPending = true;
 
     // Nodes already advised about the sing-box -> Xray REALITY fallback, keyed by
     // "IndexId|tunEnabled" so the advice fires once per node per TUN state but can
@@ -100,6 +97,9 @@ public partial class MainWindow : IDashboardBridge
     private readonly DashboardGpnServerService _gpnServerService;
     private readonly DashboardNodeService _nodeService;
     private readonly DashboardPushService _pushService;
+    // Bağlantı kurulamayınca dashboard hata kartına taşınan başarısızlık defteri
+    // (ConnectionFailureLedger — kayıtlar, öncelik ve 45 sn tazelik orada yaşar).
+    private readonly ConnectionFailureLedger _failureLedger;
     private readonly DashboardMessageDispatcher _dashboardMessageDispatcher;
 
     public MainWindow()
@@ -143,6 +143,7 @@ public partial class MainWindow : IDashboardBridge
             isClosing: () => _isClosing,
             notifyNodesOp: NotifyNodesOpAsync,
             getProfilesViewModel: () => ViewModel?.ProfilesViewModel,
+            getMainViewModel: () => ViewModel,
             invokeOnUiThread: action => Dispatcher.InvokeAsync(action),
             proxyOnlyService: _proxyOnlyService,
             pushSystemProxyState: force => PushSystemProxyStateAsync(force),
@@ -244,30 +245,15 @@ public partial class MainWindow : IDashboardBridge
         // CoreHealthSnapshot.Error içindedir; teknik ayrıntı/port/elevation bilgisi
         // CoreStartupDiagnostic'te. Ready/Stopped'a geçince temizlenir (eski hata
         // kartı yeni denemede gösterilmez).
+        _failureLedger = new ConnectionFailureLedger(
+            executeScript: ExecuteScriptSafelyAsync,
+            isWebViewReady: () => _webViewReady,
+            readActualConnectionState: ReadActualConnectionState);
+
         AppEvents.CoreHealthChanged.AsObservable()
-            .Subscribe(health =>
-            {
-                if (health.Role != CoreHealthRole.Main)
-                {
-                    return;
-                }
-                if (health.State == CoreHealthState.Failed)
-                {
-                    _lastMainCoreFailure = health;
-                }
-                else if (health.State is CoreHealthState.Ready or CoreHealthState.Stopped)
-                {
-                    _lastMainCoreFailure = null;
-                }
-            });
+            .Subscribe(_failureLedger.RecordCoreHealth);
         AppEvents.CoreStartupDiagnosticChanged.AsObservable()
-            .Subscribe(diag =>
-            {
-                if (diag.Role == CoreHealthRole.Main)
-                {
-                    _lastMainCoreDiagnostic = diag;
-                }
-            });
+            .Subscribe(_failureLedger.RecordDiagnostic);
 
         ThreadPool.RegisterWaitForSingleObject(App.ProgramStarted, OnProgramStarted, null, -1, false);
 
@@ -275,30 +261,13 @@ public partial class MainWindow : IDashboardBridge
         Closing += MainWindow_Closing;
         StateChanged += MainWindow_StateChanged;
         PreviewKeyDown += MainWindow_PreviewKeyDown;
-        menuSettingsSetUWP.Click += MenuSettingsSetUWP_Click;
-        menuPromotion.Click += MenuPromotion_Click;
-        menuClose.Click += MenuClose_Click;
-        menuCheckUpdate.Click += MenuCheckUpdate_Click;
-        menuOpenLogFolder.Click += menuOpenLogFolder_Click;
-        menuVerboseLogging.Click += menuVerboseLogging_Click;
-        btnNewUpdate.Click += MenuCheckUpdate_Click;
-        menuBackupAndRestore.Click += MenuBackupAndRestore_Click;
-
-        // Restore verbose logging check state from config
-        menuVerboseLogging.IsChecked = _config.GuiItem.EnableVerboseLog;
-        btnNavServers.Click += (_, _) => { SetActiveNav(btnNavServers); tabMain2.SelectedIndex = 0; };
-        btnNavMsg.Click += (_, _) => { SetActiveNav(btnNavMsg); tabMain2.SelectedIndex = 1; };
-        btnNavAddServer.Click += (_, _) =>
-        {
-            SetActiveNav(btnNavAddServer);
-            btnNavAddServer.ContextMenu!.IsOpen = true;
-        };
+        btnNavMsg.Click += (_, _) => { SetActiveNav(btnNavMsg); tabMain2.SelectedIndex = 0; };
         btnNavImport.Click += (_, _) => SetActiveNav(btnNavImport);
         btnNavScan.Click += (_, _) => SetActiveNav(btnNavScan);
-        btnNavConnection.Click += (_, _) => { SetActiveNav(btnNavConnection); tabMain2.SelectedIndex = 4; };
-        btnNavGameBoost.Click += (_, _) => { SetActiveNav(btnNavGameBoost); tabMain2.SelectedIndex = 4; };
-        btnNavProxies.Click += (_, _) => { SetActiveNav(btnNavProxies); tabMain2.SelectedIndex = 2; };
-        btnNavConnections.Click += (_, _) => { SetActiveNav(btnNavConnections); tabMain2.SelectedIndex = 3; };
+        btnNavConnection.Click += (_, _) => { SetActiveNav(btnNavConnection); tabMain2.SelectedIndex = 3; };
+        btnNavGameBoost.Click += (_, _) => { SetActiveNav(btnNavGameBoost); tabMain2.SelectedIndex = 3; };
+        btnNavProxies.Click += (_, _) => { SetActiveNav(btnNavProxies); tabMain2.SelectedIndex = 1; };
+        btnNavConnections.Click += (_, _) => { SetActiveNav(btnNavConnections); tabMain2.SelectedIndex = 2; };
         btnNavSettings.Click += (_, _) => SetActiveNav(btnNavSettings);
         btnNavRouting.Click += (_, _) => SetActiveNav(btnNavRouting);
         btnNavDNS.Click += (_, _) => SetActiveNav(btnNavDNS);
@@ -328,63 +297,14 @@ public partial class MainWindow : IDashboardBridge
 
         this.WhenActivated(disposables =>
         {
-            //servers
-            this.BindCommand(ViewModel, vm => vm.AddVmessServerCmd, v => v.menuAddVmessServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddVlessServerCmd, v => v.menuAddVlessServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddShadowsocksServerCmd, v => v.menuAddShadowsocksServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddSocksServerCmd, v => v.menuAddSocksServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddHttpServerCmd, v => v.menuAddHttpServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddTrojanServerCmd, v => v.menuAddTrojanServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddHysteria2ServerCmd, v => v.menuAddHysteria2Server).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddTuicServerCmd, v => v.menuAddTuicServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddWireguardServerCmd, v => v.menuAddWireguardServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddAnytlsServerCmd, v => v.menuAddAnytlsServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddNaiveServerCmd, v => v.menuAddNaiveServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddCustomServerCmd, v => v.menuAddCustomServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddPolicyGroupServerCmd, v => v.menuAddPolicyGroupServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddProxyChainServerCmd, v => v.menuAddProxyChainServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddServerViaClipboardCmd, v => v.menuAddServerViaClipboard).DisposeWith(disposables);
+            //servers (rail: clipboard/QR only)
             this.BindCommand(ViewModel, vm => vm.AddServerViaClipboardCmd, v => v.btnNavImport).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddServerViaScanCmd, v => v.menuAddServerViaScan).DisposeWith(disposables);
             this.BindCommand(ViewModel, vm => vm.AddServerViaScanCmd, v => v.btnNavScan).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddServerViaImageCmd, v => v.menuAddServerViaImage).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddCustomServerCmd, v => v.navAddCustomServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddVmessServerCmd, v => v.navAddVmessServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddVlessServerCmd, v => v.navAddVlessServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddShadowsocksServerCmd, v => v.navAddShadowsocksServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddTrojanServerCmd, v => v.navAddTrojanServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddHysteria2ServerCmd, v => v.navAddHysteria2Server).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddWireguardServerCmd, v => v.navAddWireguardServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddSocksServerCmd, v => v.navAddSocksServer).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.AddHttpServerCmd, v => v.navAddHttpServer).DisposeWith(disposables);
 
-            //sub
-            this.BindCommand(ViewModel, vm => vm.SubSettingCmd, v => v.menuSubSetting).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.SubUpdateCmd, v => v.menuSubUpdate).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.SubUpdateViaProxyCmd, v => v.menuSubUpdateViaProxy).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.SubGroupUpdateCmd, v => v.menuSubGroupUpdate).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.SubGroupUpdateViaProxyCmd, v => v.menuSubGroupUpdateViaProxy).DisposeWith(disposables);
-
-            //setting
-            this.BindCommand(ViewModel, vm => vm.OptionSettingCmd, v => v.menuOptionSetting).DisposeWith(disposables);
+            //setting (rail)
             this.BindCommand(ViewModel, vm => vm.OptionSettingCmd, v => v.btnNavSettings).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.RoutingSettingCmd, v => v.menuRoutingSetting).DisposeWith(disposables);
             this.BindCommand(ViewModel, vm => vm.RoutingSettingCmd, v => v.btnNavRouting).DisposeWith(disposables);
             this.BindCommand(ViewModel, vm => vm.DNSSettingCmd, v => v.btnNavDNS).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.DNSSettingCmd, v => v.menuDNSSetting).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.FullConfigTemplateCmd, v => v.menuFullConfigTemplate).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.GlobalHotkeySettingCmd, v => v.menuGlobalHotkeySetting).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.RebootAsAdminCmd, v => v.menuRebootAsAdmin).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.ClearServerStatisticsCmd, v => v.menuClearServerStatistics).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.OpenTheFileLocationCmd, v => v.menuOpenTheFileLocation).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.RegionalPresetDefaultCmd, v => v.menuRegionalPresetsDefault).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.RegionalPresetRussiaCmd, v => v.menuRegionalPresetsRussia).DisposeWith(disposables);
-            this.BindCommand(ViewModel, vm => vm.RegionalPresetIranCmd, v => v.menuRegionalPresetsIran).DisposeWith(disposables);
-
-            this.BindCommand(ViewModel, vm => vm.ReloadCmd, v => v.menuReload).DisposeWith(disposables);
-            this.OneWayBind(ViewModel, vm => vm.BlReloadEnabled, v => v.menuReload.IsEnabled).DisposeWith(disposables);
-
-            this.OneWayBind(ViewModel, vm => vm.BlNewUpdate, v => v.btnNewUpdate.Visibility).DisposeWith(disposables);
 
             _layoutBindingsDisposable.DisposeWith(disposables);
 
@@ -526,7 +446,6 @@ public partial class MainWindow : IDashboardBridge
             RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
         }
 
-        AddHelpMenuItem();
         WindowsManager.Instance.RegisterGlobalHotkey(_config, OnHotkeyHandler, null);
     }
 
@@ -675,12 +594,28 @@ public partial class MainWindow : IDashboardBridge
             Height = 800;
         }
 
+        // Safety net: if the dashboard never raises NavigationCompleted — or the
+        // WebView2 initialization below hangs — never leave the invisible startup
+        // window (Opacity 0 + Hidden WebView2) invisible forever. Started BEFORE
+        // InitializeWebViewAsync so it also covers an init hang. The reveal itself
+        // is idempotent, so this can only help.
+        var revealSafety = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+        revealSafety.Tick += (_, _) =>
+        {
+            revealSafety.Stop();
+            RevealStartupWindow();
+        };
+        revealSafety.Start();
+
         try
         {
             await InitializeWebViewAsync();
         }
         catch (Exception ex)
         {
+            // WebView2 never came up: reveal the window so the error dialog below is
+            // visible instead of a silent invisible window.
+            RevealStartupWindow();
             Logging.SaveLog("WebView2 initialization failed", ex);
             MessageBox.Show(
                 this,
@@ -716,6 +651,8 @@ public partial class MainWindow : IDashboardBridge
 
         if (!e.IsSuccess)
         {
+            // Navigation failed: never leave the Opacity-0 startup window invisible.
+            RevealStartupWindow();
             Logging.SaveLog($"AoGPN dashboard navigation failed: {e.WebErrorStatus}");
             return;
         }
@@ -763,6 +700,14 @@ public partial class MainWindow : IDashboardBridge
             await PushAppInfoAsync();
             await ShowHwaFallbackNoticeIfNeededAsync();
 
+            // The dashboard has now loaded and been seeded with the initial state
+            // (theme, settings, language, ...): reveal the startup window. It was
+            // shown at Opacity 0 so launching never flashes an empty black frame
+            // while WebView2 boots (see RevealStartupWindow). The AutoRun wait and
+            // the proxy-only reconcile below can take seconds and must not delay
+            // the window from appearing.
+            RevealStartupWindow();
+
             // Auto-run (start on boot) may fire before the network stack is ready.
             // Wait for network availability first so the proxy-only core and OS proxy
             // come up on a live connection instead of pointing at an unreachable node.
@@ -803,6 +748,9 @@ public partial class MainWindow : IDashboardBridge
         {
             // Event handlers are async-void; contain unexpected browser teardown
             // errors so they cannot escape onto WPF's dispatcher as fatal exceptions.
+            // A failed startup script must never leave the Opacity-0 window invisible
+            // forever, so reveal anyway (the dashboard may still be usable).
+            RevealStartupWindow();
             if (!_isClosing)
             {
                 Logging.SaveLog("AoGPN dashboard startup script failed", ex);
@@ -1795,7 +1743,7 @@ public partial class MainWindow : IDashboardBridge
         }
 
         return AppManager.Instance.IsRunningCore(ECoreType.Xray)
-            || AppManager.Instance.IsRunningCore(ECoreType.sing_box)
+            || AppManager.Instance.IsRunningCore(ECoreType.mihomo)
             || AppManager.Instance.IsRunningCore(ECoreType.openvpn);
     }
 
@@ -2128,7 +2076,9 @@ public partial class MainWindow : IDashboardBridge
                 if (ViewModel?.ReloadCmd is { } reloadCmd)
                 {
                     // Executing a disabled ReactiveCommand is a no-op, so the
-                    // CanExecute gate (bound to menuReload.IsEnabled) is respected
+                    // Executing a disabled ReactiveCommand is a no-op, so the
+                    // CanExecute gate (bound to the reload enablement state) is
+                    // respected implicitly.
                     // implicitly.
                     reloadCmd.Execute().Subscribe();
                 }
@@ -2377,15 +2327,15 @@ public partial class MainWindow : IDashboardBridge
     /// </summary>
     private async Task OnGpnConnectionSnapshotAsync(GpnConnectionSnapshot snapshot)
     {
+        // Defter: Connecting/Connected eski başarısızlığı temizler, Failed saklar.
+        _failureLedger.RecordGpnSnapshot(snapshot);
+
         switch (snapshot.State)
         {
             case GpnConnectionState.Connecting:
-                // Yeni deneme başladı — eski başarısızlık hata kartına taşınmasın.
-                _lastGpnFailedSnapshot = null;
                 break;
             case GpnConnectionState.Connected:
                 Volatile.Write(ref _connectionState, true);
-                _lastGpnFailedSnapshot = null;
                 await SendConnectionStateAsync();
 
                 // Gerçek ping "sonra" ölçümü: tünel kurulunca aynı uç noktalara
@@ -2403,9 +2353,6 @@ public partial class MainWindow : IDashboardBridge
                 await SendConnectionStateAsync();
                 break;
             case GpnConnectionState.Failed:
-                // Seçim/launcher hatası — çekirdek hiç başlamamış olabilir; hata
-                // kartı için son Failed anlık görüntüsünü sakla (mesaj + zaman).
-                _lastGpnFailedSnapshot = snapshot;
                 break;
         }
     }
@@ -2461,84 +2408,13 @@ public partial class MainWindow : IDashboardBridge
     }
 
     /// <summary>Shows a non-fatal connection error in the dashboard connect widget.</summary>
-    private async Task NotifyConnectionErrorAsync(string message)
-    {
-        await ExecuteScriptSafelyAsync(
-            $"window.setConnectionError({JsonSerializer.Serialize(message)});");
-    }
+    private Task NotifyConnectionErrorAsync(string message) => _failureLedger.PushErrorAsync(message);
 
     /// <summary>
-    /// Bağlanma denemesi başarısız olduysa (çekirdek Failed / GPN koordinatörü
-    /// Failed) dashboard'a nedeni gösteren net bir hata kartı basar. Yalnızca
-    /// bağlantı kurma akışlarının sonunda çağrılır; normal disconnect no-op'tur.
-    /// Öncelik GPN koordinatöründedir (seçim/launcher hatası — çekirdek hiç
-    /// başlamamış olabilir), ardından ana çekirdek başlatma teşhisi gelir.
+    /// Bağlanma denemesi başarısız olduysa dashboard'a hata kartı bastırır
+    /// (ConnectionFailureLedger — kayıtlar, GPN önceliği ve 45 sn tazelik orada).
     /// </summary>
-    private async Task TryPushConnectionFailureAsync()
-    {
-        if (!_webViewReady || ReadActualConnectionState())
-        {
-            return; // bağlantı kuruldu — hata kartı gösterilmez
-        }
-
-        // 1) GPN koordinatörü yakın zamanda Failed durumuna düştüyse mesajını kullan.
-        var gpnFailed = _lastGpnFailedSnapshot;
-        if (gpnFailed is { State: GpnConnectionState.Failed }
-            && gpnFailed.Error.IsNotEmpty()
-            && DateTimeOffset.UtcNow - gpnFailed.UpdatedAt < TimeSpan.FromSeconds(45))
-        {
-            await ShowConnectionFailureAsync(gpnFailed.Error, null, elevation: false, canRecover: false);
-            return;
-        }
-
-        // 2) Ana çekirdek başlatma hatası (CoreHealthSnapshot.Error kullanıcı
-        //    dostudur; teknik ayrıntı CoreStartupDiagnostic.TechnicalDetails).
-        var healthFailure = _lastMainCoreFailure;
-        if (healthFailure is not null
-            && healthFailure.Error.IsNotEmpty()
-            && DateTimeOffset.UtcNow - healthFailure.ChangedAt < TimeSpan.FromSeconds(45))
-        {
-            var diag = _lastMainCoreDiagnostic is { } d
-                && DateTimeOffset.UtcNow - d.CreatedAt < TimeSpan.FromSeconds(45)
-                ? d
-                : null;
-            await ShowConnectionFailureAsync(
-                healthFailure.Error,
-                diag?.TechnicalDetails,
-                elevation: diag?.Code is CoreStartupErrorCode.ElevationRequired or CoreStartupErrorCode.ElevationFailed,
-                canRecover: diag?.CanRecover == true,
-                port: diag?.Port ?? healthFailure.Port);
-        }
-    }
-
-    /// <summary>
-    /// Bağlantı hata kartını dashboard'a basar: kullanıcı dostu mesaj + isteğe bağlı
-    /// teknik ayrıntı (mono satır) + elevation hatasıysa "Relaunch as admin" butonu.
-    /// </summary>
-    private async Task ShowConnectionFailureAsync(
-        string message,
-        string? technical,
-        bool elevation,
-        bool canRecover,
-        int? port = null)
-    {
-        try
-        {
-            var payload = JsonSerializer.Serialize(new
-            {
-                Message = message,
-                Details = technical,
-                Elevation = elevation,
-                CanRecover = canRecover,
-                Port = port,
-            }, RouteTestJsonOptions);
-            await ExecuteScriptSafelyAsync($"window.setConnectionError({payload});");
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN connection-failure card push failed", ex);
-        }
-    }
+    private Task TryPushConnectionFailureAsync() => _failureLedger.TryPushAsync();
 
     private async Task NotifySystemProxyResultAsync(bool ok, ESysProxyType type, string message)
     {
@@ -2696,7 +2572,25 @@ public partial class MainWindow : IDashboardBridge
             string? tunnelCountry = null;
             var tunnelVerified = false;
 
-            if (connected && transport == "proxy")
+            // Native (in-process) motor: WinDivert tabanlı UDP-odaklı beyaz liste
+            // tünelidir — bu IP doğrulaması dahil uygulamanın TCP istekleri TASARIM
+            // gereği doğrudan gider (yalnızca hedef uygulamaların UDP'si tünellenir).
+            // "Doğrudan IP, tünel IP'sinden farklı değil" karşılaştırması bu modda
+            // geçerli bir sızıntı kanıtı DEĞİLDİR ve yanlış "Sızıntı" uyarısı üretir
+            // (canlı gözlenen banner). Doğrulama = veri düzleminin ÇİFT YÖNLÜ paket
+            // taşıdığı (sunucuya gönderilen VE sunucudan çözülen > 0). Tek yönlü sayaç
+            // (ör. sent=104 / received=1 — sunucunun yanıt vermediği yarı-ölü oturum)
+            // "Tünellendi ✓" iddiasını DOĞRULAMAZ; yalnızca handshake/keepalive
+            // gürültüsü olabilir. İki yön de akıyorsa veri yolu gerçekten çalışıyordur.
+            var nativeBridge = NativeGpnEnginePolicy.IsEnabled ? AppManager.Instance.CaptureBridge : null;
+            if (nativeBridge is { IsRunning: true }
+                && nativeBridge.TunnelSnapshot.Sent > 0
+                && nativeBridge.TunnelSnapshot.Received > 0)
+            {
+                tunnelVerified = true;
+                DiagLog.Write($"GPN_IPVERIFY native data-plane verified sent={nativeBridge.TunnelSnapshot.Sent} received={nativeBridge.TunnelSnapshot.Received}");
+            }
+            else if (connected && transport == "proxy")
             {
                 // Through SOCKS5 proxy: this should give us the tunnel exit IP.
                 var socksPort = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
@@ -2957,7 +2851,13 @@ public partial class MainWindow : IDashboardBridge
     /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
     public Task PasteNodesAsync() => _nodeService.PasteNodesAsync();
     /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task EditNodeAsync(string indexId) => _nodeService.EditNodeAsync(indexId);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task ImportWireGuardConfsAsync(List<WireGuardConfFile> files) => _nodeService.ImportWireGuardConfsAsync(files);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
     public Task DeleteNodesAsync(string[] indexIds) => _nodeService.DeleteNodesAsync(indexIds);
+    /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task MoveNodeAsync(string indexId, string targetIndexId) => _nodeService.MoveNodeAsync(indexId, targetIndexId);
 
     /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
     public Task StartNodeSpeedtestAsync(string[] indexIds, string? testType = null, long requestedRunId = 0) => _nodeService.StartNodeSpeedtestAsync(indexIds, testType, requestedRunId);
@@ -3422,12 +3322,25 @@ public partial class MainWindow : IDashboardBridge
 
     private async Task DelegateSnackMsg(string content)
     {
+        // MainSnackbar, WebView2 yerleşiminde kalıcı olarak daraltılmış legacy
+        // DialogHost'un içinde yaşar ve hiç yüklenmez — kuyruğa bağlı Snackbar
+        // örneği olmadan Enqueue her mesajda NLog'a "snackbar instances are not
+        // assigned" uyarısı yazar ve mesaj zaten hiç görüntülenmez. Yalnızca
+        // Snackbar gerçekten bağlandığında (legacy yüzey görünürken) kuyruğa al.
+        if (!MainSnackbar.IsLoaded)
+        {
+            return;
+        }
         MainSnackbar.MessageQueue?.Enqueue(content);
         await Task.CompletedTask;
     }
 
     private async Task DelegateSnackAction(ActionNotice notice)
     {
+        if (!MainSnackbar.IsLoaded)
+        {
+            return;
+        }
         MainSnackbar.MessageQueue?.Enqueue(
             notice.Content, notice.ActionContent, notice.Handler);
         await Task.CompletedTask;
@@ -3629,47 +3542,6 @@ public partial class MainWindow : IDashboardBridge
         }
     }
 
-    private void MenuClose_Click(object sender, RoutedEventArgs e)
-    {
-        StorageUI();
-        _trayBehavior.CloseToTray();
-    }
-
-    private void MenuPromotion_Click(object sender, RoutedEventArgs e)
-    {
-        ProcUtils.ProcessStart($"{Utils.Base64Decode(Global.PromotionUrl)}?t={DateTime.Now.Ticks}");
-    }
-
-    private void menuOpenLogFolder_Click(object sender, RoutedEventArgs e)
-    {
-        var logPath = Utils.GetLogPath();
-        try
-        {
-            ProcUtils.ProcessStart(logPath);
-        }
-        catch
-        {
-            ProcUtils.ProcessStart(Utils.GetBinConfigPath());
-        }
-    }
-
-    private void menuVerboseLogging_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is System.Windows.Controls.MenuItem item)
-        {
-            _config.GuiItem.EnableVerboseLog = item.IsChecked;
-            _config.GuiItem.EnableLog = true;
-            Logging.VerboseLoggingEnabled(item.IsChecked);
-            Logging.LoggingEnabled(true);
-            Logging.Verbose("UI", "verbose_toggle", ("enabled", item.IsChecked));
-        }
-    }
-
-    private void MenuSettingsSetUWP_Click(object sender, RoutedEventArgs e)
-    {
-        ProcUtils.ProcessStart(Utils.GetBinPath("EnableLoopback.exe"));
-    }
-
     public async Task AddServerViaClipboardAsync()
     {
         var clipboardData = WindowsUtils.GetClipboardData();
@@ -3692,22 +3564,6 @@ public partial class MainWindow : IDashboardBridge
         ShowHideWindow(true);
     }
 
-    private void MenuCheckUpdate_Click(object sender, RoutedEventArgs e)
-    {
-        _checkUpdateView ??= new CheckUpdateView();
-        _checkUpdateView.ViewModel = ViewModel?.CheckUpdateViewModel;
-        DialogHost.Show(_checkUpdateView, "RootDialog");
-
-        AppEvents.HasUpdateNotified.Publish(false);
-    }
-
-    private void MenuBackupAndRestore_Click(object sender, RoutedEventArgs e)
-    {
-        _backupAndRestoreView ??= new BackupAndRestoreView();
-        _backupAndRestoreView.ViewModel = ViewModel?.BackupAndRestoreViewModel;
-        DialogHost.Show(_backupAndRestoreView, "RootDialog");
-    }
-
     #endregion Event
 
     #region UI
@@ -3716,7 +3572,7 @@ public partial class MainWindow : IDashboardBridge
     {
         foreach (var button in new[]
         {
-            btnNavServers, btnNavMsg, btnNavAddServer, btnNavImport, btnNavScan,
+            btnNavMsg, btnNavImport, btnNavScan,
             btnNavConnection, btnNavProxies, btnNavConnections, btnNavGameBoost,
             btnNavSettings, btnNavRouting, btnNavDNS
         })
@@ -3734,11 +3590,10 @@ public partial class MainWindow : IDashboardBridge
     {
         var button = index switch
         {
-            0 => btnNavServers,
-            1 => btnNavMsg,
-            2 => btnNavProxies,
-            3 => btnNavConnections,
-            4 => btnNavConnection,
+            0 => btnNavMsg,
+            1 => btnNavProxies,
+            2 => btnNavConnections,
+            3 => btnNavConnection,
             _ => null,
         };
 
@@ -3746,6 +3601,45 @@ public partial class MainWindow : IDashboardBridge
         {
             SetActiveNav(button);
         }
+    }
+
+    /// <summary>
+    /// Makes the startup window visible again once the WebView2 dashboard has
+    /// rendered (App.OnStartup shows the window at Opacity 0 so the raw empty
+    /// frame never flashes — see <see cref="CoreWebView2_NavigationCompleted"/>).
+    /// Skipped while the window is minimized/hidden to the tray (hidden startup):
+    /// the reveal then happens when the window is restored. Safe to call repeatedly.
+    /// </summary>
+    private void RevealStartupWindow()
+    {
+        if (!_dashboardFirstPaintPending || _isClosing)
+        {
+            return;
+        }
+
+        if (WindowState == WindowState.Minimized)
+        {
+            // Hidden/minimized startup — stay pending; revealed on restore.
+            return;
+        }
+
+        _dashboardFirstPaintPending = false;
+
+        // Show the WebView2 dashboard. It starts Hidden (see MainWindow.xaml) so the
+        // browser surface can never paint its empty dark frame while the window is
+        // invisible — WPF Opacity does not reach the native WebView2 child HWND.
+        WebView.Visibility = Visibility.Visible;
+
+        // Fade the window in briefly instead of switching instantly: the WebView2
+        // compositor can lag becoming visible by a frame or two, and an instant jump
+        // could present a stale dark frame. A ~120 ms fade keeps the reveal quick but
+        // masks that gap — a skin iframe still painting its first frame simply
+        // becomes visible mid-fade.
+        var fadeIn = new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(120))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+        BeginAnimation(OpacityProperty, fadeIn);
     }
 
     public void ShowHideWindow(bool? blShow)
@@ -3766,6 +3660,11 @@ public partial class MainWindow : IDashboardBridge
             }
             this?.Activate();
             this?.Focus();
+
+            // A hidden-startup (AutoHideStartup / early minimize) that was never
+            // revealed because the window was still minimized when the dashboard
+            // finished booting becomes visible here.
+            RevealStartupWindow();
         }
         else
         {
@@ -3894,9 +3793,6 @@ public partial class MainWindow : IDashboardBridge
         gridMain1.Visibility = Visibility.Collapsed;
         gridMain2.Visibility = Visibility.Visible;
 
-        this.WhenAnyValue(v => v.ViewModel.ProfilesViewModel)
-            .Subscribe(vm => ViewHost.Show(tabProfiles2, vm))
-            .DisposeWith(currentLayoutDisposables);
         this.WhenAnyValue(v => v.ViewModel.MsgViewModel)
             .Subscribe(vm => ViewHost.Show(tabMsgView2, vm))
             .DisposeWith(currentLayoutDisposables);
@@ -3914,32 +3810,7 @@ public partial class MainWindow : IDashboardBridge
         this.Bind(ViewModel, vm => vm.TabMainSelectedIndex, v => v.tabMain2.SelectedIndex).DisposeWith(currentLayoutDisposables);
 
         // Land on the unified connection dashboard (mode + monitoring + app routing).
-        ViewModel.TabMainSelectedIndex = 4;
-    }
-
-    private void AddHelpMenuItem()
-    {
-        var coreInfo = CoreInfoManager.Instance.GetCoreInfo();
-        foreach (var it in coreInfo
-            .Where(t => t.CoreType is not ECoreType.v2fly
-                        and not ECoreType.hysteria))
-        {
-            var item = new MenuItem()
-            {
-                Tag = it.Url.Replace(@"/releases", ""),
-                Header = string.Format(ResUI.menuWebsiteItem, it.CoreType.ToString().Replace("_", " ")).UpperFirstChar()
-            };
-            item.Click += MenuItem_Click;
-            menuHelp.Items.Add(item);
-        }
-    }
-
-    private void MenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is MenuItem item)
-        {
-            ProcUtils.ProcessStart(item.Tag.ToString());
-        }
+        ViewModel.TabMainSelectedIndex = 3;
     }
 
     #endregion UI

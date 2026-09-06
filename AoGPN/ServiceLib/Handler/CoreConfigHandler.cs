@@ -39,9 +39,12 @@ public static class CoreConfigHandler
                 _ => await GenerateClientCustomConfig(node, fileName)
             };
         }
-        else if (context.RunCoreType == ECoreType.sing_box)
+        else if (context.RunCoreType == ECoreType.mihomo && Global.MihomoSupportConfigType.Contains(node.ConfigType))
         {
-            result = new CoreConfigSingboxService(context).GenerateClientConfigContent();
+            // GPN Global VPN (TUN/Proxy) — mihomo YAML: tüm trafik seçili profile
+            // gider (MATCH → proxy). Xray'in Windows TUN'u yoktur; mihomo hem TUN'u
+            // hem mixed-port (Proxy) dinleyicisini kendisi yönetir.
+            result = GenerateGlobalMihomoConfig(context);
         }
         else
         {
@@ -187,6 +190,55 @@ public static class CoreConfigHandler
         return ret;
     }
 
+    /// <summary>
+    /// Global VPN (mihomo) YAML üreticisi: seçili profil tek proxy'ye çevrilir,
+    /// TUN durumu context'ten gelir (IsTunEnabled — Proxy transportunda kapalı,
+    /// mixed-port devrede), kural tek <c>MATCH,global-proxy</c>'dir. Spli-tunnel
+    /// kuralı ÜRETİLMEZ — Global modda tüm trafik profile gider.
+    /// </summary>
+    private static RetResult GenerateGlobalMihomoConfig(CoreConfigContext context)
+    {
+        var ret = new RetResult();
+        try
+        {
+            var simpleDns = context.SimpleDnsItem ?? new SimpleDNSItem();
+            var nameservers = GpnMihomoConfigService.ParseDnsServers(
+                simpleDns.RemoteDNS, [Global.DomainRemoteDNSAddress.First()]);
+            var bootstrap = GpnMihomoConfigService.ParseDnsServers(simpleDns.BootstrapDNS, []);
+            var options = new GpnMihomoOptions
+            {
+                MixedPort = AppManager.Instance.GetLocalPort(EInboundProtocol.socks),
+                ExternalControllerPort = AppManager.Instance.StatePort2,
+                InterfaceName = context.IsTunEnabled
+                    ? MihomoTunSupport.DetectPhysicalInterfaceName(context.Node.Address)
+                    : null,
+                DnsEnabled = context.IsTunEnabled,
+                DnsNameservers = nameservers,
+                DnsDefaultNameservers = bootstrap,
+                DnsEnhancedMode = "fake-ip",
+                FakeIpRange = IsValidCidr(simpleDns.FakeIPRange) ? simpleDns.FakeIPRange! : "198.18.0.1/16",
+                LogFilePath = Path.Combine(Utils.GetLogPath(),
+                    $"ao_mihomo_{DateTime.Now:yyyy-MM-dd}.log").Replace('\\', '/'),
+            };
+            var yaml = MihomoGlobalConfigService.GenerateGlobalYaml(context.Node, options, context.IsTunEnabled);
+            if (yaml.IsNullOrEmpty())
+            {
+                ret.Msg = ResUI.FailedGenDefaultConfiguration;
+                return ret;
+            }
+            DiagLog.Write($"GPN_GLOBAL mihomo tun={context.IsTunEnabled} mixed={options.MixedPort} node={context.Node.Address}:{context.Node.Port} rule=MATCH,{MihomoGlobalConfigService.GlobalProxyName}");
+            ret.Data = yaml;
+            ret.Success = true;
+            ret.Msg = string.Format(ResUI.SuccessfulConfiguration, "");
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            ret.Msg = ResUI.FailedGenDefaultConfiguration;
+        }
+        return ret;
+    }
+
     /// <summary>Geçerli IPv4/IPv6 CIDR mi? (FakeIPRange kullanıcı ayarı koruması)</summary>
     private static bool IsValidCidr(string? cidr)
     {
@@ -311,11 +363,7 @@ public static class CoreConfigHandler
             }
             context.ServerTestItemMap[node.IndexId] = actNode.IndexId;
         }
-        if (coreType == ECoreType.sing_box)
-        {
-            result = new CoreConfigSingboxService(context).GenerateClientSpeedtestConfig(selecteds);
-        }
-        else if (coreType == ECoreType.Xray)
+        if (coreType == ECoreType.Xray)
         {
             result = new CoreConfigV2rayService(context).GenerateClientSpeedtestConfig(selecteds);
         }
@@ -340,14 +388,7 @@ public static class CoreConfigHandler
             return result;
         }
 
-        if (context.RunCoreType == ECoreType.sing_box)
-        {
-            result = new CoreConfigSingboxService(context).GenerateClientSpeedtestConfig(port);
-        }
-        else
-        {
-            result = new CoreConfigV2rayService(context).GenerateClientSpeedtestConfig(port);
-        }
+        result = new CoreConfigV2rayService(context).GenerateClientSpeedtestConfig(port);
         if (result.Success != true)
         {
             return result;

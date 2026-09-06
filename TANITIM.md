@@ -62,8 +62,7 @@ Altyapıda **Xray** ve **sing-box** çekirdeklerini kullanır; arayüz, WebView2
   Velocity…), animasyonlu efektler ve bağlanınca konfeti kutlaması
 - **3 tam bağımsız skin** (NEXUS GPN, CYBER, INFRA) — izole iframe içinde
   tamamen farklı tasarımlar, canlı uygulama durumu köprüsüyle beslenir
-- Splash ekranı (yüksek çözünürlüklü logo, yükleme çubuğu, sürüm),
-  sistem tepsisi temalı menü
+- Sistem tepsisi temalı menü
 
 ### 🌍 Dil ve platform
 - **9 dil:** Türkçe, İngilizce, Basitleştirilmiş/Geleneksel Çince, Farsça,

@@ -116,6 +116,20 @@ internal static class ProbeEgressNic
     /// hiçbir şey yapmaz. Başarısızlık ölümcül değildir — loglanır ve normal
     /// davranış sürer (TUN kapalıyken probe zaten fiziksel yoldan gider).
     /// </summary>
+    // Windows IP_UNICAST_IF yeteneği: bazı sistemlerde (sürücü yığını, sanal
+    // NIC'ler, WinDivert etkileşimi) IPv4 indeksli pin WSAEADDRNOTAVAIL (10049)
+    // üretir ve HER probe'da gürültülü hata basardı. İlk başarısız denemede
+    // "desteklenmiyor" olarak işaretlenir ve sonraki pin denemeleri sessizce
+    // atlanır — probe zaten pinsiz fiziksel yoldan gider (native modda tünel
+    // default rotayı değiştirmez; yalnızca auto_route TUN'lar pin gerektirir).
+    private static int _unicastIfCapability; // 0 = bilinmiyor, 1 = çalışıyor, -1 = desteklenmiyor
+
+    /// <summary>Test dikişi: pinleme yeteneğini sıfırlar (yetenek yeniden yoklanır).</summary>
+    internal static void ResetEgressCapabilityForTest()
+    {
+        Volatile.Write(ref _unicastIfCapability, 0);
+    }
+
     internal static void BindSocketEgress(Socket socket, AddressFamily family)
     {
         var snapshot = GetSnapshot();
@@ -129,38 +143,63 @@ internal static class ProbeEgressNic
             if (Utils.IsWindows())
             {
                 // IP_UNICAST_IF (31) — Windows IPv4/IPv6 çıkış arayüzü pinleme.
-                var index = family == AddressFamily.InterNetworkV6
-                    ? snapshot.PhysicalIpv6Index ?? snapshot.PhysicalIpv4Index
-                    : snapshot.PhysicalIpv4Index;
-                if (index is > 0)
+                // Aile/indeks uyumu ZORUNLU: IPv6 sokete IPv4 indeksi uygulanırsa
+                // WSAEINVAL, IPv4 sokete geçersiz indeks uygulanırsa WSAEADDRNOTAVAIL.
+                // IPv6 kapalıyken (kullanıcı ayarı) fiziksel NIC'in IPv6 indeksi
+                // YOKTUR — o zaman IPv4 indeksine düşmek yerine pin atlanır.
+                if (Volatile.Read(ref _unicastIfCapability) < 0)
                 {
-                    var level = family == AddressFamily.InterNetworkV6 ? SocketOptionLevel.IPv6 : SocketOptionLevel.IP;
-                    socket.SetSocketOption(level, (SocketOptionName)31, index.Value);
+                    return; // bu sistemde IP_UNICAST_IF desteklenmiyor — sessiz atla
                 }
+                var index = family == AddressFamily.InterNetworkV6
+                    ? snapshot.PhysicalIpv6Index
+                    : snapshot.PhysicalIpv4Index;
+                if (index is not > 0)
+                {
+                    return;
+                }
+                var level = family == AddressFamily.InterNetworkV6 ? SocketOptionLevel.IPv6 : SocketOptionLevel.IP;
+                try
+                {
+                    socket.SetSocketOption(level, (SocketOptionName)31, index.Value);
+                    Volatile.Write(ref _unicastIfCapability, 1);
+                }
+                catch (Exception ex)
+                {
+                    // İlk hata = yetenek yoklaması: bu sistemde pin çalışmıyor.
+                    // Sonraki denemeler sessizce atlanır (tek seferlik bilgi günlüğü).
+                    if (Interlocked.Exchange(ref _unicastIfCapability, -1) == 0)
+                    {
+                        Logging.SaveLog($"[{Tag}] IP_UNICAST_IF bu sistemde desteklenmiyor — egress pinleme atlandı (probe fiziksel yoldan gider): {ex.Message}");
+                    }
+                }
+                return;
             }
-            else if (Utils.IsLinux())
+            if (Utils.IsLinux())
             {
                 // SO_BINDTODEVICE (25) — arayüz adıyla egress bağlama (Linux).
                 if (!string.IsNullOrEmpty(snapshot.PhysicalName))
                 {
                     socket.SetSocketOption(SocketOptionLevel.Socket, (SocketOptionName)25, snapshot.PhysicalName);
                 }
+                return;
             }
-            else if (Utils.IsMacOS())
+            if (Utils.IsMacOS())
             {
                 // IP_BOUND_IF (25) / IPV6_BOUND_IF (125) — arayüz indeksi (macOS).
                 // Not: macOS yönetilen API'si GetIPv4Properties().Index'i döndürmez;
                 // indeks bulunamazsa no-op (macOS utun auto_route yakalaması Windows
                 // kadar agresif değildir).
                 var index = family == AddressFamily.InterNetworkV6
-                    ? snapshot.PhysicalIpv6Index ?? snapshot.PhysicalIpv4Index
+                    ? snapshot.PhysicalIpv6Index
                     : snapshot.PhysicalIpv4Index;
-                if (index is > 0)
+                if (index is not > 0)
                 {
-                    var option = family == AddressFamily.InterNetworkV6 ? 125 : 25;
-                    var level = family == AddressFamily.InterNetworkV6 ? SocketOptionLevel.IPv6 : SocketOptionLevel.IP;
-                    socket.SetSocketOption(level, (SocketOptionName)option, index.Value);
+                    return;
                 }
+                var option = family == AddressFamily.InterNetworkV6 ? 125 : 25;
+                var level = family == AddressFamily.InterNetworkV6 ? SocketOptionLevel.IPv6 : SocketOptionLevel.IP;
+                socket.SetSocketOption(level, (SocketOptionName)option, index.Value);
             }
         }
         catch (Exception ex)

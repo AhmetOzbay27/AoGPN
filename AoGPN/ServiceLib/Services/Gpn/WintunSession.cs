@@ -36,13 +36,20 @@ public interface IWintunSession : IDisposable
 public sealed class WintunSession : IWintunSession
 {
     private readonly IntPtr _session;
-    private readonly IntPtr _adapter;
+    private readonly Action<IntPtr> _endSession;
     private bool _disposed;
 
-    internal WintunSession(IntPtr adapter, IntPtr session)
+    /// <summary>
+    /// Yalnızca SESSION'ı sarar — adaptörün yaşam döngüsü WireGuardTunnelService'e
+    /// aittir (onu o yaratır ve WintunCloseAdapter ile kapatır). Dispose yalnızca
+    /// WintunEndSession çağırır; adaptör burada kapatılmaz. (Geçmişte burada da
+    /// WintunCloseAdapter çağrılıyordu → servisin Close'u aynı adaptörü İKİNCİ kez
+    /// kapatıyordu → çift-free → ntdll heap corruption 0xc0000374.)
+    /// </summary>
+    internal WintunSession(IntPtr session, Action<IntPtr>? endSession = null)
     {
-        _adapter = adapter;
         _session = session;
+        _endSession = endSession ?? WintunNative.WintunEndSession;
     }
 
     public bool IsOpen => !_disposed;
@@ -115,7 +122,6 @@ public sealed class WintunSession : IWintunSession
             return;
         }
         _disposed = true;
-        WintunNative.WintunEndSession(_session);
-        WintunNative.WintunCloseAdapter(_adapter);
+        _endSession(_session);
     }
 }

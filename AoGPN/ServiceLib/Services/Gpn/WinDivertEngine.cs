@@ -173,6 +173,23 @@ public sealed class WinDivertEngine : IDisposable, IAsyncDisposable
         OpenEx(filter, openParams, layer, priority, WinDivertNative.FlagRecvOnly | extraFlags);
     }
 
+    /// <summary>
+    /// Düz (plain) divert modunda OpenEx açar: paketler yığından çıkarılıp
+    /// kullanıcıya verilir AMA WinDivertSend etkin kalır — yakalanan ancak hedef
+    /// sürece ait olmayan paketler aynı handle üzerinden tekrar yığına enjekte
+    /// edilebilir (kullanıcı-modu PID ayırımı — NETWORK katmanı filtre içinde
+    /// süreç tanımadığı için zorunludur, bkz. WinDivertFilterBuilder).
+    /// Sniff/RecvOnly bayrağı taşımaz (flags = 0).
+    /// </summary>
+    public void OpenDivert(string? filter, in WinDivertOpenParams openParams, int layer = WinDivertNative.LayerNetwork, short priority = 0, ulong extraFlags = 0)
+    {
+        // Sniff/RecvOnly bayrağı taşımaz (flags = 0) — ancak kullanıcının seçtiği
+        // OpenEx kuyruk bayrakları (QueueLength/QueueSize) AYNEN iletilir. Klasik
+        // yolun ClassicFlagMask süzgeci burada YANLIŞ olurdu: OpenEx bitleri (0x400/
+        // 0x1000) o maskeyle silinir ve kullanıcının kuyruk ayarı kaybolurdu.
+        OpenEx(filter, openParams, layer, priority, extraFlags);
+    }
+
     private void CommitHandle(IntPtr handle, string? filter, int nativeError)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

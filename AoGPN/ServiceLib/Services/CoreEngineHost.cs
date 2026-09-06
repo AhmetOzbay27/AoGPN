@@ -188,7 +188,6 @@ public sealed class CoreEngineHost : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var requiredCore = _binaryRegistry.Validate(
-            requireSingBox: mainContext.RunCoreType == ECoreType.sing_box,
             requireXray: mainContext.RunCoreType == ECoreType.Xray,
             requireTun: mainContext.IsTunEnabled || preContext?.IsTunEnabled == true,
             requiredCore: mainContext.RunCoreType);
@@ -215,7 +214,6 @@ public sealed class CoreEngineHost : IAsyncDisposable
             {
                 await _update(false, "mihomo çekirdeği kuruldu ✓").ConfigureAwait(false);
                 requiredCore = _binaryRegistry.Validate(
-                    requireSingBox: mainContext.RunCoreType == ECoreType.sing_box,
                     requireXray: mainContext.RunCoreType == ECoreType.Xray,
                     requireTun: mainContext.IsTunEnabled || preContext?.IsTunEnabled == true,
                     requiredCore: mainContext.RunCoreType);

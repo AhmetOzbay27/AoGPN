@@ -20,12 +20,18 @@ public sealed record GpnSoftRoutingEntry(string EntryType, string Value, string 
 /// WARP SOCKS5 zinciri (warp-socks). Politika, küresel ayardan (GuiItem
 /// .VlessBypassNodeJson) <see cref="GpnSoftRouting.BuildPolicy(Config)"/> tarafından
 /// doldurulur — üretici ve yumuşak uygulayıcı böylece her zaman aynı egress'i hedefler.
+///
+/// <see cref="IpCheckExtraDomains"/>: kullanıcının Ayarlar → IPAPIUrl ayarındaki host'un
+/// ek IP-doğrulama domainidir (null/boş = yalnızca yerleşik hostlar). Üretici superset
+/// config'te bu domainlere sabit GPN-CHECK kural satırları basar — uygulamanın kendi
+/// doğrulama istekleri (AoGPN.exe → api.ip.sb) beyaz listede bile WG tünelinden çıkar.
 /// </summary>
 public sealed record GpnSoftRoutingPolicy(
     int Mode,
     bool InvertManualRouting,
     IReadOnlyList<GpnSoftRoutingEntry> Entries,
-    string? WarpEgressProxy = null)
+    string? WarpEgressProxy = null,
+    IReadOnlyList<string>? IpCheckExtraDomains = null)
 {
     /// <summary>
     /// Giriş kimlik anahtarları (sıralı) — çalışan config'in hangi giriş setiyle
@@ -38,10 +44,13 @@ public sealed record GpnSoftRoutingPolicy(
 /// <summary>
 /// Kesintisiz (make-before-break) GPN rota geçişi için saf yardımcılar.
 ///
-/// Superset config'te üç grup ailesi üretilir:
+/// Superset config'te dört grup ailesi üretilir:
 ///   * "GPN-Nodes"  — tüm WG düğümleri (düğüm değişimi; Faz 1),
 ///   * "GPN-MODE"   — yakalayıcı hedef: DIRECT | GPN-Nodes (mod değişimi),
-///   * "ao-&lt;i&gt;"     — i. girişin kural satırının hedefi (uygulama rota değişimi).
+///   * "ao-&lt;i&gt;"     — i. girişin kural satırının hedefi (uygulama rota değişimi),
+///   * "GPN-CHECK"  — IP doğrulama hostları (uygulamanın kendi api.ip.sb benzeri
+///                    istekleri): bağlıyken tünele, Off'ta DIRECT'e gider (bkz.
+///                    <see cref="CheckGroupTarget"/>).
 ///
 /// Mod/yön değişimi TÜM grupların seçim vektörünü yeniden hesaplar (giriş kuralları
 /// moddan bağımsız sabit satırlar olduğu için): Off → her şey DIRECT, Global VPN →
@@ -53,9 +62,10 @@ public sealed record GpnSoftRoutingPolicy(
 public static class GpnSoftRouting
 {
     /// <summary>
-    /// BSG launcher/API egress grubu: DIRECT | warp egress üyeleriyle (yalnızca
-    /// superset-legacy biçimde üretilir). Bu gruba bağlanan sabit DOMAIN-SUFFIX
-    /// satırları, WarpDialHealthMonitor faulted olduğunda GpnBypassEgressController
+    /// Launcher egress grubu: DIRECT | warp egress üyeleriyle (yalnızca
+    /// superset-legacy biçimde üretilir; warp egress'li launcher bypass satırları
+    /// bu gruba bağlanır). Bu gruba bağlanan sabit DOMAIN-SUFFIX satırları,
+    /// WarpDialHealthMonitor faulted olduğunda GpnBypassEgressController
     /// tarafından canlı (restart'sız) DIRECT'e çevrilir — WARP zinciri ölüyken
     /// launcher trafiği hata almak yerine doğrudan çıkar ve WAF engeli yerine
     /// bağlantı korunur; sağlıklıyken grup warp egress'e döner.
@@ -64,6 +74,18 @@ public static class GpnSoftRouting
 
     /// <summary>Yakalayıcı (unlisted) hedef grubu: DIRECT | GPN-Nodes üyeleriyle.</summary>
     public const string ModeGroupName = "GPN-MODE";
+
+    /// <summary>
+    /// IP doğrulama hedef grubu: DIRECT | GPN-Nodes üyeleriyle. Üretici superset
+    /// config'te uygulamanın kendi IP-doğrulama hostlarına (api.ip.sb vb.) sabit
+    /// DOMAIN-SUFFIX satırları basar; bu satırların hedefi bu gruptur. Grup seçimi
+    /// modla birlikte <see cref="CheckGroupTarget"/> ile hesaplanır ve yumuşak
+    /// uygulayıcı (GpnSoftPolicyApplier) mod değişimlerinde GPN-MODE ile birlikte
+    /// PUT'lar — böylece doğrulama isteği bağlıyken aktif WG tünelinden çıkar
+    /// ("IP değişmedi" yanlış alarmı üretilmez), Off'ta DIRECT'e dönerek ISP
+    /// baz çizgisi ölçümü bozulmaz.
+    /// </summary>
+    public const string CheckGroupName = "GPN-CHECK";
 
     /// <summary>i. girişin seçim grubu adı (kural satırı bu gruba işaret eder).</summary>
     public static string AppGroupName(int index) => $"ao-{index}";
@@ -113,7 +135,7 @@ public static class GpnSoftRouting
     }
 
     /// <summary>
-    /// BSG launcher egress grubunun istenen seçimi: degrade (WARP faulted) →
+    /// Launcher egress grubunun istenen seçimi: degrade (WARP faulted) →
     /// DIRECT, sağlıklı → warp egress üyesi (Çift Bağlantıda vless-launcher,
     /// legacy'de warp-socks). Bu değer GpnBypassEgressController tarafından
     /// canlı seçim PUT'larına çevrilir; üretici grubu varsayılan olarak sağlıklı
@@ -136,6 +158,18 @@ public static class GpnSoftRouting
             GpnRoutingDestination.Tunnel => GpnMihomoConfigService.NodesGroupName,
             _ => ClashDirect,
         };
+
+    /// <summary>
+    /// IP doğrulama (GPN-CHECK) grubunun moda göre istenen seçimi: Off → DIRECT,
+    /// bağlı her mod (Global VPN / Manuel — yön fark etmeksizin) → tünel grubu.
+    /// Bağlıyken uygulamanın kendi doğrulama istekleri aktif WG tünelinden çıkar ve
+    /// panel gerçek tünel çıkışını ölçer; Off'ta DIRECT'e döner ki ISP baz çizgisi
+    /// (disconnected ölçüm) tünel IP'siyle kirlenmesin.
+    /// </summary>
+    public static string CheckGroupTarget(int mode)
+        => mode == GameTriggerModes.Off
+            ? ClashDirect
+            : GpnMihomoConfigService.NodesGroupName;
 
     /// <summary>
     /// İstenen politika için tam seçim vektörü (mod hedefi + her girişin hedefi).
@@ -197,7 +231,8 @@ public static class GpnSoftRouting
         var entries = GpnRoutingRuleService.NormalizeEntries((ci?.ManualRoutes ?? []).Select(GpnRouteEntry.From))
             .Select(e => new GpnSoftRoutingEntry(e.EntryType, e.Value, e.Port, e.Action))
             .ToList();
-        return new GpnSoftRoutingPolicy(mode, invert, entries, ResolveWarpEgressProxy(config));
+        return new GpnSoftRoutingPolicy(mode, invert, entries, ResolveWarpEgressProxy(config),
+            ResolveIpCheckExtraDomains(config?.SpeedTestItem?.IPAPIUrl));
     }
 
     /// <summary>
@@ -214,7 +249,33 @@ public static class GpnSoftRouting
         var entries = GpnRoutingRuleService.NormalizeEntries(apps.Select(GpnRouteEntry.From))
             .Select(e => new GpnSoftRoutingEntry(e.EntryType, e.Value, e.Port, e.Action))
             .ToList();
-        return new GpnSoftRoutingPolicy(mode, invertManualRouting, entries, ResolveWarpEgressProxy(config));
+        return new GpnSoftRoutingPolicy(mode, invertManualRouting, entries, ResolveWarpEgressProxy(config),
+            ResolveIpCheckExtraDomains(config?.SpeedTestItem?.IPAPIUrl));
+    }
+
+    /// <summary>
+    /// Kullanıcının Ayarlar → IPAPIUrl ayarındaki host'u ek IP-doğrulama domaini
+    /// olarak çözer (üreticinin GPN-CHECK satırları yerleşik hostlara bunu da ekler).
+    /// URL çözümlenemezse, host boşsa ya da saf IP ise null döner — GPN-CHECK
+    /// satırları yalnızca yerleşik hostlarla (ip.sb, ipinfo.io, ip-api.com, ...)
+    /// basılır.
+    /// </summary>
+    public static IReadOnlyList<string>? ResolveIpCheckExtraDomains(string? ipApiUrl)
+    {
+        if (ipApiUrl.IsNullOrEmpty())
+        {
+            return null;
+        }
+        if (!Uri.TryCreate(ipApiUrl, UriKind.Absolute, out var uri) || uri.Host.IsNullOrEmpty())
+        {
+            return null;
+        }
+        // Saf IP hedef DOMAIN-SUFFIX ile eşleşmez; yalnızca gerçek hostname'ler anlamlıdır.
+        if (IPAddress.TryParse(uri.Host, out _))
+        {
+            return null;
+        }
+        return [uri.Host.ToLowerInvariant()];
     }
 
     /// <summary>

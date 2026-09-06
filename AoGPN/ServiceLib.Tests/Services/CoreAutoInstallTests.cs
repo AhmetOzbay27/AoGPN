@@ -29,6 +29,7 @@ public class CoreAutoInstallTests
         var ok = await CoreInstaller.InstallMissingCoreAsync(
             ECoreType.mihomo,
             (_, msg) => { updates.Add(msg); return Task.CompletedTask; },
+            cancellationToken: TestContext.Current.CancellationToken,
             isInstalledCheck: _ => false,
             downloadInstall: (coreType, update, _) =>
             {
@@ -50,6 +51,7 @@ public class CoreAutoInstallTests
         var ok = await CoreInstaller.InstallMissingCoreAsync(
             ECoreType.mihomo,
             (_, _) => Task.CompletedTask,
+            cancellationToken: TestContext.Current.CancellationToken,
             isInstalledCheck: _ => true,
             downloadInstall: (_, _, _) =>
             {
@@ -67,6 +69,7 @@ public class CoreAutoInstallTests
         var ok = await CoreInstaller.InstallMissingCoreAsync(
             ECoreType.mihomo,
             (_, _) => Task.CompletedTask,
+            cancellationToken: TestContext.Current.CancellationToken,
             isInstalledCheck: _ => false,
             downloadInstall: (_, _, _) => Task.FromResult(false));
 

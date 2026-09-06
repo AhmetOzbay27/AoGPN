@@ -73,6 +73,7 @@ public static class AoGpnDashboardServiceCollectionExtensions
             isClosing,
             notifyNodesOp,
             () => getViewModel()?.ProfilesViewModel,
+            getViewModel,
             invokeOnUiThread,
             proxyOnlyService,
             pushSystemProxyState,

@@ -12,15 +12,12 @@ public record NodeValidatorResult(List<string> Errors, List<string> Warnings)
 
 public class NodeValidator
 {
-    // Static validator rules
-    private static readonly HashSet<string> SingboxUnsupportedTransports =
-        [nameof(ETransport.kcp), nameof(ETransport.xhttp)];
+    // Static validator rules (mihomo — Global VPN çekirdeği)
+    private static readonly HashSet<string> MihomoUnsupportedTransports =
+        [nameof(ETransport.kcp), nameof(ETransport.xhttp), nameof(ETransport.httpupgrade)];
 
-    private static readonly HashSet<EConfigType> SingboxTransportSupportedProtocols =
-        [EConfigType.VMess, EConfigType.VLESS, EConfigType.Trojan, EConfigType.Shadowsocks];
-
-    private static readonly HashSet<string> SingboxShadowsocksAllowedTransports =
-        [nameof(ETransport.raw), nameof(ETransport.ws)];
+    private static readonly HashSet<EConfigType> MihomoTransportSupportedProtocols =
+        [EConfigType.VMess, EConfigType.VLESS, EConfigType.Trojan];
 
     public static NodeValidatorResult Validate(ProfileItem item, ECoreType coreType)
     {
@@ -48,17 +45,17 @@ public class NodeValidator
 
         // Network & Core Logic
         var net = item.GetNetwork();
-        if (coreType == ECoreType.sing_box)
+        if (coreType == ECoreType.mihomo)
         {
-            var transportError = ValidateSingboxTransport(item.ConfigType, net);
+            var transportError = ValidateMihomoTransport(item.ConfigType, net);
             if (transportError != null)
             {
                 v.Error(transportError);
             }
 
-            if (!Global.SingboxSupportConfigType.Contains(item.ConfigType))
+            if (!Global.MihomoSupportConfigType.Contains(item.ConfigType))
             {
-                v.Error(string.Format(ResUI.MsgCoreNotSupportProtocol, nameof(ECoreType.sing_box), item.ConfigType));
+                v.Error(string.Format(ResUI.MsgCoreNotSupportProtocol, nameof(ECoreType.mihomo), item.ConfigType));
             }
         }
         else if (coreType is ECoreType.Xray)
@@ -92,7 +89,7 @@ public class NodeValidator
                 v.Assert(!item.Password.IsNullOrEmpty(), string.Format(ResUI.MsgInvalidProperty, ResUI.TbId3));
                 v.Assert(
                     !string.IsNullOrEmpty(protocolExtra.SsMethod) &&
-                    Global.SsSecuritiesInSingbox.Contains(protocolExtra.SsMethod),
+                    Global.SsSecuritiesInMihomo.Contains(protocolExtra.SsMethod),
                     string.Format(ResUI.MsgInvalidProperty, ResUI.TbSecurity3));
                 break;
         }
@@ -130,13 +127,9 @@ public class NodeValidator
                 v.Warning(ResUI.MsgAllowInsecureDeprecated);
             }
 
-            if ((coreType == ECoreType.Xray
+            if (coreType is ECoreType.Xray or ECoreType.mihomo
                 && item.GetAllowInsecure()
-                && !isCertProvided
-                && item.CertSha.IsNullOrEmpty())
-                || (coreType == ECoreType.sing_box
-                    && item.GetAllowInsecure()
-                    && !isCertProvided))
+                && !isCertProvided)
             {
                 v.Warning(ResUI.MsgInsecureConfiguration);
             }
@@ -165,26 +158,19 @@ public class NodeValidator
         }
     }
 
-    private static string? ValidateSingboxTransport(EConfigType configType, string net)
+    private static string? ValidateMihomoTransport(EConfigType configType, string net)
     {
-        // sing-box does not support xhttp / kcp transports
-        if (SingboxUnsupportedTransports.Contains(net))
+        // mihomo does not support kcp / xhttp / httpupgrade transports
+        if (MihomoUnsupportedTransports.Contains(net))
         {
-            return string.Format(ResUI.MsgCoreNotSupportNetwork, nameof(ECoreType.sing_box), net);
+            return string.Format(ResUI.MsgCoreNotSupportNetwork, nameof(ECoreType.mihomo), net);
         }
 
-        // sing-box does not support non-tcp transports for protocols other than vmess/trojan/vless/shadowsocks
-        if (!SingboxTransportSupportedProtocols.Contains(configType) && net != nameof(ETransport.raw))
+        // mihomo supports non-tcp transports only for vmess/trojan/vless
+        if (!MihomoTransportSupportedProtocols.Contains(configType) && net != nameof(ETransport.raw))
         {
             return string.Format(ResUI.MsgCoreNotSupportProtocolTransport,
-                nameof(ECoreType.sing_box), configType.ToString(), net);
-        }
-
-        // sing-box shadowsocks only supports tcp/ws/quic transports
-        if (configType == EConfigType.Shadowsocks && !SingboxShadowsocksAllowedTransports.Contains(net))
-        {
-            return string.Format(ResUI.MsgCoreNotSupportProtocolTransport,
-                nameof(ECoreType.sing_box), configType.ToString(), net);
+                nameof(ECoreType.mihomo), configType.ToString(), net);
         }
 
         return null;

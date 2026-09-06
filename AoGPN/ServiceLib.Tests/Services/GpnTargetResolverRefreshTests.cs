@@ -50,7 +50,7 @@ public class GpnTargetResolverRefreshTests
 
         // İlk Resolve null (hedef yok) — hiçbir anlık görüntü yayınlanmadı.
         // Oyun bağlantı kurulduktan kısa süre sonra doğar:
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         source.Set(new ProcessInfo(100, 0, "Game.exe"));
 
         var hasSnapshot = await enumerator.MoveNextAsync().AsTask().WaitAsync(cts.Token);
@@ -77,7 +77,7 @@ public class GpnTargetResolverRefreshTests
             .GetAsyncEnumerator(lifetime.Token);
 
         // İlk anlık görüntü hemen gelir.
-        Assert.True(await enumerator.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1)));
+        Assert.True(await enumerator.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken));
         Assert.Equal(new[] { 100u }, enumerator.Current.Pids);
 
         // PID kümesi değişmedi — hızlı tik (150 ms) sessizdir; döngü 5 sn'lik

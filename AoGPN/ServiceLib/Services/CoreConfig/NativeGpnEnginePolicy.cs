@@ -9,19 +9,27 @@ namespace ServiceLib.Services.CoreConfig;
 /// yerel motor stratejisini (NativeGpnStartStrategy) seçer: harici mihomo süreci
 /// yerine uygulama-içi in-process motor (WinDivert + WireGuard + Wintun).
 ///
-/// TIER 1 FLIP (2026-09-04): varsayılan AÇIK — native motor birinci sınıf
-/// vatandaştır. Anahtar KAPALIYSA mevcut mihomo yolu birebir aynen kalır
-/// (dormant geri dönüş; testler tek tek pinler). Gerçek saha doğrulaması
-/// sürücülü (WinDivert .sys + Wintun) bir ortamda, uygulama Yönetici olarak
-/// çalıştırılarak yapılır — dotnet testi sürücüsüz koşar ve native veri
-/// düzlemini doğrulayamaz.
+/// SAHA GERİ ÇEKİLMESİ (2026-09-04, gece): Tier 1 flip canlı testlerde
+/// kullanıcı akışını karşılamadı — native motor yalnızca hedef oyunların UDP
+/// paketlerini yakalar (WinDivert NETWORK katmanı); "VPN rotalı" tarayıcıların
+/// (Chrome/Edge) TCP trafiği TUN'a girmez ve doğrudan ISP üzerinden çıkar
+/// (whatismyip/speedtest yerel IP gösterir — kullanıcı raporu). Eski çalışan
+/// sürümün ("2.0 Final") doğrulanmış motoru mihomo TUN + PROCESS-NAME
+/// kurallarıdır: beyaz listedeki uygulamanın TÜM trafiği (TCP dahil) tünele
+/// girer. Bu nedenle varsayılan KAPALI'ya döndü — GPN WireGuard bağlantıları
+/// yine mihomo TUN yolunu kullanır (byte-identical dormant geri dönüş;
+/// testler tek tek pinler). Native motor entegrasyonu (strateji + köprü +
+/// Tier 2/3/4) olduğu gibi korunur: sürücülü ortamda Wintun adaptörünün IP
+/// yapılandırması + TCP taşıma eksikleri giderilip saha doğrulandıktan sonra
+/// tek satırla yeniden açılabilir.
 /// </summary>
 public static class NativeGpnEnginePolicy
 {
     /// <summary>
-    /// True (varsayılan — Tier 1 flip): GPN WireGuard bağlantıları yerel
-    /// in-process motora yönlendirilir.
-    /// False: mihomo yolu aynen kalır (dormant geri dönüş).
+    /// True: GPN WireGuard bağlantıları yerel in-process motora yönlendirilir
+    /// (yalnızca oyun UDP yakalama — tarayıcı TCP taşımaz).
+    /// False (varsayılan — saha doğrulaması): mihomo TUN yolu aynen kalır;
+    /// VPN rotalı uygulamaların TCP dahil tüm trafiği tünelden geçer.
     /// </summary>
-    public static bool IsEnabled { get; set; } = true;
+    public static bool IsEnabled { get; set; } = false;
 }

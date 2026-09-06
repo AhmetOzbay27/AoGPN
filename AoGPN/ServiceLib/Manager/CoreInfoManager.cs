@@ -65,7 +65,6 @@ public sealed class CoreInfoManager
             {
                 lst.Add(ECoreType.Xray);
                 lst.Add(ECoreType.mihomo);
-                lst.Add(ECoreType.sing_box);
             }
         }
 
@@ -79,7 +78,6 @@ public sealed class CoreInfoManager
             ECoreType.AoGPN => !Utils.IsPackagedInstall(),
             ECoreType.Xray => true,
             ECoreType.mihomo => true,
-            ECoreType.sing_box => true,
             _ => false,
         };
     }
@@ -99,7 +97,6 @@ public sealed class CoreInfoManager
         var urlN = GetCoreUrl(ECoreType.AoGPN);
         var urlXray = GetCoreUrl(ECoreType.Xray);
         var urlMihomo = GetCoreUrl(ECoreType.mihomo);
-        var urlSingbox = GetCoreUrl(ECoreType.sing_box);
 
         _coreInfo =
         [
@@ -225,26 +222,6 @@ public sealed class CoreInfoManager
                     CoreExes = ["tuic-client", "tuic"],
                     Arguments = "-c {0}",
                     Url = GetCoreUrl(ECoreType.tuic),
-                },
-
-                new CoreInfo
-                {
-                    CoreType = ECoreType.sing_box,
-                    CoreExes = ["sing-box-client", "sing-box"],
-                    Arguments = "run -c {0} --disable-color",
-                    Url = GetCoreUrl(ECoreType.sing_box),
-
-                    ReleaseApiUrl = urlSingbox.Replace(Global.GithubUrl, Global.GithubApiUrl),
-                    DownloadUrlWin64 = urlSingbox + "/download/{0}/sing-box-{1}-windows-amd64.zip",
-                    DownloadUrlWinArm64 = urlSingbox + "/download/{0}/sing-box-{1}-windows-arm64.zip",
-                    DownloadUrlLinux64 = urlSingbox + "/download/{0}/sing-box-{1}-linux-amd64.tar.gz",
-                    DownloadUrlLinuxArm64 = urlSingbox + "/download/{0}/sing-box-{1}-linux-arm64.tar.gz",
-                    DownloadUrlLinuxRiscV64 = urlSingbox + "/download/{0}/sing-box-{1}-linux-riscv64.tar.gz",
-                    DownloadUrlLinuxLoong64 = urlSingbox + "/download/{0}/sing-box-{1}-linux-loong64.tar.gz",
-                    DownloadUrlOSX64 = urlSingbox + "/download/{0}/sing-box-{1}-darwin-amd64.tar.gz",
-                    DownloadUrlOSXArm64 = urlSingbox + "/download/{0}/sing-box-{1}-darwin-arm64.tar.gz",
-                    Match = "sing-box",
-                    VersionArg = "version",
                 },
 
                 new CoreInfo

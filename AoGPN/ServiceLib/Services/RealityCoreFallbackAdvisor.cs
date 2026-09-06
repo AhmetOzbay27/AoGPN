@@ -55,7 +55,7 @@ public static class RealityCoreFallbackAdvisor
             return RealityFallbackAdvice.None;
         }
 
-        if (!IsRealityNode(node) || failedCoreType != ECoreType.sing_box)
+        if (!IsRealityNode(node) || failedCoreType != ECoreType.mihomo)
         {
             return RealityFallbackAdvice.None;
         }

@@ -290,7 +290,7 @@ public partial class CoreConfigV2rayService
                         };
                         var setting = new Outboundsettings4Ray
                         {
-                            address = Utils.String2List(protocolExtra.WgInterfaceAddress)?.Select(s => s.Trim()).ToList() ?? ["172.16.0.2/32"],
+                            address = NormalizeWireGuardInterfaceAddresses(protocolExtra.WgInterfaceAddress),
                             secretKey = _node.Password,
                             reserved = Utils.String2List(protocolExtra.WgReserved)?.Select(s => s.Trim()).Select(int.Parse).ToList(),
                             mtu = protocolExtra.WgMtu > 0 ? protocolExtra.WgMtu : Global.TunMtus.First(),
@@ -958,5 +958,32 @@ public partial class CoreConfigV2rayService
         };
 
         return fragmentMask;
+    }
+
+    /// <summary>
+    /// Xray 26.3.27+ requires WireGuard interface addresses as host routes (/32 for IPv4);
+    /// legacy configs carrying e.g. /24 are rejected at startup ("interface address subnet
+    /// should be /32 for IPv4"). Normalize IPv4 prefixes to /32; bare IPs and IPv6 entries
+    /// are left untouched (verified against the shipped Xray binary).
+    /// </summary>
+    private static List<string> NormalizeWireGuardInterfaceAddresses(string? wgInterfaceAddress)
+    {
+        var entries = Utils.String2List(wgInterfaceAddress)?.Select(s => s.Trim()).ToList() ?? ["172.16.0.2/32"];
+        return entries
+            .Select(addr =>
+            {
+                var slash = addr.IndexOf('/');
+                if (slash < 0)
+                {
+                    return addr;
+                }
+                var ip = addr[..slash];
+                if (!IPAddress.TryParse(ip, out var parsed) || parsed.AddressFamily != AddressFamily.InterNetwork)
+                {
+                    return addr;
+                }
+                return ip + "/32";
+            })
+            .ToList();
     }
 }

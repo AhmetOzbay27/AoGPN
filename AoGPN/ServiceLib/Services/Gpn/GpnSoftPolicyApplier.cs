@@ -56,6 +56,8 @@ public static class GpnSoftSession
 /// rota değişikliklerini çekirdeği yeniden başlatmadan tek tek seçim PUT'larına çevirir.
 ///
 ///   PUT /proxies/GPN-MODE   {"name": "DIRECT" | "GPN-Nodes"}   → yakalayıcı (mod)
+///   PUT /proxies/GPN-CHECK  {"name": "DIRECT" | "GPN-Nodes"}   → IP doğrulama hostları
+///                                (bağlıyken tünel, Off'ta DIRECT — bkz. GpnSoftRouting.CheckGroupTarget)
 ///   PUT /proxies/ao-&lt;i&gt;    {"name": "GPN-Nodes"|"DIRECT"|"REJECT"|"warp-socks"|"vless-launcher"} → i. giriş
 ///   (warp egress üyesi: Çift Bağlantıda vless-launcher, legacy'de warp-socks)
 ///
@@ -63,7 +65,7 @@ public static class GpnSoftSession
 /// Aşağıdaki koşullardan biri sağlanmazsa <c>false</c> döner ve çağıran (SplitTunnel
 /// ApplyAsync) eski kural-yaz + reload yoluna düşer — davranış asla bozulmaz:
 ///  1) çalışan çekirdek mihomo'dur ve canlı config superset biçimindedir
-///     (GPN-MODE + GPN-Nodes + ao-* grupları mevcut),
+///     (GPN-MODE + GPN-CHECK + GPN-Nodes + ao-* grupları mevcut),
 ///  2) güncel giriş listesi, config'in üretildiği parmak iziyle birebir aynıdır
 ///     (yapısal değişiklik yok),
 ///  3) istenen hedef, grubun üye listesindedir ve PUT sonrası seçim doğrulanır.
@@ -134,9 +136,12 @@ public static class GpnSoftPolicyApplier
                 return false;
             }
 
-            // 1) Canlı config superset biçiminde mi (grup ailesi mevcut)?
+            // 1) Canlı config superset biçiminde mi (grup ailesi mevcut)? GPN-CHECK
+            //    eski superset config'lerde yoksa false → restart'lı fallback config'i
+            //    yeniden üretir (grup ve GPN-CHECK satırları o zaman gelir).
             if (!IsSelectorGroup(proxies, GpnMihomoConfigService.NodesGroupName)
-                || !IsSelectorGroup(proxies, GpnSoftRouting.ModeGroupName))
+                || !IsSelectorGroup(proxies, GpnSoftRouting.ModeGroupName)
+                || !IsSelectorGroup(proxies, GpnSoftRouting.CheckGroupName))
             {
                 DiagLog.Write($"{Tag} skip: çalışan config superset biçiminde değil");
                 return false;
@@ -153,10 +158,16 @@ public static class GpnSoftPolicyApplier
             // 2) İstenen seçim vektörü + değişmesi gereken gruplar (delta). Hedef grubun
             //    üye listesinde değilse bu bir kapı hatasıdır → false (restart'lı fallback).
             var (modeTarget, appTargets) = GpnSoftRouting.ComputeSelectionVector(desired);
+            var checkTarget = GpnSoftRouting.CheckGroupTarget(desired.Mode);
             var changes = new List<(string Group, string Target)>();
             if (!AppendIfChanged(proxies, GpnSoftRouting.ModeGroupName, modeTarget, changes))
             {
                 DiagLog.Write($"{Tag} skip: {GpnSoftRouting.ModeGroupName} hedefi üye değil ({modeTarget})");
+                return false;
+            }
+            if (!AppendIfChanged(proxies, GpnSoftRouting.CheckGroupName, checkTarget, changes))
+            {
+                DiagLog.Write($"{Tag} skip: {GpnSoftRouting.CheckGroupName} hedefi üye değil ({checkTarget})");
                 return false;
             }
             for (var i = 0; i < appTargets.Count; i++)
@@ -193,6 +204,8 @@ public static class GpnSoftPolicyApplier
             }
             var ok = verify.TryGetValue(GpnSoftRouting.ModeGroupName, out var modeGroup)
                 && string.Equals(modeGroup.now, modeTarget, StringComparison.OrdinalIgnoreCase)
+                && verify.TryGetValue(GpnSoftRouting.CheckGroupName, out var checkGroup)
+                && string.Equals(checkGroup.now, checkTarget, StringComparison.OrdinalIgnoreCase)
                 && AllApplied(verify, appTargets);
             if (ok)
             {

@@ -32,13 +32,12 @@ kaynaktan beslenir, ayrıca elle güncellenmesi **gerekmez**:
 
 | Nerede görünür | Kaynak |
 | --- | --- |
-| Splash ekranı (`SplashWindow.xaml.cs`) | `$"V{Utils.GetVersionInfo()}"` |
 | Dashboard About & Help sayfası (`#aboutVersion`) | `MainWindow.PushAppInfoAsync()` → `window.setAppInfo` → `Utils.GetVersionInfo()` |
 | Pencere başlığı / sürüm damgası | `Utils.GetVersionInfo()` |
 | Güncelleme kontrolü | `Utils.GetVersionInfo()` (assembly) |
 
-> Yani sürümü yalnızca `Directory.Build.props` içinde değiştirirsin; splash ve
-> About sayfası otomatik olarak doğru değeri gösterir.
+> Yani sürümü yalnızca `Directory.Build.props` içinde değiştirirsin; About
+> sayfası otomatik olarak doğru değeri gösterir.
 
 ---
 
@@ -205,7 +204,6 @@ cd AoGPN && dotnet test ServiceLib.Tests/ServiceLib.Tests.csproj \
 
 **Smoke (uygulama açıkken):**
 
-- Splash ekranında `V{assembly sürümü}` (ör. `V1.1.0`) yazdığını doğrula.
 - Kenar çubuğundan **About & Help** → Program Info sekmesinde sürümün
   `V1.1.0` olduğunu gör (canlı push ile assembly'den gelir).
 - Dil değiştirince About sayfası ve yeni eklenen görünümün Türkçe dahil 9 dilde
@@ -220,5 +218,4 @@ cd AoGPN && dotnet test ServiceLib.Tests/ServiceLib.Tests.csproj \
    geliştirme adımları varsa bu başlık altında `####` alt başlıklarına al.
 3. GitHub'da veya CI'da release etiketini `1.2.0` yap (mevcut biçim `v` öneksiz;
    örn. `7.24.4`) — assembly sürümüyle birebir.
-4. Dokunulan her yeni UI metni için 9 dil + fallback dict güncellendi.
-5. Bölüm 7'deki üç testi koş, splash + About sayfasını smoke'la.
+4. Dokunulan her yeni UI metni için 9 dil + fallback dict güncellendi.5. Bölüm 7'deki üç testi koş, About sayfasını smoke'la.

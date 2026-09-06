@@ -137,7 +137,7 @@ public static class CoreInstaller
             {
                 Utils.GetPath("wintun.dll"),
                 Utils.GetBinPath("wintun.dll", ECoreType.Xray.ToString()),
-                Utils.GetBinPath("wintun.dll", ECoreType.sing_box.ToString()),
+                Utils.GetBinPath("wintun.dll", ECoreType.mihomo.ToString()),
             }
             .FirstOrDefault(File.Exists);
         if (source is not null)
@@ -180,8 +180,8 @@ public static class CoreInstaller
             }
         }
 
-        // mihomo: GPN WireGuard çekirdeği — taze build'lerde hazır olmalı.
-        foreach (var coreType in new[] { ECoreType.sing_box, ECoreType.Xray, ECoreType.mihomo })
+        // mihomo: GPN WireGuard/Global VPN çekirdeği — taze build'lerde hazır olmalı.
+        foreach (var coreType in new[] { ECoreType.Xray, ECoreType.mihomo })
         {
             string? archive = null;
             var service = new UpdateService(config, (notify, msg) =>
@@ -265,11 +265,11 @@ public static class CoreInstaller
             if (!File.Exists(rootDll))
             {
                 // Xray Windows sürümü kendi klasöründe wintun.dll paketler;
-                // sing-box da paketleyebilir. Hangisi varsa onu köke taşı.
+                // mihomo da paketleyebilir. Hangisi varsa onu köke taşı.
                 var coreDll = new[]
                     {
                         Utils.GetBinPath("wintun.dll", ECoreType.Xray.ToString()),
-                        Utils.GetBinPath("wintun.dll", ECoreType.sing_box.ToString()),
+                        Utils.GetBinPath("wintun.dll", ECoreType.mihomo.ToString()),
                     }
                     .FirstOrDefault(File.Exists);
                 if (coreDll is not null)

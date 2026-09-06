@@ -64,10 +64,10 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var context = new CoreConfigContext
         {
-            Node = CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box),
-            RunCoreType = ECoreType.sing_box,
+            Node = CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo),
+            RunCoreType = ECoreType.mihomo,
             IsTunEnabled = true,
-            ProtectCoreTypeList = [ECoreType.Xray, ECoreType.sing_box],
+            ProtectCoreTypeList = [ECoreType.Xray, ECoreType.mihomo],
             RoutingItem = new RoutingItem
             {
                 Id = "r1",
@@ -99,8 +99,8 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var context = new CoreConfigContext
         {
-            Node = CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box),
-            RunCoreType = ECoreType.sing_box,
+            Node = CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo),
+            RunCoreType = ECoreType.mihomo,
             IsTunEnabled = true,
             ProtectCoreTypeList = [ECoreType.Xray],
             RoutingItem = new RoutingItem
@@ -132,8 +132,8 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var context = new CoreConfigContext
         {
-            Node = CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box),
-            RunCoreType = ECoreType.sing_box,
+            Node = CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo),
+            RunCoreType = ECoreType.mihomo,
             IsTunEnabled = true,
             ProtectCoreTypeList = [ECoreType.Xray],
             RoutingItem = null,
@@ -155,7 +155,7 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
 
         var applied = await harness.Service.ReconcileAsync(config);
 
@@ -170,7 +170,7 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
 
         await harness.Service.ReconcileAsync(config);
         var applied = await harness.Service.ReconcileAsync(config);
@@ -216,7 +216,7 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
         harness.ApplyProxy = _ => { harness.ProxyApplies++; return Task.FromResult(false); };
 
         var applied = await harness.Service.ReconcileAsync(config);
@@ -236,7 +236,7 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
 
         await harness.Service.ReconcileAsync(config);
         var second = await harness.Service.ReconcileAsync(config);
@@ -254,7 +254,7 @@ public sealed class SystemProxyOnlyServiceTests
         await harness.Service.ReconcileAsync(config);
         harness.Service.LastFailureReason.Should().NotBeNullOrEmpty();
 
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
         var applied = await harness.Service.ReconcileAsync(config);
 
         applied.Should().BeTrue();
@@ -266,9 +266,9 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
         harness.ContextBuilder = (_, node) => Task.FromResult(new CoreConfigContextBuilderResult(
-            new CoreConfigContext { Node = node, RunCoreType = ECoreType.sing_box },
+            new CoreConfigContext { Node = node, RunCoreType = ECoreType.mihomo },
             new NodeValidatorResult(["invalid address"], [])));
 
         var applied = await harness.Service.ReconcileAsync(config);
@@ -283,7 +283,7 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
         harness.ContextBuilder = (_, node) => Task.FromResult(new CoreConfigContextBuilderResult(
             new CoreConfigContext { Node = node, RunCoreType = ECoreType.openvpn },
             NodeValidatorResult.Empty()));
@@ -300,7 +300,7 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
 
         await harness.Service.ReconcileAsync(config);
         harness.Service.ReleaseOwnership();
@@ -319,12 +319,12 @@ public sealed class SystemProxyOnlyServiceTests
     public async Task RestartOnNodeChangeAsync_RestartsWithTheNewNode()
     {
         var harness = new Harness();
-        var nodeA = CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box, indexId: "a");
-        var nodeB = CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box, indexId: "b");
+        var nodeA = CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo, indexId: "a");
+        var nodeB = CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo, indexId: "b");
         var config = CreateConfig(ESysProxyType.ForcedChange);
         harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(nodeA);
         harness.ContextBuilder = (_, node) => Task.FromResult(new CoreConfigContextBuilderResult(
-            new CoreConfigContext { Node = node, RunCoreType = ECoreType.sing_box },
+            new CoreConfigContext { Node = node, RunCoreType = ECoreType.mihomo },
             NodeValidatorResult.Empty()));
 
         await harness.Service.ReconcileAsync(config);
@@ -346,7 +346,7 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
 
         await harness.Service.RestartOnNodeChangeAsync(config);
 
@@ -360,7 +360,7 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
         await harness.Service.ReconcileAsync(config);
 
         var active = CreateConfig(ESysProxyType.ForcedChange, GameTriggerModes.Vpn);
@@ -375,7 +375,7 @@ public sealed class SystemProxyOnlyServiceTests
     {
         var harness = new Harness();
         var config = CreateConfig(ESysProxyType.ForcedChange);
-        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.sing_box));
+        harness.NodeResolver = _ => Task.FromResult<ProfileItem?>(CoreConfigTestFactory.CreateVmessNode(ECoreType.mihomo));
         await harness.Service.ReconcileAsync(config);
 
         await harness.Service.StopAsync();
@@ -409,7 +409,7 @@ public sealed class SystemProxyOnlyServiceTests
             _ => Task.FromResult<ProfileItem?>(null);
         public Func<Config, ProfileItem, Task<CoreConfigContextBuilderResult>> ContextBuilder { get; set; } =
             (_, node) => Task.FromResult(new CoreConfigContextBuilderResult(
-                new CoreConfigContext { Node = node, RunCoreType = ECoreType.sing_box },
+                new CoreConfigContext { Node = node, RunCoreType = ECoreType.mihomo },
                 NodeValidatorResult.Empty()));
         public Func<Config, Task<bool>> ApplyProxy { get; set; } = null!;
 
@@ -417,8 +417,8 @@ public sealed class SystemProxyOnlyServiceTests
 
         public Harness()
         {
-            Directory.CreateDirectory(Path.Combine(_root, "sing_box"));
-            File.WriteAllText(Path.Combine(_root, "sing_box", "sing-box-client"), string.Empty);
+            Directory.CreateDirectory(Path.Combine(_root, "mihomo"));
+            File.WriteAllText(Path.Combine(_root, "mihomo", "mihomo-windows-amd64-v1"), string.Empty);
 
             ApplyProxy = _ =>
             {
@@ -479,7 +479,7 @@ public sealed class SystemProxyOnlyServiceTests
             _health[CoreHealthRole.Main] = new CoreHealthSnapshot(
                 CoreHealthRole.Main,
                 CoreHealthState.Ready,
-                ECoreType.sing_box,
+                ECoreType.mihomo,
                 port: 10808);
         }
 

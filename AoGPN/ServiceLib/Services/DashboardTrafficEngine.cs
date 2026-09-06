@@ -1,4 +1,5 @@
 using System.Reactive.Concurrency;
+using ServiceLib.Services.CoreConfig;
 
 namespace ServiceLib.Services;
 
@@ -183,13 +184,27 @@ public sealed class DashboardTrafficEngine
         {
             try
             {
-                var connected = AppManager.Instance.IsRunningCore(ECoreType.sing_box)
+                // Native (in-process) motor aktifken mihomo/sing-box çekirdeği YOKTUR —
+                // yerel SOCKS5 dinleyicisi de yoktur. Bu durumda SOCKS proxy üzerinden
+                // ping ölçümü her zaman zaman aşımına uğrar ve "kayıp %100" sahte alarmı
+                // üretir (canlı gözlenen durum). Native modda kayıp, köprü/tünel
+                // telemetrisinden (gönderilemeyen / yakalanan paket oranı) hesaplanır.
+                var nativeActive = IsNativeEngineActive();
+                var connected = nativeActive
+                    || AppManager.Instance.IsRunningCore(ECoreType.mihomo)
                     || AppManager.Instance.IsRunningCore(ECoreType.Xray);
                 RxSchedulers.MainThreadScheduler.Schedule(() => ApplyConnectionState(connected));
 
                 if (connected)
                 {
-                    await MeasurePingAsync(token);
+                    if (nativeActive)
+                    {
+                        ApplyNativeTunnelLoss();
+                    }
+                    else
+                    {
+                        await MeasurePingAsync(token);
+                    }
                 }
             }
             catch (Exception ex)
@@ -206,6 +221,43 @@ public sealed class DashboardTrafficEngine
                 return;
             }
         }
+    }
+
+    /// <summary>Native motor şu an çalışıyor mu (bridge canlı).</summary>
+    private static bool IsNativeEngineActive()
+        => NativeGpnEnginePolicy.IsEnabled
+           && AppManager.Instance.CaptureBridge is { IsRunning: true };
+
+    /// <summary>
+    /// Native motorun kayıp göstergesini tünel telemetrisinden doldurur: yakalanan
+    /// paketlerden gönderilemeyen/enjekte edilemeyenlerin oranı (send/inject hataları).
+    /// Henüz paket yoksa (oyun kapalı / Ready-idle) "--" korunur — proxy-süzülen
+    /// yanlış %100 alarmı üretilmez. Ping native modda SOCKS olmadığı için "--" kalır.
+    /// </summary>
+    private void ApplyNativeTunnelLoss()
+    {
+        var bridge = AppManager.Instance.CaptureBridge;
+        if (bridge is null || !bridge.IsRunning)
+        {
+            return;
+        }
+        var snap = bridge.TunnelSnapshot;
+        if (snap.Captured <= 0)
+        {
+            return; // kanıt yok — kayıp iddia etme
+        }
+        var failed = snap.SendFailed + snap.InjectFailed;
+        var loss = failed * 100.0 / snap.Captured;
+        LossValue = loss;
+        LossText = loss.ToString("0.0");
+        LossQuality = loss switch
+        {
+            0 => "kararlı",
+            < 5 => "düşük",
+            < 20 => "dikkat",
+            _ => "yüksek",
+        };
+        RaiseChanged();
     }
 
     private async Task MeasurePingAsync(CancellationToken token)

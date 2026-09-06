@@ -5,7 +5,6 @@ public class CoreConfigValidatorTests
     [Theory]
     [InlineData(ECoreType.Xray, "run -test -config")]
     [InlineData(ECoreType.v2fly_v5, "run -test -c")]
-    [InlineData(ECoreType.sing_box, "check -c")]
     [InlineData(ECoreType.mihomo, "-t -f")]
     public void SupportedCoresHaveValidationArguments(ECoreType coreType, string expectedPrefix)
     {

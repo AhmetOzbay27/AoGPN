@@ -114,10 +114,11 @@ public class CoreConfigContextBuilderTests
         proxyOnly.Context.RunCoreType.Should().Be(ECoreType.Xray,
             "proxy-only must keep the node's Xray core type despite EnableTun=true");
 
-        // Contrast: the ordinary (TUN) build path still forces sing-box.
+        // Contrast: the ordinary (TUN) build path now forces mihomo (Global VPN
+        // çekirdeği — sing-box kaldırıldı).
         var tun = await CoreConfigContextBuilder.Build(config, node, proxyOnly: false);
-        tun.Context.RunCoreType.Should().Be(ECoreType.sing_box,
-            "TUN build must still force sing-box for a non-sing-box core type");
+        tun.Context.RunCoreType.Should().Be(ECoreType.mihomo,
+            "TUN build must force mihomo for a non-mihomo core type");
         tun.Context.IsTunEnabled.Should().BeTrue();
     }
 
@@ -163,7 +164,7 @@ public class CoreConfigContextBuilderTests
                 IPAPIUrl = string.Empty,
             },
             Mux4RayItem = new Mux4RayItem { Concurrency = 8, XudpConcurrency = 16, XudpProxyUDP443 = "reject" },
-            Mux4SboxItem = new Mux4SboxItem { Protocol = Global.SingboxMuxs.First(), MaxConnections = 8 },
+            Mux4SboxItem = new Mux4SboxItem { MaxConnections = 8 },
             HysteriaItem = new HysteriaItem { UpMbps = 100, DownMbps = 100 },
             ClashUIItem = new ClashUIItem { ConnectionsColumnItem = [] },
             SystemProxyItem = new SystemProxyItem { SystemProxyExceptions = string.Empty },

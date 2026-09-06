@@ -2336,3 +2336,108 @@ test('dashboard: Wintun adapter card renders settings and Apply posts set_gpn_wi
 
   dash.close();
 });
+
+// ---------------------------------------------------------------------------
+// Real-ping results on the node cards (host → renderer contract)
+// ---------------------------------------------------------------------------
+// The WireGuard probe path (DashboardNodeService.RunWireGuardProbeAsync) used
+// to push the delay as a raw JSON number while window.updateNodeTest only
+// accepted strings — every WG result was silently dropped and the cards never
+// showed a delay ("—") nor "✗ başarısız" for -1. The renderer must accept both
+// the number form (WG probe) and the string form (native SpeedtestService).
+
+test('dashboard: node card renders probe delays sent as numbers or strings', async () => {
+  const dash = await bootDashboard();
+  const w = dash.window;
+  assert.ok(dash.openView('nodes'), 'nodes nav item must exist and be clickable');
+
+  // Host pushes the real node list (a WireGuard node) and finalizes it.
+  w.updateNodeListAppend([{
+    indexId: 'wg-it',
+    name: 'WG Italy',
+    address: '92.4.220.236',
+    port: 51820,
+    protocol: 'WireGuard',
+    country: 'IT',
+    delay: 0,
+    fav: false
+  }]);
+  w.updateNodeListDone('wg-it');
+
+  const card = () => dash.document.querySelector('.node-card[data-index="wg-it"]');
+  const badge = () => {
+    const c = card();
+    assert.ok(c, 'node card rendered');
+    return Array.from(c.querySelectorAll('span'))
+      .map(s => s.textContent.trim())
+      .find(t => t.includes('ms') || t.includes('başarısız') || t.includes('Test ediliyor') || t === '—');
+  };
+  assert.equal(badge(), '—', 'untested node shows the dash');
+
+  // Click the per-card ping button: posts test_nodes (run 1) and marks testing.
+  click(dash, card().querySelector('[data-ping]'));
+  const posted = dash.postsWith('test_nodes').at(-1);
+  assert.equal(posted.testType, 'tcp', 'per-card ping posts test_nodes');
+  const runId = posted.runId;
+  assert.equal(badge(), 'Test ediliyor…', 'card enters the testing state');
+
+  // The WireGuard probe path sends the delay as a raw JSON number — it must
+  // render exactly like the string form (regression: results were dropped).
+  w.updateNodeTest('wg-it', 45, runId);
+  assert.equal(badge(), '45 ms', 'numeric delay renders on the card');
+
+  // A failed probe (-1) must show the failure state, same as the native path.
+  w.updateNodeTest('wg-it', -1, runId);
+  assert.equal(badge(), '✗ başarısız', 'numeric -1 renders as failed');
+
+  // The native SpeedtestService string form keeps working unchanged.
+  w.updateNodeTest('wg-it', '18', runId);
+  assert.equal(badge(), '18 ms', 'string delay still renders');
+
+  dash.close();
+});
+
+test('dashboard: VLESS-style run (string delays) renders and clears end-to-end', async () => {
+  const dash = await bootDashboard();
+  const w = dash.window;
+  assert.ok(dash.openView('nodes'), 'nodes nav item must exist and be clickable');
+
+  w.updateNodeListAppend([
+    { indexId: 'vless-1', name: 'VLESS TR', address: '145.239.14.77', port: 443,
+      protocol: 'VLESS', country: 'TR', delay: 0, fav: false },
+    { indexId: 'vless-2', name: 'VLESS DE', address: '130.61.223.36', port: 8443,
+      protocol: 'VLESS', country: 'DE', delay: 0, fav: false }
+  ]);
+  w.updateNodeListDone('vless-1');
+
+  const badge = id => {
+    const c = dash.document.querySelector('.node-card[data-index="' + id + '"]');
+    assert.ok(c, 'card ' + id + ' rendered');
+    return Array.from(c.querySelectorAll('span'))
+      .map(s => s.textContent.trim())
+      .find(t => t.includes('ms') || t.includes('başarısız') || t.includes('Test ediliyor') || t === '—');
+  };
+
+  // Start the run like the host does (the renderer has already marked the nodes
+  // testing on the click that posted test_nodes).
+  click(dash, dash.document.querySelector('.node-card[data-index="vless-1"] [data-ping]'));
+  const runId = dash.postsWith('test_nodes').at(-1).runId;
+  assert.equal(badge('vless-1'), 'Test ediliyor…', 'node enters the testing state');
+
+  // GetClearItem pre-clears each node with the "Speedtesting…" status string.
+  w.updateNodeTest('vless-1', 'Speedtesting…', runId);
+  w.updateNodeTest('vless-2', 'Speedtesting…', runId);
+
+  // Per-node string results (the SpeedtestService sends Delay as a string).
+  w.updateNodeTest('vless-1', '47', runId);
+  w.updateNodeTest('vless-2', '-1', runId);
+  assert.equal(badge('vless-1'), '47 ms', 'VLESS delay renders');
+  assert.equal(badge('vless-2'), '✗ başarısız', 'VLESS failure renders');
+
+  // Terminal update clears the testing state without wiping measured delays.
+  w.updateNodeTest('', 'completed', runId);
+  assert.equal(badge('vless-1'), '47 ms', 'delay survives the terminal clear');
+  assert.equal(badge('vless-2'), '✗ başarısız', 'failure survives the terminal clear');
+
+  dash.close();
+});

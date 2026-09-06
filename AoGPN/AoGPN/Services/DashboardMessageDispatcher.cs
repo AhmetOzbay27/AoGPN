@@ -204,6 +204,24 @@ public sealed class DashboardMessageDispatcher
                     await PasteNodesAsync();
                     break;
 
+                case "edit_node":
+                    // Opens the native server-edit dialog for one node (right-click →
+                    // Düzenle in the dashboard) and republishes the list on OK.
+                    if (TryGetStringProperty(root, "indexId", out var editNodeIndexId))
+                    {
+                        await EditNodeAsync(editNodeIndexId);
+                    }
+                    break;
+
+                case "import_wireguard_conf":
+                    // WireGuard .conf files drag-and-dropped onto the dashboard;
+                    // the renderer reads them and sends name + raw text.
+                    if (TryGetWireGuardConfFiles(root, out var wgConfFiles))
+                    {
+                        await ImportWireGuardConfsAsync(wgConfFiles);
+                    }
+                    break;
+
                 case "delete_nodes":
                     if (!TryGetStringArrayProperty(root, "indexIds", out var deleteIds))
                     {
@@ -211,6 +229,16 @@ public sealed class DashboardMessageDispatcher
                     }
 
                     await DeleteNodesAsync(deleteIds);
+                    break;
+
+                case "move_node":
+                    // Drag-to-reorder in the dashboard's Default order view: move
+                    // indexId to the position of targetIndexId (native semantics).
+                    if (TryGetStringProperty(root, "indexId", out var moveFromId)
+                        && TryGetStringProperty(root, "targetIndexId", out var moveToId))
+                    {
+                        await MoveNodeAsync(moveFromId, moveToId);
+                    }
                     break;
 
                 case "test_nodes":
@@ -824,6 +852,36 @@ public sealed class DashboardMessageDispatcher
             && value > 0;
     }
 
+    /// <summary>
+    /// Reads the renderer's drag-and-drop payload: an array of { name, content }
+    /// objects for dropped WireGuard .conf files. Entries without content are
+    /// skipped; false is returned only when nothing usable remains.
+    /// </summary>
+    internal static bool TryGetWireGuardConfFiles(JsonElement root, out List<WireGuardConfFile> files)
+    {
+        files = [];
+        if (!root.TryGetProperty("files", out var filesEl)
+            || filesEl.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var fileEl in filesEl.EnumerateArray())
+        {
+            if (fileEl.ValueKind != JsonValueKind.Object
+                || !fileEl.TryGetProperty("content", out var contentEl)
+                || string.IsNullOrEmpty(contentEl.GetString()))
+            {
+                continue;
+            }
+            var name = fileEl.TryGetProperty("name", out var nameEl)
+                ? nameEl.GetString() ?? string.Empty
+                : string.Empty;
+            files.Add(new WireGuardConfFile(name, contentEl.GetString()!));
+        }
+        return files.Count > 0;
+    }
+
     internal static bool TryGetBooleanProperty(JsonElement objectElement, string propertyName, out bool value)
     {
         value = false;
@@ -1044,8 +1102,17 @@ public sealed class DashboardMessageDispatcher
     private Task PasteNodesAsync()
         => _bridge.PasteNodesAsync();
 
+    private Task EditNodeAsync(string indexId)
+        => _bridge.EditNodeAsync(indexId);
+
+    private Task ImportWireGuardConfsAsync(List<WireGuardConfFile> files)
+        => _bridge.ImportWireGuardConfsAsync(files);
+
     private Task DeleteNodesAsync(string[] indexIds)
         => _bridge.DeleteNodesAsync(indexIds);
+
+    private Task MoveNodeAsync(string indexId, string targetIndexId)
+        => _bridge.MoveNodeAsync(indexId, targetIndexId);
 
     private Task StartNodeSpeedtestAsync(string[] indexIds, string? testType = null, long requestedRunId = 0)
         => _bridge.StartNodeSpeedtestAsync(indexIds, testType, requestedRunId);

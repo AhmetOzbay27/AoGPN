@@ -14,16 +14,16 @@ public sealed class CoreBinaryRegistryTests
         var root = CreateTempDirectory();
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, "sing_box"));
-            File.WriteAllText(Path.Combine(root, "sing_box", "sing-box-client.exe"), string.Empty);
-            File.WriteAllText(Path.Combine(root, "sing_box", "wintun.dll"), string.Empty);
+            Directory.CreateDirectory(Path.Combine(root, "xray"));
+            File.WriteAllText(Path.Combine(root, "xray", "xray.exe"), string.Empty);
+            File.WriteAllText(Path.Combine(root, "wintun.dll"), string.Empty);
 
             var registry = new CoreBinaryRegistry(root, () => true);
-            var result = registry.Validate(requireSingBox: true, requireTun: true);
+            var result = registry.Validate(requireXray: true, requireTun: true);
 
             result.IsValid.Should().BeTrue();
-            registry.Resolve(ECoreType.sing_box).Should().Be(
-                Path.Combine(root, "sing_box", "sing-box-client.exe"));
+            registry.Resolve(ECoreType.Xray).Should().Be(
+                Path.Combine(root, "xray", "xray.exe"));
             result.Warnings.Should().BeEmpty();
         }
         finally
@@ -43,7 +43,7 @@ public sealed class CoreBinaryRegistryTests
 
             result.IsValid.Should().BeFalse();
             result.Errors.Should().ContainSingle(error => error.Contains("Xray", StringComparison.OrdinalIgnoreCase));
-            result.Assets.Should().Contain(asset => asset.Name == ECoreType.sing_box.ToString());
+            result.Assets.Should().Contain(asset => asset.Name == ECoreType.Xray.ToString());
         }
         finally
         {
@@ -186,6 +186,9 @@ public sealed class DashboardMessagePolicyTests
     [InlineData("test_route")]
     [InlineData("add_domain_route")]
     [InlineData("move_route")]
+    [InlineData("move_node")]
+    [InlineData("edit_node")]
+    [InlineData("import_wireguard_conf")]
     [InlineData("gpn_cluster_probe")]
     [InlineData("set_effects_tier")]
     [InlineData("set_window_behavior")]
@@ -214,9 +217,9 @@ public sealed class CoreEngineHostTests
         var root = CreateTempDirectory();
         try
         {
-            var singBoxDirectory = Path.Combine(root, "sing_box");
-            Directory.CreateDirectory(singBoxDirectory);
-            File.WriteAllText(Path.Combine(singBoxDirectory, "sing-box-client.exe"), string.Empty);
+            var xrayDirectory = Path.Combine(root, "xray");
+            Directory.CreateDirectory(xrayDirectory);
+            File.WriteAllText(Path.Combine(xrayDirectory, "xray.exe"), string.Empty);
 
             var registry = new CoreBinaryRegistry(root, () => true);
             var host = new CoreEngineHost(
@@ -233,7 +236,7 @@ public sealed class CoreEngineHostTests
             var context = new CoreConfigContext
             {
                 Node = new ProfileItem { IndexId = "test", Address = "127.0.0.1", Port = 443 },
-                RunCoreType = ECoreType.sing_box,
+                RunCoreType = ECoreType.Xray,
             };
 
             await Task.WhenAll(
@@ -408,7 +411,7 @@ public sealed class CoreEngineHostTests
                 _health[CoreHealthRole.Main] = new CoreHealthSnapshot(
                     CoreHealthRole.Main,
                     CoreHealthState.Ready,
-                    ECoreType.sing_box,
+                    ECoreType.mihomo,
                     port: 10808);
             }
             finally

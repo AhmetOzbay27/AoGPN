@@ -8,7 +8,6 @@ namespace ServiceLib.Tests.Manager;
 public class CoreManagerTests
 {
     [Theory]
-    [InlineData(ECoreType.sing_box)]
     [InlineData(ECoreType.mihomo)]
     [InlineData(ECoreType.Xray)]
     public void ShouldRunAsSudo_TunLaunchOnNonWindows_RequiresElevation(ECoreType coreType)
@@ -23,14 +22,14 @@ public class CoreManagerTests
         // the context snapshot that generated the config. A launch whose snapshot has TUN
         // disabled must never elevate, and a launch whose snapshot has TUN enabled must
         // elevate regardless of later changes to the live config.
-        CoreManager.ShouldRunAsSudo(isTunLaunch: false, ECoreType.sing_box, isNonWindows: true).Should().BeFalse();
+        CoreManager.ShouldRunAsSudo(isTunLaunch: false, ECoreType.mihomo, isNonWindows: true).Should().BeFalse();
         CoreManager.ShouldRunAsSudo(isTunLaunch: false, ECoreType.Xray, isNonWindows: true).Should().BeFalse();
     }
 
     [Fact]
     public void ShouldRunAsSudo_OnWindows_ShouldNotElevate()
     {
-        CoreManager.ShouldRunAsSudo(isTunLaunch: true, ECoreType.sing_box, isNonWindows: false).Should().BeFalse();
+        CoreManager.ShouldRunAsSudo(isTunLaunch: true, ECoreType.mihomo, isNonWindows: false).Should().BeFalse();
     }
 
     [Theory]

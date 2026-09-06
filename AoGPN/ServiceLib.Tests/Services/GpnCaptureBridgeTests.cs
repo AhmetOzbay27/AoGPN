@@ -31,12 +31,13 @@ public class GpnCaptureBridgeTests
     [Fact]
     public async Task Start_GameRunning_InjectsPacketsIntoTunnel_StopCleansUp()
     {
-        // Oyuncu çalışıyor (Game.exe), 2 UDP paketi yakalanıyor → köprü her ikisini
-        // de tünel inject hattından geçirir (varsayılan ConsumeInjectAsync DEĞİL).
+        // Oyuncu çalışıyor (Game.exe, PID 100). 2 geçerli UDP paketi (kaynak port
+        // 5000 → port tablosu PID 100'e atfeder) yakalanıyor → köprü her ikisini de
+        // tünel inject hattından geçirir (varsayılan ConsumeInjectAsync DEĞİL).
         var api = new FakeDivertApi(recvPackets:
         [
-            new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 },
-            new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x02 },
+            GpnPacketTestData.V4Udp(5000, 27015),
+            GpnPacketTestData.V4Udp(5000, 27015),
         ]);
         using var engine = new WinDivertEngine(api);
         using var session = new RecordingSession();
@@ -48,7 +49,8 @@ public class GpnCaptureBridgeTests
             tunnel,
             settings: StubSettingsProvider.Direct(), // SniffFirst=false → deterministik
             source: new FakeProcessTreeSource(new ProcessInfo(100, 0, "Game.exe")),
-            transportFactory: _ => noopTransport);
+            transportFactory: _ => noopTransport,
+            portPidTable: new FakePortPidTable(5000, 100));
 
         var started = await bridge.StartAsync(Server(), TestContext.Current.CancellationToken);
 
@@ -56,7 +58,7 @@ public class GpnCaptureBridgeTests
         bridge.IsRunning.Should().BeTrue();
         bridge.LastIdleCause.Should().Be(GpnBridgeIdleCause.None, "canlıya alınan deneme bekleme nedeni taşımaz");
         await WaitUntilAsync(() => bridge.TunnelSnapshot.Sent == 2, TimeSpan.FromSeconds(5));
-        bridge.TunnelSnapshot.Sent.Should().Be(2, "yakalanan her paket UDP veri yolundan sunucuya gönderilir (Faz 2d)");
+        bridge.TunnelSnapshot.Sent.Should().Be(2, "hedef sürece atfedilen her paket UDP veri yolundan sunucuya gönderilir (Faz 2d)");
         noopTransport.SentCount.Should().Be(2);
         session.Injected.Should().BeEmpty("giden yol Wintun'a değil gerçek sunucuya gider");
         tunnel.AdapterName.Should().Be("AoGPN-it", "tünel seçilen sunucuyla adlandırılır");
@@ -67,7 +69,8 @@ public class GpnCaptureBridgeTests
         bridge.IsRunning.Should().BeFalse();
         session.Open.Should().BeFalse("Stop tünel session'ını kapatır");
         engine.IsOpen.Should().BeFalse("Stop WinDivert handle'ını kapatır");
-        api.OpenFlags.Should().OnlyContain(f => (f & WinDivertNative.FlagRecvOnly) != 0);
+        api.OpenFlags.Should().OnlyContain(f => (f & (WinDivertNative.FlagRecvOnly | WinDivertNative.FlagSniff)) == 0,
+            "yakalama aşaması düz divert — Send etkin (hedef dışı paketler geri enjekte edilir)");
     }
 
     [Fact]
@@ -203,13 +206,13 @@ public class GpnCaptureBridgeTests
     }
 
     [Fact]
-    public async Task Start_FlushesTargetConnections_AfterTunnelOpen()
+    public async Task Start_DoesNotFlushTcpConnections_NativeCaptureOnlyTunnelsUdp()
     {
-        // Bayat bağlantı temizliği: tünel canlıya alındıktan SONRA hedef süreçlerin
-        // tünel açılmadan önceki soketleri kesilir (yeniden kendi tünelimizden kurulsun;
-        // tarayıcı yenilemesiz güncel IP görünsün). Sahte flusher gerçek soketleri kesmez,
-        // yalnızca hangi hedeflerin ve kaç bağlantının temizleneceğini kaydeder.
-        IReadOnlyList<string>? flushedTargets = null;
+        // Regresyon (canlı gözlenen): bağlantı anında hedef uygulamaların TCP soketleri
+        // KESİLMEZ. Köprü yalnızca outbound UDP yakalar (NETWORK katmanı processId
+        // tanımaz, filtre "udp"); TCP asla tünele alınmaz — yeniden kurulsa bile doğrudan
+        // gider. Eski davranış tarayıcı/Discord bağlantılarını gereksiz yere öldürüp
+        // ERR_NETWORK_CHANGED üretiyordu (kullanıcıda görülen "bağlantı kesildi").
         var flushCount = 0;
         var detector = new ForeignTunnelDetector(
             tunAdapterNames: () => [],
@@ -228,20 +231,19 @@ public class GpnCaptureBridgeTests
             source: new FakeProcessTreeSource(new ProcessInfo(100, 0, "Game.exe")),
             transportFactory: _ => new NoopWireGuardTransport(),
             foreignDetector: detector,
-            connectionFlusher: names =>
+            connectionFlusher: _ =>
             {
-                flushedTargets = names;
-                flushCount = 3;
-                return 3;
+                flushCount++;
+                return 42;
             });
 
         var started = await bridge.StartAsync(Server(), TestContext.Current.CancellationToken);
 
         started.Should().BeTrue();
-        tunnel.IsOpen.Should().BeTrue("flusher tünel açıldıktan sonra çalışır");
-        await WaitUntilAsync(() => flushCount == 3, TimeSpan.FromSeconds(5));
-        flushedTargets.Should().Contain("Game.exe");
-        flushedTargets.Should().Contain("GameChild.exe");
+        tunnel.IsOpen.Should().BeTrue("tünel normal açılır");
+        // Flush çalıştırılmamalı — TCP kesintisi yok (uygulamanın bağlantıları korunur).
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+        flushCount.Should().Be(0, "native yakalama TCP tünellemez — bağlantı kesmek saf aksaklıktır");
 
         await bridge.StopAsync();
     }
@@ -249,7 +251,7 @@ public class GpnCaptureBridgeTests
     [Fact]
     public async Task Start_FlushFails_DoesNotPreventConnect()
     {
-        // Bağlantı temizleyici hata verirse köprü asla düşmez — temizlik best-effort'tur.
+        // Bağlantı temizleyici hata verse bile köprü asla düşmez — temizlik best-effort'tur.
         using var engine = new WinDivertEngine(new FakeDivertApi());
         using var session = new RecordingSession();
         var tunnel = new WireGuardTunnelService(session: session);
@@ -454,12 +456,18 @@ public class GpnCaptureBridgeTests
         // çekirdeğiyle başlatır; süreç bazlı ayırımı (BsGLauncher.exe → warp-socks,
         // oyun → wg-<id>) mihomo kendi TUN'unda yapar. WinDivert yakalama köprüsü
         // (ikinci Wintun + filter) mihomo yolunda BİLEREK başlatılmaz — çakışır.
-        var config = CoreConfigTestFactory.CreateConfig(ECoreType.sing_box);
+        var config = CoreConfigTestFactory.CreateConfig(ECoreType.mihomo);
         config.TunModeItem.EnableTun = false; // pre-socks yolu yok — BuildAll tek sonuç
         BindConfig(config);
         // RoutingItem tablosu test host'unda InitApp tarafından oluşturulmaz; launcher
         // GetDefaultRouting üzerinden okur — sorgudan önce yarat (idempotent).
+        // AppManager'ın başlangıçta yarattığı tabloları yarat (idempotent): temiz bir
+        // bin'de guiNDB.db tablosuzdur ve launcher/context-builder FullConfigTemplate
+        // vb. tabloları okur — eksikse "no such table" ile çöker.
         SQLiteHelper.Instance.CreateTable<RoutingItem>();
+        SQLiteHelper.Instance.CreateTable<ProfileItem>();
+        SQLiteHelper.Instance.CreateTable<FullConfigTemplateItem>();
+        SQLiteHelper.Instance.CreateTable<DNSItem>();
 
         var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
         using var engine = new WinDivertEngine(api);
@@ -558,7 +566,10 @@ public class GpnCaptureBridgeTests
     [Fact]
     public async Task Strategy_MidSessionFault_NotifiesCoreManagerViaOnExited()
     {
-        var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
+        // Geçerli UDP paketi (kaynak port 5000 → PID 100 = Game.exe) — kullanıcı-modu
+        // rotalama yalnızca hedef sürece atfedilen paketleri tünel enjeksiyonuna
+        // sokar; FaultingEncryptTransport ancak o zaman Encrypt fault'unu üretir.
+        var api = new FakeDivertApi(recvPackets: [GpnPacketTestData.V4Udp(5000, 27015)]);
         using var engine = new WinDivertEngine(api);
         using var session = new RecordingSession();
         var tunnel = new WireGuardTunnelService(session: session);
@@ -568,7 +579,8 @@ public class GpnCaptureBridgeTests
             tunnel,
             settings: StubSettingsProvider.Direct(),
             source: new FakeProcessTreeSource(new ProcessInfo(100, 0, "Game.exe")),
-            transportFactory: _ => new FaultingEncryptTransport());
+            transportFactory: _ => new FaultingEncryptTransport(),
+            portPidTable: new FakePortPidTable(5000, 100));
         var onExitedCount = 0;
         var strategy = new NativeGpnStartStrategy(bridge);
         await strategy.StartAsync(NativeContext(),
@@ -618,10 +630,16 @@ public class GpnCaptureBridgeTests
     [Fact]
     public async Task Launcher_WireGuardLaunch_PolicyOff_KeepsMihomoContext()
     {
-        var config = CoreConfigTestFactory.CreateConfig(ECoreType.sing_box);
+        var config = CoreConfigTestFactory.CreateConfig(ECoreType.mihomo);
         config.TunModeItem.EnableTun = false;
         BindConfig(config);
+        // AppManager'ın başlangıçta yarattığı tabloları yarat (idempotent): temiz bir
+        // bin'de guiNDB.db tablosuzdur ve launcher/context-builder FullConfigTemplate
+        // vb. tabloları okur — eksikse "no such table" ile çöker.
         SQLiteHelper.Instance.CreateTable<RoutingItem>();
+        SQLiteHelper.Instance.CreateTable<ProfileItem>();
+        SQLiteHelper.Instance.CreateTable<FullConfigTemplateItem>();
+        SQLiteHelper.Instance.CreateTable<DNSItem>();
 
         var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
         using var engine = new WinDivertEngine(api);
@@ -665,10 +683,16 @@ public class GpnCaptureBridgeTests
     [Fact]
     public async Task Launcher_WireGuardLaunch_PolicyOn_FlagsNativeEngine_LauncherDoesNotStartBridge()
     {
-        var config = CoreConfigTestFactory.CreateConfig(ECoreType.sing_box);
+        var config = CoreConfigTestFactory.CreateConfig(ECoreType.mihomo);
         config.TunModeItem.EnableTun = false;
         BindConfig(config);
+        // AppManager'ın başlangıçta yarattığı tabloları yarat (idempotent): temiz bir
+        // bin'de guiNDB.db tablosuzdur ve launcher/context-builder FullConfigTemplate
+        // vb. tabloları okur — eksikse "no such table" ile çöker.
         SQLiteHelper.Instance.CreateTable<RoutingItem>();
+        SQLiteHelper.Instance.CreateTable<ProfileItem>();
+        SQLiteHelper.Instance.CreateTable<FullConfigTemplateItem>();
+        SQLiteHelper.Instance.CreateTable<DNSItem>();
 
         var api = new FakeDivertApi(recvPackets: [new byte[] { 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01 }]);
         using var engine = new WinDivertEngine(api);
@@ -920,6 +944,19 @@ public class GpnCaptureBridgeTests
             => _current;
     }
 
+    /// <summary>UDP port→PID köprüsü (kullanıcı-modu rotalama testi) — sabit harita.</summary>
+    private sealed class FakePortPidTable : IGpnPortPidTable
+    {
+        private readonly IReadOnlyDictionary<ushort, uint> _map;
+
+        public FakePortPidTable(ushort port, uint pid)
+        {
+            _map = new Dictionary<ushort, uint> { [port] = pid };
+        }
+
+        public IReadOnlyDictionary<ushort, uint> GetUdpPortOwners() => _map;
+    }
+
     private sealed class FakeDivertApi : IWinDivertApi
     {
         private readonly byte[][] _recvPackets;
@@ -1076,7 +1113,7 @@ public class GpnCaptureBridgeTests
             new Dictionary<CoreHealthRole, CoreHealthSnapshot>();
 
         public CoreHealthSnapshot GetHealth(CoreHealthRole role)
-            => new(role, CoreHealthState.Ready, ECoreType.sing_box, 10808);
+            => new(role, CoreHealthState.Ready, ECoreType.mihomo, 10808);
 
         public Task InitializeAsync(Config config, Func<bool, string, Task> update) => Task.CompletedTask;
 

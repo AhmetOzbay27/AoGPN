@@ -5,8 +5,12 @@ using ServiceLib.Handler;
 using ServiceLib.Handler.Fmt;
 using ServiceLib.Helper;
 using ServiceLib.Services;
+using ServiceLib.ViewModels;
 
 namespace AoGPN.Services;
+
+/// <summary>A WireGuard .conf file dropped onto the dashboard: display name (file name) and raw text.</summary>
+public sealed record WireGuardConfFile(string Name, string Content);
 
 // ─────────────────────────────────────────────────────────────────────────
 // DashboardNodeService — Düğüm/profil yönetimi iş mantığı (P0 Faz 2, 3. Dalga)
@@ -44,6 +48,7 @@ internal sealed class DashboardNodeService
     private readonly Func<bool> _isClosing;
     private readonly Func<string, Task> _notifyNodesOp;
     private readonly Func<ProfilesViewModel?> _getProfilesViewModel;
+    private readonly Func<MainWindowViewModel?> _getMainViewModel;
     private readonly Action<Action> _invokeOnUiThread;
     private readonly SystemProxyOnlyService _proxyOnlyService;
     private readonly Func<bool, Task> _pushSystemProxyState;
@@ -67,12 +72,33 @@ internal sealed class DashboardNodeService
     private bool _nodeTestRunning;
     private long _nodeTestRunId;
 
+    // A single run can probe through two paths at once (WireGuard probe chain +
+    // regular SpeedtestService). Both paths report completion; the run must be
+    // finalized exactly once — when the LAST path finishes. Finalizing while the
+    // other path is still in flight clears the renderer's testing state and every
+    // later result is dropped by its stale-callback guard (observed live: the WG
+    // probe finished first, so the VLESS node's TCP result never reached the card).
+    private int _nodeTestActivePaths;
+
+    // runId of the run that last dispatched the shared SpeedtestService, so the
+    // service's terminal update finalizes ITS OWN run — never a newer one (a
+    // stopped run's late callback must not finalize the run that replaced it).
+    private long _nodeSpeedtestRunId;
+
+    // Last-resort run watchdog: if a node test never finalizes (a probe, DNS
+    // lookup or core launch hanging), the renderer would stay on "Test ediliyor…"
+    // forever. The watchdog force-finishes the run after a generous grace period
+    // so the cards always come back to a settled state.
+    private CancellationTokenSource? _nodeTestWatchdogCts;
+    private const int NodeTestWatchdogSeconds = 120;
+
     public DashboardNodeService(
         Func<string, Task> executeScript,
         Func<bool> isWebViewReady,
         Func<bool> isClosing,
         Func<string, Task> notifyNodesOp,
         Func<ProfilesViewModel?> getProfilesViewModel,
+        Func<MainWindowViewModel?> getMainViewModel,
         Action<Action> invokeOnUiThread,
         SystemProxyOnlyService proxyOnlyService,
         Func<bool, Task> pushSystemProxyState,
@@ -83,6 +109,7 @@ internal sealed class DashboardNodeService
         _isClosing = isClosing ?? throw new ArgumentNullException(nameof(isClosing));
         _notifyNodesOp = notifyNodesOp ?? throw new ArgumentNullException(nameof(notifyNodesOp));
         _getProfilesViewModel = getProfilesViewModel ?? throw new ArgumentNullException(nameof(getProfilesViewModel));
+        _getMainViewModel = getMainViewModel ?? throw new ArgumentNullException(nameof(getMainViewModel));
         _invokeOnUiThread = invokeOnUiThread ?? throw new ArgumentNullException(nameof(invokeOnUiThread));
         _proxyOnlyService = proxyOnlyService ?? throw new ArgumentNullException(nameof(proxyOnlyService));
         _pushSystemProxyState = pushSystemProxyState ?? throw new ArgumentNullException(nameof(pushSystemProxyState));
@@ -297,6 +324,228 @@ internal sealed class DashboardNodeService
     }
 
     /// <summary>
+    /// Opens the native server-edit dialog for one node — the same flow as the
+    /// legacy ProfilesView right-click → Edit (AddServer/AddServer2/AddGroupServer
+    /// by config type) — then republishes the refreshed list on OK and reloads the
+    /// core when the edited node is the active profile.
+    /// </summary>
+    public async Task EditNodeAsync(string indexId)
+    {
+        if (indexId.IsNullOrEmpty())
+        {
+            return;
+        }
+
+        ProfileItem? item;
+        try
+        {
+            item = await AppManager.Instance.GetProfileItem(indexId);
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("AoGPN node edit lookup failed", ex);
+            await _notifyNodesOp("Node could not be loaded");
+            return;
+        }
+        if (item is null)
+        {
+            await _notifyNodesOp("Node not found");
+            return;
+        }
+
+        try
+        {
+            var config = AppManager.Instance.Config;
+            bool? ret = false;
+            var eConfigType = item.ConfigType;
+            if (eConfigType == EConfigType.Custom)
+            {
+                ret = await AppManager.Instance.WindowDialog.ShowDialogAsync(new AddServer2ViewModel(item));
+            }
+            else if (eConfigType.IsGroupType())
+            {
+                ret = await AppManager.Instance.WindowDialog.ShowDialogAsync(new AddGroupServerViewModel(item));
+            }
+            else
+            {
+                ret = await AppManager.Instance.WindowDialog.ShowDialogAsync(new AddServerViewModel(item));
+            }
+
+            if (ret != true)
+            {
+                return;
+            }
+
+            var profilesViewModel = _getProfilesViewModel();
+            if (profilesViewModel is not null)
+            {
+                await profilesViewModel.RefreshServers();
+                if (item.IndexId == config.IndexId)
+                {
+                    profilesViewModel.ReloadRequested.Publish();
+                }
+            }
+
+            await PushNodeInfoAsync(force: true);
+            await PushNodeListAsync();
+            await _notifyNodesOp("Node updated");
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("AoGPN node edit failed", ex);
+            await _notifyNodesOp("Node edit failed");
+        }
+    }
+
+    /// <summary>
+    /// Imports dropped WireGuard .conf files as server profiles named after the
+    /// file (the host half of drag-and-drop onto the dashboard). Every
+    /// [Interface]/[Peer] pair becomes a profile in the current group, persisted
+    /// through the same path as paste-imported WireGuard configs; the GPN server
+    /// catalog upsert is kept so both entry points behave identically.
+    /// </summary>
+    public async Task ImportWireGuardConfsAsync(IReadOnlyCollection<WireGuardConfFile> files)
+    {
+        if (files is null || files.Count == 0)
+        {
+            return;
+        }
+
+        var config = AppManager.Instance.Config;
+        var imported = 0;
+        try
+        {
+            foreach (var file in files)
+            {
+                if (file.Content.IsNullOrEmpty())
+                {
+                    continue;
+                }
+
+                var servers = WireguardFmt.ResolveConfig(file.Content);
+                if (servers is null || servers.Count == 0)
+                {
+                    continue;
+                }
+
+                var baseName = Path.GetFileNameWithoutExtension(file.Name ?? string.Empty).Trim();
+                if (baseName.IsNullOrEmpty())
+                {
+                    baseName = "WireGuard";
+                }
+
+                var added = 0;
+                foreach (var item in servers)
+                {
+                    item.Subid = config.SubIndexId;
+                    item.IsSub = false;
+                    // The file name becomes the server name; extra peers inside
+                    // the same file get a numeric suffix.
+                    item.Remarks = servers.Count > 1 && added > 0 ? $"{baseName} ({added + 1})" : baseName;
+                    if (await ConfigHandler.AddWireguardServer(config, item) == 0)
+                    {
+                        await WireGuardServerCatalog.UpsertFromProfileAsync(item);
+                        added++;
+                    }
+                }
+                imported += added;
+            }
+
+            if (imported > 0)
+            {
+                await ConfigHandler.SaveConfig(config);
+
+                var profilesViewModel = _getProfilesViewModel();
+                if (profilesViewModel is not null)
+                {
+                    await profilesViewModel.RefreshServers();
+                }
+
+                await PushNodeListAsync();
+                await _notifyNodesOp($"{imported} WireGuard server(s) imported");
+            }
+            else
+            {
+                await _notifyNodesOp("No valid WireGuard .conf found");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("AoGPN wireguard conf import failed", ex);
+            await _notifyNodesOp("WireGuard import failed");
+        }
+    }
+
+    /// <summary>
+    /// Reorders one node to the position of another (drag-to-reorder in the
+    /// dashboard's Default order), persisting through the exact path the native
+    /// servers view's drag-drop uses (ConfigHandler.MoveServer + EMove.Position),
+    /// then republishes the list.
+    /// </summary>
+    public async Task MoveNodeAsync(string indexId, string targetIndexId)
+    {
+        if (indexId.IsNullOrEmpty() || targetIndexId.IsNullOrEmpty() || indexId == targetIndexId)
+        {
+            return;
+        }
+
+        try
+        {
+            var config = AppManager.Instance.Config;
+            var profiles = await AppManager.Instance.ProfileItems(config.SubIndexId) ?? [];
+            if (profiles.Count < 2)
+            {
+                return;
+            }
+
+            // The indexes must come from the Sort-ordered list (the same order
+            // PushNodeListAsync and the native view use), not raw table order.
+            var exs = await ProfileExManager.Instance.GetProfileExs();
+            var sortByIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (exs is not null)
+            {
+                foreach (var ex in exs)
+                {
+                    if (ex?.IndexId is { Length: > 0 } && !sortByIndex.ContainsKey(ex.IndexId))
+                    {
+                        sortByIndex[ex.IndexId] = ex.Sort;
+                    }
+                }
+            }
+            var ordered = profiles
+                .OrderBy(p => sortByIndex.TryGetValue(p.IndexId, out var sort) ? sort : 0)
+                .ToList();
+
+            var fromIndex = ordered.FindIndex(p => p.IndexId == indexId);
+            var toIndex = ordered.FindIndex(p => p.IndexId == targetIndexId);
+            if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex)
+            {
+                return;
+            }
+
+            if (await ConfigHandler.MoveServer(config, ordered, fromIndex, EMove.Position, toIndex) != 0)
+            {
+                return;
+            }
+            await ProfileExManager.Instance.SaveTo();
+
+            var profilesViewModel = _getProfilesViewModel();
+            if (profilesViewModel is not null)
+            {
+                await profilesViewModel.RefreshServers();
+            }
+
+            await PushNodeListAsync();
+            await _notifyNodesOp("Node moved");
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("AoGPN node move failed", ex);
+            await _notifyNodesOp("Node reorder failed");
+        }
+    }
+
+    /// <summary>
     /// Deletes the given nodes through the same persistence path as the native view
     /// (ConfigHandler.RemoveServers), reloads the core if the active profile was
     /// among the removed ones, then republishes the list.
@@ -344,92 +593,356 @@ internal sealed class DashboardNodeService
     /// </summary>
     public async Task StartNodeSpeedtestAsync(string[] indexIds, string? testType = null, long requestedRunId = 0)
     {
-        if (_nodeTestRunning)
-        {
-            // The flag can only be trusted while the service really has a run in
-            // flight (e.g. a dashboard page reload can strand it as true). A
-            // stuck flag must not permanently block new tests.
-            if (_nodeSpeedtestService?.HasActiveRun == true)
-            {
-                await _notifyNodesOp("A ping test is already running — press Stop to cancel it");
-                return;
-            }
-            _nodeTestRunning = false;
-        }
+        // The renderer marks the cards as testing BEFORE the host processes the
+        // request, so EVERY refusal path below must roll the renderer state
+        // back — otherwise the cards stay on "Test ediliyor…" forever (observed
+        // live: a refused start left the whole node list stuck).
+        var runId = requestedRunId > 0 ? requestedRunId : Interlocked.Increment(ref _nodeTestRunId);
+        Interlocked.Exchange(ref _nodeTestRunId, runId);
 
-        List<ProfileItem> profiles;
         try
         {
-            profiles = indexIds.Length > 0
-                ? await LoadProfilesByIdsAsync(indexIds)
-                : await AppManager.Instance.ProfileItems(AppManager.Instance.Config.SubIndexId) ?? [];
+            if (_nodeTestRunning)
+            {
+                // The flag can only be trusted while the service really has a run in
+                // flight (e.g. a dashboard page reload can strand it as true). A
+                // stuck flag must not permanently block new tests.
+                if (_nodeSpeedtestService?.HasActiveRun == true)
+                {
+                    await _notifyNodesOp("A ping test is already running — press Stop to cancel it");
+                    await RollbackNodeTestUiAsync(runId);
+                    return;
+                }
+                _nodeTestRunning = false;
+            }
+
+            List<ProfileItem> profiles;
+            try
+            {
+                profiles = indexIds.Length > 0
+                    ? await LoadProfilesByIdsAsync(indexIds)
+                    : await AppManager.Instance.ProfileItems(AppManager.Instance.Config.SubIndexId) ?? [];
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog("AoGPN ping test profile load failed", ex);
+                await _notifyNodesOp("Ping test could not load the nodes");
+                await RollbackNodeTestUiAsync(runId);
+                return;
+            }
+
+            // Skip non-testable profiles (custom configs, portless groups) the same
+            // way SpeedtestService.GetClearItem does.
+            var testable = profiles.Where(p => p.ConfigType != EConfigType.Custom
+                && (p.ConfigType.IsComplexType() || p.Port > 0)).ToList();
+            if (testable.Count == 0)
+            {
+                await _notifyNodesOp("No testable nodes in the selection");
+                await RollbackNodeTestUiAsync(runId);
+                return;
+            }
+
+            var normalizedTestType = testType is "udp" or "both" ? testType : "tcp";
+            var actionType = normalizedTestType switch
+            {
+                "udp" => ESpeedActionType.UdpTest,
+                "both" => ESpeedActionType.Mixedtest,
+                _ => ESpeedActionType.Tcping,
+            };
+
+            _nodeTestRunning = true;
+            await ExecuteScriptSafelyAsync($"window.setNodeTestRunning(true, {runId});");
+            Logging.SaveLog($"AoGPN ping test starting with {testable.Count} node(s), type={normalizedTestType}");
+
+            // WireGuard endpoints speak UDP only, so the TCP-based SpeedtestService
+            // would mark every WireGuard node "failed". Route those through the same
+            // GPN probe the GPN servers panel uses (real WireGuard handshake + ICMP)
+            // so the dashboard node list shows a truthful delay.
+            var wireGuardNodes = testable.Where(p => p.ConfigType == EConfigType.WireGuard).ToList();
+            var regularNodes = testable.Where(p => p.ConfigType != EConfigType.WireGuard).ToList();
+
+            // This run has one active path per probing source. Each path decrements
+            // the counter when it finishes; the path that reaches zero finalizes the
+            // run. See FinalizeNodeTestPathAsync for why this must be shared.
+            Interlocked.Exchange(ref _nodeTestActivePaths,
+                (wireGuardNodes.Count > 0 ? 1 : 0) + (regularNodes.Count > 0 ? 1 : 0));
+
+            // A superseded run must stop probing right away: cancel the previous
+            // token before dispatching, so both paths of THIS run share the fresh one.
+            _nodePingCancellation?.Cancel();
+            _nodePingCancellation = new CancellationTokenSource();
+            if (wireGuardNodes.Count > 0)
+            {
+                _ = RunWireGuardProbeAsync(wireGuardNodes, runId, _nodePingCancellation.Token);
+            }
+            if (regularNodes.Count == 0)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref _nodeSpeedtestRunId, runId);
+            _nodeSpeedtestService ??= new SpeedtestService(AppManager.Instance.Config, result =>
+            {
+                // Never await the renderer from the speed-test worker thread:
+                // CoreWebView2.ExecuteScriptAsync can deadlock when awaited off the UI
+                // thread, which would stall the whole test run. Dispatch the DOM push
+                // onto the UI thread and return immediately, mirroring how the native
+                // servers view schedules speed-test updates on the main scheduler.
+                if (result is null || _isClosing() || !WebViewReady)
+                {
+                    return Task.CompletedTask;
+                }
+
+                try
+                {
+                    _invokeOnUiThread(async () => await PushNodeTestResultAsync(result));
+                }
+                catch
+                {
+                    // The dispatcher is shutting down; there is nothing left to push.
+                }
+
+                return Task.CompletedTask;
+            });
+
+            // A previous run that was interrupted is stopped before starting fresh.
+            _nodeSpeedtestService.ExitLoop();
+            _nodeSpeedtestService.RunLoop(actionType, regularNodes, _nodePingCancellation.Token);
+
+            // The run is fully dispatched — arm the last-resort watchdog so the
+            // renderer can never stay on "Test ediliyor…" if a probe, DNS lookup
+            // or core launch ever hangs.
+            ArmNodeTestWatchdog(runId);
         }
         catch (Exception ex)
         {
-            Logging.SaveLog("AoGPN ping test profile load failed", ex);
-            await _notifyNodesOp("Ping test could not load the nodes");
-            return;
+            Logging.SaveLog("AoGPN node test start failed", ex);
+            await RollbackNodeTestUiAsync(runId);
         }
+    }
 
-        // Skip non-testable profiles (custom configs, portless groups) the same
-        // way SpeedtestService.GetClearItem does.
-        var testable = profiles.Where(p => p.ConfigType != EConfigType.Custom
-            && (p.ConfigType.IsComplexType() || p.Port > 0)).ToList();
-        if (testable.Count == 0)
+    /// <summary>
+    /// Pings WireGuard nodes with the GPN probe chain (real WireGuard handshake +
+    /// ICMP fallback) instead of TCP, since WireGuard endpoints only answer UDP.
+    /// Results are pushed through the same updateNodeTest channel and persisted
+    /// into ProfileEx (delay) so the "remove failed" cleanup matches native
+    /// semantics.
+    /// </summary>
+    private async Task RunWireGuardProbeAsync(
+        List<ProfileItem> nodes,
+        long runId,
+        CancellationToken cancellationToken)
+    {
+        try
         {
-            await _notifyNodesOp("No testable nodes in the selection");
-            return;
-        }
-
-        var normalizedTestType = testType is "udp" or "both" ? testType : "tcp";
-        var actionType = normalizedTestType switch
-        {
-            "udp" => ESpeedActionType.UdpTest,
-            "both" => ESpeedActionType.Mixedtest,
-            _ => ESpeedActionType.Tcping,
-        };
-
-        _nodeTestRunning = true;
-        var runId = requestedRunId > 0 ? requestedRunId : Interlocked.Increment(ref _nodeTestRunId);
-        Interlocked.Exchange(ref _nodeTestRunId, runId);
-        await ExecuteScriptSafelyAsync($"window.setNodeTestRunning(true, {runId});");
-        Logging.SaveLog($"AoGPN ping test starting with {testable.Count} node(s), type={normalizedTestType}");
-
-        _nodePingCancellation?.Cancel();
-        _nodePingCancellation = new CancellationTokenSource();
-        _nodeSpeedtestService ??= new SpeedtestService(AppManager.Instance.Config, result =>
-        {
-            // Never await the renderer from the speed-test worker thread:
-            // CoreWebView2.ExecuteScriptAsync can deadlock when awaited off the UI
-            // thread, which would stall the whole test run. Dispatch the DOM push
-            // onto the UI thread and return immediately, mirroring how the native
-            // servers view schedules speed-test updates on the main scheduler.
-            if (result is null || _isClosing() || !WebViewReady)
+            var mainViewModel = _getMainViewModel();
+            if (mainViewModel is null)
             {
-                return Task.CompletedTask;
+                await FinalizeNodeTestPathAsync(runId);
+                return;
             }
 
+            // Reuse the catalog mapping so the probe chain has the real client
+            // private key + server public key required for the handshake.
+            var profiles = new List<GpnServerProfile>();
+            var indexByServerId = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var node in nodes)
+            {
+                if (WireGuardServerCatalog.TryMap(node, out var profile))
+                {
+                    profiles.Add(profile);
+                    indexByServerId[profile.ServerId] = node.IndexId;
+                }
+            }
+
+            if (profiles.Count == 0)
+            {
+                await FinalizeNodeTestPathAsync(runId);
+                return;
+            }
+
+            var options = new GpnProbeOptions
+            {
+                // Fewer samples than the GPN panel: the node list test should feel
+                // snappy while still averaging enough to filter one-off spikes.
+                Samples = 3,
+                PerSampleTimeoutMs = 1000,
+
+                // Direct-path measurement, identical to the connect-time selection
+                // (SelectBestServerAsync) that reports real values in the field.
+                // EscapeTunnelForProbes is designed for the failover MONITOR, which
+                // runs while AoGPN's own TUN is up; when the dashboard node test
+                // sets it, ANY up tunnel — including a foreign one like the user's
+                // own WireGuard client (wireguard.exe) — makes ProbeEgressNic report
+                // "tunnel active", ICMP gets skipped and the delay hinges on a
+                // single short handshake window. Reachable servers then show
+                // "✗ başarısız" while the same chain at connect time measures them
+                // fine. Without the flag, ICMP is measured on the direct path; if
+                // AoGPN's own TUN is up, the probes travel the tunnel and report
+                // the tunneled latency — a value either way.
+                EscapeTunnelForProbes = false,
+
+                // One dropped packet must not fail the measurement: two attempts
+                // with a 2 s window each, instead of the default single short try.
+                HandshakeProbe = new WireGuardHandshakeProbeOptions(WaitTimeoutMs: 2000, MaxAttempts: 2),
+            };
+
+            var icmpResults = await mainViewModel.ProbeServersAsync(profiles, options, cancellationToken);
+            var udpResults = await mainViewModel.ProbeUdpAllAsync(profiles, options, cancellationToken);
+            var udpByServer = udpResults.ToDictionary(u => u.ServerId, StringComparer.Ordinal);
+
+            foreach (var probe in icmpResults)
+            {
+                if (!indexByServerId.TryGetValue(probe.ServerId, out var indexId))
+                {
+                    continue;
+                }
+
+                // Prefer the handshake RTT (definitive proof the server accepted
+                // our keys); fall back to ICMP delay when the handshake channel is
+                // disabled or unreachable.
+                var delayMs = -1;
+                if (udpByServer.TryGetValue(probe.ServerId, out var udp)
+                    && udp.Status == UdpProbeStatus.Open
+                    && udp.RoundTripMs >= 0)
+                {
+                    delayMs = udp.RoundTripMs;
+                }
+                else if (probe.IsSuccess && probe.DelayMs >= 0)
+                {
+                    delayMs = probe.DelayMs;
+                }
+
+                ProfileExManager.Instance.SetTestDelay(indexId, delayMs);
+                await PushNodeTestResultAsync(indexId, delayMs, runId);
+            }
+
+            await FinalizeNodeTestPathAsync(runId);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded/stopped run — the new run owns the renderer state now.
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("AoGPN wireguard node probe failed", ex);
+            await FinalizeNodeTestPathAsync(runId);
+        }
+    }
+
+    /// <summary>
+    /// Marks one probing path (WireGuard chain or regular speed-test run) as
+    /// finished. The run is finalized — renderer state cleared, "completed" pushed
+    /// — exactly once, when the LAST active path finishes. Stale paths from a
+    /// superseded or stopped run are ignored (runId no longer matches), so a late
+    /// callback can never finalize the run that replaced it.
+    /// </summary>
+    private async Task FinalizeNodeTestPathAsync(long runId)
+    {
+        if (runId != Volatile.Read(ref _nodeTestRunId))
+        {
+            return;
+        }
+
+        // >0: another path is still probing — it finalizes. <0: a duplicate
+        // terminal update (e.g. "Skip" followed by "Completed"); already done.
+        if (Interlocked.Decrement(ref _nodeTestActivePaths) != 0)
+        {
+            return;
+        }
+
+        _nodeTestRunning = false;
+        _nodeTestWatchdogCts?.Cancel();
+        await ExecuteScriptSafelyAsync(
+            $"window.updateNodeTest({JsonSerializer.Serialize(string.Empty)}, {JsonSerializer.Serialize("completed")}, {runId});");
+    }
+
+    /// <summary>
+    /// Rolls the renderer's optimistic "testing" state back when the host refuses
+    /// a test (already running / no testable nodes / load failure) or the start
+    /// itself throws. Without this the cards would stay on "Test ediliyor…"
+    /// forever — the renderer marks them before the host answers.
+    /// </summary>
+    private async Task RollbackNodeTestUiAsync(long runId)
+    {
+        // Only the run that owns the renderer state may clear it; a stale
+        // refusal must never stomp a newer run's state.
+        if (runId != Volatile.Read(ref _nodeTestRunId))
+        {
+            return;
+        }
+
+        _nodeTestRunning = false;
+        await ExecuteScriptSafelyAsync($"window.setNodeTestRunning(false, {runId});");
+    }
+
+    /// <summary>
+    /// Last-resort run watchdog: when a node test is dispatched, this timer is
+    /// armed for <see cref="NodeTestWatchdogSeconds"/>. If the run has not
+    /// finalized by then (a probe, DNS lookup or core launch hanging), the
+    /// probing is cancelled and the renderer state is cleared so the cards can
+    /// never stay on "Test ediliyor…" indefinitely. The runId guard ensures a
+    /// superseded or newer run is never touched.
+    /// </summary>
+    private void ArmNodeTestWatchdog(long runId)
+    {
+        _nodeTestWatchdogCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _nodeTestWatchdogCts = cts;
+
+        _ = Task.Run(async () =>
+        {
             try
             {
-                _invokeOnUiThread(async () => await PushNodeTestResultAsync(result));
+                await Task.Delay(TimeSpan.FromSeconds(NodeTestWatchdogSeconds), cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return; // the run finalized (or was superseded) before the deadline
+            }
+
+            if (runId != Volatile.Read(ref _nodeTestRunId))
+            {
+                return; // a newer run owns the renderer state now
+            }
+
+            Logging.SaveLog($"AoGPN node test watchdog fired — run {runId} forced to finish");
+            _nodePingCancellation?.Cancel();
+            _nodeSpeedtestService?.ExitLoop();
+
+            // Reset the path counter so late completions of the stuck paths are
+            // treated as stale (decrementing from 0 never reaches the finalize
+            // branch) and the renderer is cleared exactly once, on the UI thread.
+            Interlocked.Exchange(ref _nodeTestActivePaths, 0);
+            _nodeTestRunning = false;
+            try
+            {
+                _invokeOnUiThread(async () =>
+                    await ExecuteScriptSafelyAsync($"window.setNodeTestRunning(false, {runId});"));
             }
             catch
             {
-                // The dispatcher is shutting down; there is nothing left to push.
+                // The dispatcher is shutting down; there is nothing left to clear.
             }
-
-            return Task.CompletedTask;
-        });
-
-        // A previous run that was interrupted is stopped before starting fresh.
-        _nodeSpeedtestService.ExitLoop();
-        _nodeSpeedtestService.RunLoop(actionType, testable, _nodePingCancellation.Token);
+        }, CancellationToken.None);
     }
 
     /// <summary>
     /// Pushes one speed-test result to the renderer on the UI thread. An empty
     /// IndexId marks the run as finished/stopped and clears the running state.
     /// </summary>
+    /// <summary>Pushes one probe result (index id + delay) for the WireGuard node probe path.</summary>
+    private async Task PushNodeTestResultAsync(string indexId, int delay, long runId)
+    {
+        // The renderer contract (window.updateNodeTest) expects the delay as a
+        // STRING, exactly like the native SpeedtestService path (SpeedTestResult.
+        // Delay is a string). A raw JSON number is silently dropped there — the
+        // WireGuard node probe used to send numbers, so every WG result vanished
+        // and the cards never showed a delay ("—") nor "✗ başarısız" for -1.
+        await ExecuteScriptSafelyAsync(
+            $"window.updateNodeTest({JsonSerializer.Serialize(indexId)}, {JsonSerializer.Serialize(delay.ToString())}, {runId});");
+    }
+
     private async Task PushNodeTestResultAsync(SpeedTestResult result)
     {
         if (result is null)
@@ -437,12 +950,17 @@ internal sealed class DashboardNodeService
             return;
         }
 
-        var runId = Volatile.Read(ref _nodeTestRunId);
+        // Empty IndexId = terminal update of the shared SpeedtestService run.
+        // Route it through the shared path counter: it finalizes the run only
+        // when the WireGuard probe path (if any) is also finished, and only for
+        // the run that actually dispatched the service — never a newer one.
         if (result.IndexId.IsNullOrEmpty())
         {
-            _nodeTestRunning = false;
+            await FinalizeNodeTestPathAsync(Volatile.Read(ref _nodeSpeedtestRunId));
+            return;
         }
 
+        var runId = Volatile.Read(ref _nodeTestRunId);
         await ExecuteScriptSafelyAsync(
             $"window.updateNodeTest({JsonSerializer.Serialize(result.IndexId)}, {JsonSerializer.Serialize(result.Delay)}, {runId});");
     }
@@ -453,6 +971,7 @@ internal sealed class DashboardNodeService
         Interlocked.Increment(ref _nodeTestRunId);
         _nodePingCancellation?.Cancel();
         _nodeSpeedtestService?.ExitLoop();
+        _nodeTestWatchdogCts?.Cancel();
         _nodeTestRunning = false;
     }
 
@@ -947,10 +1466,17 @@ internal sealed class DashboardNodeService
             };
         };
 
+        // Mirror the native servers list order (ProfilesViewModel.GetProfileItemsEx
+        // orders by ProfileEx.Sort, missing entries first). The dashboard's
+        // "Default order" view and drag-to-reorder both rely on this order.
+        var orderedProfiles = profiles
+            .OrderBy(p => exByIndex.TryGetValue(p.IndexId, out var sortEx) ? sortEx.Sort : 0)
+            .ToList();
+
         // Disabled nodes are hidden from the main list and pushed separately so
         // the renderer can show them in their own section with restore/delete.
-        var nodes = profiles.Where(p => !disabledIds.Contains(p.IndexId)).Select(projectNode).ToList();
-        var disabledNodes = profiles.Where(p => disabledIds.Contains(p.IndexId)).Select(projectNode).ToList();
+        var nodes = orderedProfiles.Where(p => !disabledIds.Contains(p.IndexId)).Select(projectNode).ToList();
+        var disabledNodes = orderedProfiles.Where(p => disabledIds.Contains(p.IndexId)).Select(projectNode).ToList();
 
         const int chunkSize = 150;
         for (var offset = 0; offset < nodes.Count; offset += chunkSize)

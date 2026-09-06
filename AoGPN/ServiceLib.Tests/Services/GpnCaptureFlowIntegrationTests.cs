@@ -1,12 +1,24 @@
 using AwesomeAssertions;
+using ServiceLib.Common;
+using ServiceLib.Enums;
+using ServiceLib.Handler;
+using ServiceLib.Handler.Builder;
+using ServiceLib.Helper;
+using ServiceLib.Models;
+using ServiceLib.Models.Dto;
+using ServiceLib.Models.Entities;
+using ServiceLib.Services;
+using ServiceLib.Services.CoreConfig;
+using ServiceLib.Services.CoreConfig.Mihomo;
+using Xunit;
 
 namespace ServiceLib.Tests.Services;
 
 /// <summary>
 /// End-to-end GPN split-tunnel flow: the managed routing rules
 /// (<see cref="ManualRoutingRules.BuildManagedRules"/>) are generated into a real
-/// sing-box config (via <see cref="CoreConfigSingboxService.GenerateClientConfigContent"/>),
-/// and the process names the config routes to the tunnel (proxy outbound) must match
+/// mihomo YAML config (via <see cref="CoreConfigHandler.GenerateClientConfig"/>),
+/// and the process names the config routes to the tunnel (wg-&lt;id&gt; target) must match
 /// exactly the process set the Phase-2 capture bridge targets
 /// (<see cref="GpnTargetResolverBridge.ExtractTargetNames"/>). If the two ever diverge,
 /// an app that the rules send direct is still captured and tunneled by the bridge — the
@@ -15,6 +27,8 @@ namespace ServiceLib.Tests.Services;
 [Collection("SharedDatabase")]
 public class GpnCaptureFlowIntegrationTests
 {
+    private const string ServerId = "de";
+
     private static async Task CleanRoutingItemsAsync()
     {
         // Tabloları AppManager.InitApp yaratır ama test host'u onu hiç çalıştırmaz;
@@ -36,7 +50,6 @@ public class GpnCaptureFlowIntegrationTests
             RoutingBasicItem = new RoutingBasicItem
             {
                 DomainStrategy = Global.AsIs,
-                DomainStrategy4Singbox = string.Empty,
                 RoutingIndexId = string.Empty,
             },
             GuiItem = new GUIItem { EnableStatistics = false },
@@ -69,7 +82,6 @@ public class GpnCaptureFlowIntegrationTests
                 UdpEnabled = true,
                 SniffingEnabled = true,
             }],
-            CoreTypeItem = [new CoreTypeItem { ConfigType = EConfigType.VMess, CoreType = ECoreType.sing_box }],
         };
     }
 
@@ -91,33 +103,53 @@ public class GpnCaptureFlowIntegrationTests
         };
     }
 
-    private static CoreConfigContext BuildContext(
-        Config config,
-        List<RulesItem> managedRules)
+    private static GpnServerProfile Server() => new(
+        ServerId: ServerId,
+        Name: "Almanya",
+        EndpointHost: "130.61.223.36",
+        EndpointPort: 51820,
+        ServerPublicKey: "xQZLxeDqYrCcM7oDYbFxDszWnCk4SzwYYXWsrib8S3A=",
+        ClientPrivateKey: "ICsMC9b6W0uzw7NXNlWMgSqQu1W8ZkNvOKt9vlIzyFw=",
+        ClientAddress: "10.66.66.2/24",
+        Mtu: 1420,
+        PersistentKeepalive: 25);
+
+    /// <summary>Global VPN (fallback) için VLESS profil — mihomo global dalını tetikler.</summary>
+    private static ProfileItem VlessNode()
     {
         var node = new ProfileItem
         {
-            IndexId = "node-1",
-            ConfigType = EConfigType.VMess,
-            CoreType = ECoreType.sing_box,
-            Remarks = "test-node",
-            Address = "example.com",
+            IndexId = "vless-1",
+            ConfigType = EConfigType.VLESS,
+            CoreType = ECoreType.mihomo,
+            Remarks = "global-node",
+            Address = "92.4.137.125",
             Port = 443,
-            Password = Guid.NewGuid().ToString(),
+            Id = Guid.NewGuid().ToString(),
             Network = nameof(ETransport.raw),
-            StreamSecurity = string.Empty,
+            StreamSecurity = Global.StreamSecurityReality,
+            Sni = "example.com",
+            PublicKey = "xQZLxeDqYrCcM7oDYbFxDszWnCk4SzwYYXWsrib8S3A=",
+            ShortId = "abc123",
+            Fingerprint = "chrome",
             Subid = string.Empty,
         };
-        node.SetProtocolExtra(node.GetProtocolExtra() with
-        {
-            AlterId = "0",
-            VmessSecurity = Global.DefaultSecurity,
-        });
+        node.SetProtocolExtra(node.GetProtocolExtra() with { Flow = string.Empty });
+        return node;
+    }
+
+    private static CoreConfigContext BuildContext(
+        Config config,
+        List<RulesItem> managedRules,
+        ProfileItem? node = null)
+    {
+        node ??= GpnCoreLauncher.BuildWireGuardProfile(Server());
+        node.Remarks = "test-node";
 
         return new CoreConfigContext
         {
             Node = node,
-            RunCoreType = ECoreType.sing_box,
+            RunCoreType = ECoreType.mihomo,
             AppConfig = config,
             RoutingItem = new RoutingItem
             {
@@ -125,7 +157,6 @@ public class GpnCaptureFlowIntegrationTests
                 Remarks = "gpn-managed-routing",
                 RuleSet = JsonUtils.Serialize(managedRules, false),
                 DomainStrategy = Global.AsIs,
-                DomainStrategy4Singbox = string.Empty,
             },
             RawDnsItem = null,
             SimpleDnsItem = config.SimpleDNSItem,
@@ -136,28 +167,31 @@ public class GpnCaptureFlowIntegrationTests
         };
     }
 
-    private static SingboxConfig GenerateAndAssert(IReadOnlyList<RulesItem> managed, Config config)
+    private static async Task<List<string>> GenerateAndAssert(IReadOnlyList<RulesItem> managed, Config config)
     {
         var context = BuildContext(config, [.. managed]);
-        var result = new CoreConfigSingboxService(context).GenerateClientConfigContent();
+        var result = await CoreConfigHandler.GenerateClientConfig(context, null);
 
-        result.Success.Should().BeTrue("sing-box config generation must succeed: " + result.Msg);
-        var cfg = JsonUtils.Deserialize<SingboxConfig>(result.Data!.ToString())!;
-        cfg.Should().NotBeNull();
-        return cfg;
+        result.Success.Should().BeTrue("mihomo config generation must succeed: " + result.Msg);
+        var rules = RouteTesterService.ExtractRules(result.Data!.ToString()!);
+        rules.Should().NotBeEmpty("generated mihomo config must carry route rules");
+        return rules;
     }
 
+    private static string TunnelTarget() => GpnMihomoConfigService.WireGuardProxyName(Server());
+
     /// <summary>
-    /// Process names the GENERATED sing-box config routes to the tunnel (proxy outbound).
-    /// The QUIC preemption emits outbound-less reject rules for the same processes, so
-    /// only rules carrying an actual proxy outbound count.
+    /// Process names the GENERATED mihomo config routes to the tunnel
+    /// (PROCESS-NAME rows whose target is the wg-&lt;id&gt; proxy).
     /// </summary>
-    private static string[] TunneledProcessNames(IReadOnlyList<RulesItem> managed, Config config)
+    private static async Task<string[]> TunneledProcessNames(IReadOnlyList<RulesItem> managed, Config config)
     {
-        var cfg = GenerateAndAssert(managed, config);
-        return cfg.route.rules
-            .Where(r => r.process_name is { Count: > 0 } && r.outbound == Global.ProxyTag)
-            .SelectMany(r => r.process_name!)
+        var rules = await GenerateAndAssert(managed, config);
+        return rules
+            .Where(r => r.StartsWith("PROCESS-NAME,", StringComparison.OrdinalIgnoreCase))
+            .Select(r => r.Split(','))
+            .Where(parts => parts.Length == 3 && parts[2] == TunnelTarget())
+            .Select(parts => parts[1])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -188,20 +222,16 @@ public class GpnCaptureFlowIntegrationTests
         };
 
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: false);
-        var cfg = GenerateAndAssert(managed, config);
-        var rules = cfg.route.rules;
+        var rules = await GenerateAndAssert(managed, config);
 
         // Rules side: vpn apps get proxy process rules, direct app gets direct, block app gets reject.
-        var proxyRules = rules.Where(r => r.process_name is { Count: > 0 } && r.outbound == Global.ProxyTag).ToList();
-        proxyRules.SelectMany(r => r.process_name!).Should().Equal(["EscapeFromTarkov.exe", "lol.exe"]);
+        var proxyRules = rules.Where(r => r.StartsWith("PROCESS-NAME,", StringComparison.OrdinalIgnoreCase)
+            && r.EndsWith("," + TunnelTarget(), StringComparison.OrdinalIgnoreCase)).ToList();
+        proxyRules.SelectMany(r => new[] { r.Split(',')[1] }).Should().Equal(["EscapeFromTarkov.exe", "lol.exe"]);
 
-        rules.Should().Contain(r => r.process_name != null
-            && r.process_name.Contains("notepad.exe") && r.outbound == Global.DirectTag);
-        rules.Should().Contain(r => r.process_name != null
-            && r.process_name.Contains("adware.exe") && r.outbound == null && r.action == "reject");
-        rules.Should().Contain(r => r.port_range != null
-            && r.port_range.Contains("0:65535") && r.outbound == Global.DirectTag,
-            "whitelist catch-all must be direct");
+        rules.Should().Contain("PROCESS-NAME,notepad.exe,DIRECT");
+        rules.Should().Contain("PROCESS-NAME,adware.exe,REJECT");
+        rules.Should().Contain("MATCH,DIRECT", "whitelist catch-all must be direct");
 
         // Bridge side: exactly the tunneled apps.
         GpnTargetResolverBridge.ExtractTargetNames(apps, invertManual: false)
@@ -230,19 +260,14 @@ public class GpnCaptureFlowIntegrationTests
         };
 
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: true);
-        var cfg = GenerateAndAssert(managed, config);
-        var rules = cfg.route.rules;
+        var rules = await GenerateAndAssert(managed, config);
 
         // Rules side: excluded vpn apps → direct; cs2 (direct entry) → proxy; catch-all → proxy.
-        rules.Should().Contain(r => r.process_name != null
-            && r.process_name.Contains("EscapeFromTarkov.exe") && r.outbound == Global.DirectTag,
+        rules.Should().Contain("PROCESS-NAME,EscapeFromTarkov.exe,DIRECT",
             "blacklist: vpn entry becomes direct exception");
-        rules.Should().Contain(r => r.process_name != null
-            && r.process_name.Contains("cs2.exe") && r.outbound == Global.ProxyTag,
+        rules.Should().Contain($"PROCESS-NAME,cs2.exe,{TunnelTarget()}",
             "blacklist: direct entry is inverted to the tunnel");
-        rules.Should().Contain(r => r.port_range != null
-            && r.port_range.Contains("0:65535") && r.outbound == Global.ProxyTag,
-            "blacklist catch-all must tunnel unlisted apps");
+        rules.Should().Contain($"MATCH,{TunnelTarget()}", "blacklist catch-all must tunnel unlisted apps");
 
         // Bridge side: only the tunneled cs2.exe — the excluded vpn apps must be absent
         // (this is the regression the fix targets: they used to be captured anyway).
@@ -273,23 +298,24 @@ public class GpnCaptureFlowIntegrationTests
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: true);
 
         // The fallback strips the app-managed rules and regenerates with TUN disabled.
+        // mihomo Global VPN dalı (MihomoGlobalConfigService) devreye girer: TUN kapalı,
+        // mixed-port açık, kural tek MATCH → global-proxy.
         var fallbackContext = SystemProxyOnlyService.ToProxyOnlyContext(
-            BuildContext(config, managed) with { IsTunEnabled = false });
+            BuildContext(config, managed, VlessNode()) with { IsTunEnabled = false });
 
         var strippedRules = JsonUtils.Deserialize<List<RulesItem>>(fallbackContext.RoutingItem!.RuleSet)!;
         strippedRules.Should().BeEmpty("managed split rules are meaningless without TUN and must be dropped");
 
-        // Generate the real config: Global VPN path — route.final = proxy governs, and
-        // no per-process rules remain to silently misroute the excluded apps.
-        var result = new CoreConfigSingboxService(fallbackContext).GenerateClientConfigContent();
+        var result = await CoreConfigHandler.GenerateClientConfig(fallbackContext, null);
         result.Success.Should().BeTrue("fallback config generation must succeed: " + result.Msg);
-        var cfg = JsonUtils.Deserialize<SingboxConfig>(result.Data!.ToString())!;
+        var yaml = result.Data!.ToString()!;
 
-        cfg.route.final.Should().Be(Global.ProxyTag, "TUN-less fallback runs as Global VPN");
-        cfg.route.rules.Where(r => r.process_name is { Count: > 0 })
-            .Should().BeEmpty("no dead process_name rules in the fallback config");
-        cfg.route.rules.Where(r => r.port_range != null && r.port_range.Contains("0:65535"))
-            .Should().BeEmpty("no managed catch-all shadowing route.final");
+        yaml.Should().Contain($"MATCH,{MihomoGlobalConfigService.GlobalProxyName}",
+            "TUN-less fallback runs as Global VPN — single MATCH → proxy rule");
+        yaml.Should().Contain("tun:", "mihomo config always carries the tun block");
+        yaml.Should().Contain("enable: false", "fallback disables the TUN");
+        RouteTesterService.ExtractRules(yaml).Where(r => r.StartsWith("PROCESS-NAME,", StringComparison.OrdinalIgnoreCase))
+            .Should().BeEmpty("no dead PROCESS-NAME rules in the fallback config");
     }
 
     [Fact]
@@ -300,7 +326,7 @@ public class GpnCaptureFlowIntegrationTests
         BindConfig(config);
 
         // Whitelist without TUN is the worst silent failure: the managed direct
-        // catch-all would shadow route.final = proxy and leak EVERY unlisted
+        // catch-all would shadow the proxy fall-through and leak EVERY unlisted
         // connection direct while the user believes they are tunneled.
         var apps = new[] { App("lol.exe", "vpn") };
         var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: false);
@@ -308,18 +334,18 @@ public class GpnCaptureFlowIntegrationTests
             "whitelist catch-all is direct");
 
         var fallbackContext = SystemProxyOnlyService.ToProxyOnlyContext(
-            BuildContext(config, managed) with { IsTunEnabled = false });
+            BuildContext(config, managed, VlessNode()) with { IsTunEnabled = false });
 
         var strippedRules = JsonUtils.Deserialize<List<RulesItem>>(fallbackContext.RoutingItem!.RuleSet)!;
         strippedRules.Should().BeEmpty("the whitelist direct catch-all must not survive the fallback");
 
-        var result = new CoreConfigSingboxService(fallbackContext).GenerateClientConfigContent();
+        var result = await CoreConfigHandler.GenerateClientConfig(fallbackContext, null);
         result.Success.Should().BeTrue("fallback config generation must succeed: " + result.Msg);
-        var cfg = JsonUtils.Deserialize<SingboxConfig>(result.Data!.ToString())!;
+        var rules = RouteTesterService.ExtractRules(result.Data!.ToString()!);
 
-        cfg.route.final.Should().Be(Global.ProxyTag, "route.final = proxy must govern (no leak to direct)");
-        cfg.route.rules.Where(r => r.port_range != null && r.port_range.Contains("0:65535"))
-            .Should().BeEmpty("no managed catch-all in the fallback config");
+        rules.Should().Contain($"MATCH,{MihomoGlobalConfigService.GlobalProxyName}",
+            "MATCH → proxy must govern (no leak to direct)");
+        rules.Should().NotContain("MATCH,DIRECT", "stale direct catch-all must not survive the fallback");
     }
 
     // ----- Whole GPN flow: rules ⇔ bridge agreement for both directions -----
@@ -344,9 +370,9 @@ public class GpnCaptureFlowIntegrationTests
         {
             var direction = invert ? "blacklist" : "whitelist";
 
-            // 1) Rules → real sing-box config → the process names routed to the tunnel.
+            // 1) Rules → real mihomo config → the process names routed to the tunnel.
             var managed = ManualRoutingRules.BuildManagedRules(GameTriggerModes.Manual, apps, invertManual: invert);
-            var tunneled = TunneledProcessNames(managed, config);
+            var tunneled = await TunneledProcessNames(managed, config);
 
             // 2) The capture bridge's target set.
             var bridgeTargets = Sorted(GpnTargetResolverBridge.ExtractTargetNames(apps, invertManual: invert));

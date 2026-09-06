@@ -146,7 +146,7 @@ public class GpnConnectionCoordinatorTests
 
             // Failover izleyicisi başlarken koordinatör aktif TUN adını teşhise iletir
             // — ilk ölçüm bile ad sezgisel eşleşmesine güvenmeden tüneli tanır.
-            ProbeEgressNic.GetKnownTunnelNames().Should().Contain(Global.SingboxTunInterfaceName);
+            ProbeEgressNic.GetKnownTunnelNames().Should().Contain(Global.MihomoTunInterfaceName);
 
             await coordinator.DisconnectAsync(TestContext.Current.CancellationToken);
 
@@ -439,7 +439,7 @@ public class GpnConnectionCoordinatorTests
         };
         var coordinator = new GpnConnectionCoordinator(selector, new FakeLauncher());
 
-        await coordinator.ConnectAsync([it], preferred: it);
+        await coordinator.ConnectAsync([it], preferred: it, ct: TestContext.Current.CancellationToken);
 
         selector.LastPreferred.Should().BeSameAs(it);
     }
@@ -459,7 +459,7 @@ public class GpnConnectionCoordinatorTests
         };
         var coordinator = new GpnConnectionCoordinator(selector, new FakeLauncher());
 
-        await coordinator.ConnectAsync([it], options: new GpnProbeOptions());
+        await coordinator.ConnectAsync([it], options: new GpnProbeOptions(), ct: TestContext.Current.CancellationToken);
         await coordinator.ActiveMonitorTask;
 
         selector.LastSelectionOptions.Should().NotBeNull();
@@ -477,7 +477,7 @@ public class GpnConnectionCoordinatorTests
         var selector = new FakeSelector();
         var coordinator = new GpnConnectionCoordinator(selector, new FakeLauncher());
 
-        await coordinator.ConnectAsync([it]);
+        await coordinator.ConnectAsync([it], ct: TestContext.Current.CancellationToken);
 
         selector.LastPreferred.Should().BeNull();
     }

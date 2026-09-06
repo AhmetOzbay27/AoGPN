@@ -40,7 +40,8 @@ public class GpnSoftPolicyApplierTests
     private void SeedSupersetState(
         string modeNow = GpnSoftRouting.ClashDirect,
         string ao0Now = GpnMihomoConfigService.NodesGroupName,
-        string ao1Now = GpnSoftRouting.ClashDirect)
+        string ao1Now = GpnSoftRouting.ClashDirect,
+        string checkNow = GpnMihomoConfigService.NodesGroupName)
     {
         var all = new[]
         {
@@ -53,6 +54,8 @@ public class GpnSoftPolicyApplierTests
         _puts.Clear();
         _state[GpnMihomoConfigService.NodesGroupName] = Sel(WgDe, WgDe, WgIt);
         _state[GpnSoftRouting.ModeGroupName] = Sel(modeNow, GpnSoftRouting.ClashDirect, GpnMihomoConfigService.NodesGroupName);
+        // GPN-CHECK: üyeler düğüm grubu + DIRECT (config üretim sırası moda göre değişir).
+        _state[GpnSoftRouting.CheckGroupName] = Sel(checkNow, GpnMihomoConfigService.NodesGroupName, GpnSoftRouting.ClashDirect);
         _state[GpnSoftRouting.AppGroupName(0)] = Sel(ao0Now, all);
         _state[GpnSoftRouting.AppGroupName(1)] = Sel(ao1Now, all);
     }
@@ -118,7 +121,8 @@ public class GpnSoftPolicyApplierTests
     public async Task Off_PutsModeAndEveryEntryToDirect()
     {
         // Canlı durum kara liste/Global vektöründe (her şey tünelde) — Off hepsini
-        // direct'e çeker: mod grubu + her giriş grubu değişir.
+        // direct'e çeker: mod grubu + GPN-CHECK (IP doğrulama hostları da ISP'ye
+        // döner — baz çizgisi ölçümü kirlenmez) + her giriş grubu değişir.
         SeedSupersetState(
             modeNow: GpnMihomoConfigService.NodesGroupName,
             ao0Now: GpnMihomoConfigService.NodesGroupName,
@@ -129,9 +133,33 @@ public class GpnSoftPolicyApplierTests
 
         applied.Should().BeTrue();
         _puts.Should().Contain((GpnSoftRouting.ModeGroupName, GpnSoftRouting.ClashDirect));
+        _puts.Should().Contain((GpnSoftRouting.CheckGroupName, GpnSoftRouting.ClashDirect));
         _puts.Should().Contain((GpnSoftRouting.AppGroupName(0), GpnSoftRouting.ClashDirect));
         _puts.Should().Contain((GpnSoftRouting.AppGroupName(1), GpnSoftRouting.ClashDirect));
-        _puts.Should().HaveCount(3);
+        _puts.Should().HaveCount(4);
+    }
+
+    [Fact]
+    public async Task WhitelistFromOff_FlipsCheckGroupToTunnel()
+    {
+        // Canlı durum Off vektöründe (yakalayıcı + girişler + GPN-CHECK hepsi DIRECT) —
+        // Manuel beyaz listeye geçişte IP doğrulama grubu tünele döner (doğrulama
+        // istekleri WG tünelinden çıkar) ama yakalayıcı DIRECT kalır: unlisted trafik
+        // ISP'de, yalnızca uygulamanın kendi api.ip.sb ölçümü tünelden geçer.
+        SeedSupersetState(
+            modeNow: GpnSoftRouting.ClashDirect,
+            ao0Now: GpnSoftRouting.ClashDirect,
+            ao1Now: GpnSoftRouting.ClashDirect,
+            checkNow: GpnSoftRouting.ClashDirect);
+        var desired = Policy(GameTriggerModes.Manual, invert: false);
+
+        var applied = await Apply(desired);
+
+        applied.Should().BeTrue();
+        _puts.Should().Equal(
+            (GpnSoftRouting.CheckGroupName, GpnMihomoConfigService.NodesGroupName),
+            (GpnSoftRouting.AppGroupName(0), GpnMihomoConfigService.NodesGroupName));
+        _state[GpnSoftRouting.CheckGroupName].now.Should().Be(GpnMihomoConfigService.NodesGroupName);
     }
 
     [Fact]
@@ -286,7 +314,8 @@ public class GpnSoftPolicyApplierTests
             return Task.CompletedTask; // state güncellenmez
         };
 
-        var applied = await GpnSoftPolicyApplier.TryApplyCoreAsync(desired, Fingerprint(), Fetch(), brokenSet);
+        var applied = await GpnSoftPolicyApplier.TryApplyCoreAsync(
+            desired, Fingerprint(), Fetch(), brokenSet, TestContext.Current.CancellationToken);
 
         applied.Should().BeFalse("seçimler gerçekleşmedi — restart'lı fallback config'i yeniden üretir");
         _puts.Should().NotBeEmpty();

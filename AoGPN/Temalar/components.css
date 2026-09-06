@@ -406,6 +406,11 @@
     background: color-mix(in srgb, var(--cyan) 7%, transparent);
     box-shadow: 0 0 18px color-mix(in srgb, var(--cyan) 28%, transparent), inset 0 0 12px color-mix(in srgb, var(--cyan) 7%, transparent);
   }
+  /* Drag-to-reorder (Default order view) */
+  .node-card[draggable="true"] { cursor: grab; }
+  .node-card[draggable="true"]:active { cursor: grabbing; }
+  .node-card.dragging { opacity: .45; }
+  .node-card.drop-target { outline: 2px dashed color-mix(in srgb, var(--cyan) 55%, transparent); outline-offset: -2px; }
   .node-check {
     z-index: 5;
     transform-origin: center;

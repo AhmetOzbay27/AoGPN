@@ -10,6 +10,100 @@ All notable changes to AoGPN will be documented in this file.
 
 ---
 
+## [1.1.1-dev] — 2026-09-05 — WARP degrade-egress, capture-gap hardening, launcher bypass editor, shell declutter
+
+> Development notes for this session (9 commits: `d3cdeb5` … `19ba8c0`, plus the
+> uncommitted working tree). No version tag has been attached yet — the next
+> release tag must be `1.1.1`.
+
+### Added
+- **WARP degrade-egress** (`GpnBypassEgressController`): while the WARP egress is
+  faulted, launcher requests automatically fall back to **DIRECT** (clean exit
+  instead of hitting the WAF); when WARP health returns they switch back
+  automatically. Dashboard Degraded badge + i18n keys in all 9 languages.
+- **Capture-gap hardening (A2):**
+  - First-tick PID capture — a game spawning while the connection is being
+    established (launcher auto-start) enters the WinDivert filter in ~750 ms
+    instead of up to 5 s; silent while the PID set is unchanged.
+  - Capture-drift warning — "live connections but 0 captured packets" rose
+    banner (`GpnCaptureDriftChecker`; gpn mode + tunneled apps only, keys in
+    all 9 languages).
+- **Launcher bypass editor** (`LauncherBypassItem` + `GpnLauncherBypass`): the
+  fixed `BsgLauncherDomains` list is replaced by a user-editable, per-launcher
+  **domain + egress (WARP / VLESS / DIRECT)** list, managed in Dashboard
+  Settings → GPN (add/remove/enable rows). An empty list disables launcher rows;
+  `null` keeps the legacy BSG defaults. Works together with
+  `VlessBypassNodeJson` (dual connection).
+
+### Fixed
+- `SpeedtestService`: `OverflowException` on empty selection — early exit
+  (`Count == 0 || pageSize <= 0`) now covers Tcping/Realping/UDP alike; an empty
+  run reported "completed" instead of "stopped".
+
+### Changed
+- **Splash-free boot (uncommitted working tree)**: the main window is shown
+  invisible at startup (`Opacity 0` in `App.OnStartup`) and revealed by
+  `MainWindow.RevealStartupWindow()` only once the WebView2 dashboard has loaded
+  and received its initial state (theme/settings/language/…), so launching never
+  flashes an empty black frame while WebView2 boots. The reveal is a short
+  (~120 ms) fade-in so the first composited frame — including a standalone skin
+  iframe that is still painting — can never appear as a raw dark frame. Reveal
+  also fires on navigation failure / startup-script errors, on restore from a
+  tray/minimized (AutoHideStartup) startup, and via a 15 s fallback timer — the
+  window can never stay invisible.
+- **Mid-session restart deferral**: rule edits that change the structure
+  (`IsStructuralEntryChange`) no longer restart the core mid-match — they are
+  deferred to the next natural reconnect, preventing drops.
+- **P0 Wave 3 (refactor):** `DashboardNodeService` (969 lines) and
+  `DashboardPushService` (659) extracted from MainWindow — the window went from
+  7,071 to ~3,981 lines (3,999 in the working tree).
+- **Shell declutter** (uncommitted working tree): legacy left-rail surface
+  removed — the old "Servers" tab (`tabProfiles2` + `btnNavServers`) and the
+  More Tools protocol add menu (`btnNavAddServer`, 9 protocols). Node management
+  now lives solely in the dashboard **Nodes** view; Import (clipboard) and Scan
+  (QR) are kept. Inventory/analysis:
+  `docs/ozellik-envanteri-2026-09-05.md`.
+
+### Removed
+- **Startup splash screen (uncommitted working tree)**: `Views/SplashWindow.xaml` /
+  `.xaml.cs` and `Resources/Splash.png` deleted (csproj `<Resource>` entry
+  dropped); the boot logo window, progress stages and fade-out path removed from
+  `App.OnStartup`. `TANITIM.md` / `RELEASE_YONERGESI.md` no longer describe the
+  splash.
+- V2rayN leftovers and scratch scripts quarantined (commit `361218d`; files under
+  `Silinecekler_Yedek/V2rayN-Kalintilari-2026-09-05`).
+- **Hidden legacy toolbar** (`legacyToolbar`, already `Visibility="Collapsed"`) deleted
+  from `MainWindow.xaml` (−278 lines): the 17 single-protocol "Add server" items
+  (VMess/VLESS/Shadowsocks/SOCKS/HTTP/Trojan/Hysteria2/TUIC/WireGuard/AnyTLS/Naive/
+  Custom/Policy-group/Proxy-chain), the five Subscription items, the option/routing/DNS/
+  full-config/hotkey/reboot/SetUWP/clear-stats/regional-preset menu items, and the
+  Help/Reload/Promotion/Close/update/verbose-log entries. Rail buttons that already
+  duplicate these commands (Settings/Routing/DNS/Import/Scan) stay; update-check and
+  backup/restore dialogs are no longer reachable from any menu (can be re-exposed later).
+
+### Technical
+- **P0 Wave 3 recipe**: byte-exact cuts, ctor-injected delegates and one-line
+  window delegations; every moved member body was verified byte-identical to the
+  pre-move text.
+- Connection/tray cluster closed via the **"keep — document why"** branch:
+  `docs/connection-tray-cluster.md` (75-member inventory, state-machine models
+  4.1–4.5, stay rationale, migration blueprint). Next extraction candidates:
+  `docs/mainwindow-wave4-candidates.md` (W4-A … W4-F).
+- **W4-B implemented** (`ConnectionFailureLedger`): failure-card record/priority
+  and the 45 s freshness window moved out of MainWindow into a testable
+  ServiceLib service (injected delegates + clock). Failure-card selection rules
+  (45 s window, GPN priority, elevation/canRecover/port-carry derivation, script
+  content) now covered by 16 new tests; MainWindow 3,999 → 3,752 lines.
+- New tests: `GpnBypassEgressControllerTests` (9), `GpnCaptureDriftCheckerTests`
+  (8), `GpnTargetResolverRefreshTests` (2), `FmtUriRoundTripTests` (15 cases),
+  Speedtest regression tests (7), launcher-bypass rule tests +
+  `lb-editor.integration.test.js`, `ConnectionFailureLedgerTests` (16).
+- Verification at write time: `dotnet build` 0 errors; ServiceLib.Tests
+  **1,178 passed / 0 failed** (incl. 16 new `ConnectionFailureLedgerTests`);
+  dashboard JS **212/212**.
+
+---
+
 ## [1.1.0] — About & Help page, AoGPN-native version
 
 This is the first AoGPN-native version **1.1.0** (assembly/update-check

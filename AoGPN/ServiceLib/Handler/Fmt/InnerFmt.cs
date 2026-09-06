@@ -189,7 +189,7 @@ public class InnerFmt
         {
             return null;
         }
-        if (profileItem.CoreType is not (null or ECoreType.Xray or ECoreType.sing_box))
+        if (profileItem.CoreType is not (null or ECoreType.Xray or ECoreType.mihomo))
         {
             return null;
         }

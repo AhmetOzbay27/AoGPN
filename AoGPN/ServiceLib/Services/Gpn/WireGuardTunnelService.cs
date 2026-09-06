@@ -54,6 +54,15 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
     // sürücüye dokunmadan doğrular.
     private readonly Func<string, string, IntPtr, IntPtr> _createAdapter;
 
+    // Kalan natif yaşam döngüsü çağrıları için dikişler (hepsi varsayılan olarak
+    // WintunNative'e gider). Tek sahiplik kuralı: ADAPTÖRÜ yalnızca servis kapatır
+    // (WintunCloseAdapter) — WintunSession.Dispose yalnızca session'ı bitirir.
+    // Çift kapatma çift-free'dir → ntdll heap corruption (0xc0000374).
+    private readonly Action<IntPtr> _closeAdapter;
+    private readonly Action<IntPtr>? _endSession;
+    private readonly Func<IntPtr, long> _getAdapterLuid;
+    private readonly Func<IntPtr, uint, IntPtr> _startSession;
+
     private readonly object _gate = new();
     private IntPtr _adapter;
     private IWintunSession? _session;
@@ -72,20 +81,35 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
     /// </param>
     /// <param name="sessionFactory">
     /// Test dikişi (re-arm/sunucu değişimi senaryoları): gerçek yol her Open'da TAZE
-    /// bir natif session üretir; factory de her Open'da taze sahte session verir —
-    /// tek-örnek sahte Close sonrası kalıcı kapandığından Close→Open çevrimi
-    /// (GpnCaptureBridge dinamik re-arm) sahteyle test edilemezdi.
+    /// bir natif session üretir; factory de her Open'da taze sahte session verir —    ///     tek-örnek sahte Close sonrası kalıcı kapandığından Close→Open çevrimi
+    ///     (GpnCaptureBridge dinamik re-arm) sahteyle test edilemezdi.
     /// </param>
+    /// <param name="closeAdapter">Adaptörü kapatan natif çağrı (varsayılan WintunCloseAdapter).</param>
+    /// <param name="endSession">Session'ı bitiren natif çağrı (varsayılan WintunEndSession).</param>
+    /// <param name="getAdapterLuid">Adapter LUID okuyucu (varsayılan WintunGetAdapterLUID).</param>
+    /// <param name="startSession">Session başlatıcı (varsayılan WintunStartSession).</param>
     public WireGuardTunnelService(
         IWireGuardTransport? transport = null,
         IWintunSession? session = null,
         Func<string, string, IntPtr, IntPtr>? createAdapter = null,
-        Func<IWintunSession>? sessionFactory = null)
+        Func<IWintunSession>? sessionFactory = null,
+        Action<IntPtr>? closeAdapter = null,
+        Action<IntPtr>? endSession = null,
+        Func<IntPtr, long>? getAdapterLuid = null,
+        Func<IntPtr, uint, IntPtr>? startSession = null)
     {
         _transport = transport ?? new NoopWireGuardTransport();
         _testSession = session;
         _createAdapter = createAdapter ?? WintunNative.WintunCreateAdapter;
         _testSessionFactory = sessionFactory;
+        _closeAdapter = closeAdapter ?? WintunNative.WintunCloseAdapter;
+        _endSession = endSession;
+        _getAdapterLuid = getAdapterLuid ?? (h =>
+        {
+            WintunNative.WintunGetAdapterLuid(h, out var luid);
+            return luid;
+        });
+        _startSession = startSession ?? WintunNative.WintunStartSession;
     }
 
     /// <summary>Adapter/session açık mı.</summary>
@@ -186,20 +210,19 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
             _adapter = adapter;
             try
             {
-                WintunNative.WintunGetAdapterLuid(adapter, out var luid);
-                AdapterLuid = luid;
+                AdapterLuid = _getAdapterLuid(adapter);
 
-                var session = WintunNative.WintunStartSession(adapter, NormalizeCapacity(ringCapacity));
+                var session = _startSession(adapter, NormalizeCapacity(ringCapacity));
                 if (session == IntPtr.Zero)
                 {
                     var err = WintunNative.LastWin32Error;
                     throw new WintunException("Wintun session başlatılamadı.", err);
                 }
-                _session = new WintunSession(adapter, session);
+                _session = new WintunSession(session, _endSession);
             }
             catch
             {
-                WintunNative.WintunCloseAdapter(adapter);
+                _closeAdapter(adapter);
                 _adapter = IntPtr.Zero;
                 _session = null;
                 throw;
@@ -376,7 +399,9 @@ public sealed class WireGuardTunnelService : IAsyncDisposable
         {
             if (_adapter != IntPtr.Zero)
             {
-                WintunNative.WintunCloseAdapter(_adapter); // _testSession yolunda sıfır
+                // Adaptörün TEK sahibi servistir — WintunSession.Dispose artık adaptörü
+                // kapatmaz (çift-free → heap corruption 0xc0000374 regresyonu).
+                _closeAdapter(_adapter); // _testSession yolunda sıfır
                 _adapter = IntPtr.Zero;
             }
         }

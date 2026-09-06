@@ -206,6 +206,12 @@
   // Ids pushed by the host in the current round, so updateNodeListDone can drop
   // entries that no longer exist (e.g. deleted nodes) instead of leaving ghosts.
   const pushedNodeIds = new Set();
+  // IndexId order of the current push round (the host streams the whole list in
+  // Sort order); updateNodeListDone finalizes it into nodeOrder. Map insertion
+  // order cannot serve as "host order": Map.set on an existing key keeps its old
+  // position, so reordered nodes would never move without this explicit order.
+  const pushedNodeOrder = [];
+  let nodeOrder = [];
   let useRealNodes = false;
   let activeRealNodeId = null;
   // Server switch confirmation: the node being switched ("switching…" state), the
@@ -222,6 +228,8 @@
   // Node ordering for the grid: 'default' (host order), 'country' (A-Z),
   // 'fav' (favorites first), 'recent' (last used first).
   let nodeSortMode = 'default';
+  // Id of the node currently being dragged (drag-to-reorder in Default order).
+  let dragNodeId = null;
   const NODE_GROUPS_STORAGE_KEY = 'aogpn.routeGroups';
   let collapsedNodeGroups = new Set(JSON.parse(localStorage.getItem(NODE_GROUPS_STORAGE_KEY) || '[]'));
 
@@ -238,8 +246,8 @@
   let invertManual = false;
   let monitorSnapshot = { connections: [], apps: [], traffic: [] };
   let pendingConfirmAction = null;
-  // Edit-mode gate: destructive list edits (delete, disable, dedupe, cleanup)
-  // only run while edit mode is on, mirroring AoGPN's edit concept.
+  // Edit-mode toggle: reveals the bulk-cleanup toolbar (dedupe, delete/disable
+  // failed). Per-node add/edit/delete/disable stay available without it.
   let editMode = false;
   // Disabled section: nodes hidden from the main list that can be restored or
   // permanently deleted. Pushed by the host separately from the main list.
@@ -993,14 +1001,23 @@
   /** Returns the real node list in the current sort order. */
   function sortedRealNodes() {
     const arr = [...realNodes.values()];
-    if (nodeSortMode === 'country' || nodeSortMode === 'default') {
-      arr.sort((a, b) => (a.country || 'ZZZ').localeCompare(b.country || 'ZZZ') || (a.name || '').localeCompare(b.name || ''));
-      if (nodeSortMode === 'country') return arr;
-    }
     if (nodeSortMode === 'country') {
       arr.sort((a, b) =>
         (a.country || 'ZZ').localeCompare(b.country || 'ZZ')
         || (a.name || '').localeCompare(b.name || ''));
+    } else if (nodeSortMode === 'default') {
+      // Default order = the host's persisted Sort order. Country grouping still
+      // needs countries adjacent, so sort by country only (stable — host order
+      // survives inside each group) and tie-break with the pushed order.
+      const orderIndex = new Map();
+      nodeOrder.forEach((id, idx) => orderIndex.set(id, idx));
+      arr.sort((a, b) => {
+        const c = (a.country || 'ZZ').localeCompare(b.country || 'ZZ');
+        if (c !== 0) return c;
+        const ia = orderIndex.has(a.indexId) ? orderIndex.get(a.indexId) : Number.MAX_SAFE_INTEGER;
+        const ib = orderIndex.has(b.indexId) ? orderIndex.get(b.indexId) : Number.MAX_SAFE_INTEGER;
+        return ia - ib;
+      });
     } else if (nodeSortMode === 'fav') {
       arr.sort((a, b) =>
         (b.fav ? 1 : 0) - (a.fav ? 1 : 0)
@@ -1048,10 +1065,6 @@
           const delBtn = card.querySelector('[data-disabled-delete]');
           if (delBtn) {
             delBtn.addEventListener('click', () => {
-              if (!editMode) {
-                notifyNodes('Düzenleme modu kapalı — düğümleri değiştirmek için Düzenle\'yi açın');
-                return;
-              }
               selectedIds.clear();
               selectedIds.add(node.indexId);
               requestNodeDelete();
@@ -1181,21 +1194,49 @@
           requestNodeSwitch(node.indexId);
         });
 
-        // Right-click opens the node action menu (copy / delete).
-        card.addEventListener('contextmenu', (event) => {
-          event.preventDefault();
-          const node = realNodes.get(card.dataset.index);
-          if (!node || pendingSwitchId) {
-            return;
-          }
-          if (!selectedIds.has(node.indexId)) {
-            selectedIds.clear();
-            selectedIds.add(node.indexId);
-            selectionAnchorId = node.indexId;
-            updateNodeSelectionUI();
-          }
-          showNodeCtxMenu(event.clientX, event.clientY);
-        });
+        // Drag-to-reorder, active only in Default order (other sort modes derive
+        // their order and would fight the drag). Drops are accepted on cards of
+        // the same country group so the grouped layout stays coherent; the host
+        // persists the new Sort through the native MoveServer path.
+        const canReorder = nodeSortMode === 'default' && !showingDisabled;
+        card.draggable = canReorder;
+        if (canReorder) {
+          card.addEventListener('dragstart', (event) => {
+            if (event.target.closest && event.target.closest('[data-fav],[data-ping],[data-check]')) {
+              event.preventDefault();
+              return;
+            }
+            dragNodeId = node.indexId;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', node.indexId);
+            card.classList.add('dragging');
+          });
+          card.addEventListener('dragover', (event) => {
+            const target = realNodes.get(card.dataset.index);
+            const from = dragNodeId ? realNodes.get(dragNodeId) : null;
+            if (!target || !from || from.indexId === target.indexId || from.country !== target.country) {
+              return;
+            }
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            card.classList.add('drop-target');
+          });
+          card.addEventListener('dragleave', () => card.classList.remove('drop-target'));
+          card.addEventListener('drop', (event) => {
+            event.preventDefault();
+            card.classList.remove('drop-target');
+            const fromId = dragNodeId;
+            const target = realNodes.get(card.dataset.index);
+            if (!fromId || !target || fromId === target.indexId) {
+              return;
+            }
+            postToHost({ action: 'move_node', indexId: fromId, targetIndexId: target.indexId });
+          });
+          card.addEventListener('dragend', () => {
+            dragNodeId = null;
+            card.classList.remove('dragging', 'drop-target');
+          });
+        }
       });
       $('nodesCount').textContent = realNodes.size;
       updateRealNodeFooter();
@@ -1287,9 +1328,11 @@
     $('nodeDisabledBarText').textContent = `${disabledNodes.size} devre dışı düğüm gösteriliyor — geri yükle veya kalıcı olarak sil`;
     $('nodeDisabledBar').classList.toggle('hidden', !showingDisabled);
     $('nodeDisabledBar').classList.toggle('flex', showingDisabled);
+    // The Edit toggle only reveals the bulk-cleanup toolbar (dedupe, delete
+    // failed). Per-node actions (delete/disable/edit) are always available —
+    // destructive ones still go through their own confirmation dialog.
     $('nodeEditBar').classList.toggle('hidden', !editMode || showingDisabled);
     $('nodeEditBar').classList.toggle('flex', editMode && !showingDisabled);
-    document.querySelectorAll('.ctx-edit').forEach(el => el.classList.toggle('hidden', !editMode));
   }
 
   function syncEditMode() {
@@ -1302,6 +1345,31 @@
   }
 
   const nodeCtxMenu = $('nodeCtxMenu');
+
+  // Right-click on any node card opens the action menu (copy / edit / disable /
+  // delete). Event delegation on the grid — the grid element survives re-renders,
+  // so the menu can never be dropped by a re-created card losing its listener.
+  $('nodeGrid').addEventListener('contextmenu', (event) => {
+    const card = event.target && event.target.closest
+      ? event.target.closest('.node-card')
+      : null;
+    if (!card) {
+      return;
+    }
+    const node = realNodes.get(card.dataset.index);
+    if (!node || pendingSwitchId) {
+      return;
+    }
+    event.preventDefault();
+    if (!selectedIds.has(node.indexId)) {
+      selectedIds.clear();
+      selectedIds.add(node.indexId);
+      selectionAnchorId = node.indexId;
+      updateNodeSelectionUI();
+    }
+    showNodeCtxMenu(event.clientX, event.clientY);
+  });
+
   function showNodeCtxMenu(x, y) {
     nodeCtxMenu.classList.remove('hidden');
     const rect = nodeCtxMenu.getBoundingClientRect();
@@ -1327,10 +1395,6 @@
     $('nodeConfirm').classList.add('flex');
   }
   function requestConfirm(title, text, action) {
-    if (!editMode) {
-      notifyNodes('Düzenleme modu kapalı — düğümleri değiştirmek için Düzenle\'yi açın');
-      return;
-    }
     $('nodeConfirmTitle').textContent = title;
     $('nodeConfirmOkLabel').textContent = 'Onayla';
     $('nodeConfirmText').textContent = text;
@@ -1338,10 +1402,6 @@
     showNodeConfirm();
   }
   function requestNodeDelete() {
-    if (!editMode) {
-      notifyNodes('Düzenleme modu kapalı — düğümleri değiştirmek için Düzenle\'yi açın');
-      return;
-    }
     const ids = selectionIds();
     if (ids.length === 0) {
       return;
@@ -1353,10 +1413,6 @@
     showNodeConfirm();
   }
   function requestNodeDisable() {
-    if (!editMode) {
-      notifyNodes('Düzenleme modu kapalı — düğümleri değiştirmek için Düzenle\'yi açın');
-      return;
-    }
     const ids = selectionIds();
     if (ids.length === 0) {
       return;
@@ -1430,6 +1486,11 @@
     editMode = !editMode;
     syncEditMode();
   });
+  // Header "Düğüm ekle" button: imports share links from the clipboard, the
+  // same path as Ctrl+V (paste_nodes) so adding is discoverable without a key.
+  $('nodePasteBtn').addEventListener('click', () => {
+    postToHost({ action: 'paste_nodes' });
+  });
   $('nodeDisabledBtn').addEventListener('click', () => {
     showingDisabled = !showingDisabled;
     selectedIds.clear();
@@ -1443,10 +1504,6 @@
     renderNodes();
   });
   $('nodeDeleteAllDisabledBtn').addEventListener('click', () => {
-    if (!editMode) {
-      notifyNodes('Düzenleme modu kapalı — düğümleri değiştirmek için Düzenle\'yi açın');
-      return;
-    }
     const ids = [...disabledNodes.keys()];
     if (ids.length === 0) {
       return;
@@ -1498,6 +1555,16 @@
     requestConfirm('Başarısız düğümleri devre dışı bırak', 'Son ping testinde başarısız olan tüm düğümler Devre Dışı bölümüne taşınsın mı?', () => {
       postToHost({ action: 'cleanup_failed', target: 'disable' });
     });
+  });
+  $('nodeCtxMenu').querySelector('[data-act="edit"]').addEventListener('click', () => {
+    hideNodeCtxMenu();
+    const ids = selectionIds();
+    if (ids.length === 0) {
+      return;
+    }
+    // Opens the native server-edit dialog for the right-clicked node (the
+    // context menu already made it the sole selection).
+    postToHost({ action: 'edit_node', indexId: ids[0] });
   });
   $('nodeCtxMenu').querySelector('[data-act="copy"]').addEventListener('click', () => {
     hideNodeCtxMenu();
@@ -1579,11 +1646,6 @@
       event.preventDefault();
       postToHost({ action: 'paste_nodes' });
     } else if (event.key === 'Delete' || event.key === 'Backspace') {
-      if (!editMode) {
-        event.preventDefault();
-        notifyNodes('Düzenleme modu kapalı — düğümleri değiştirmek için Düzenle\'yi açın');
-        return;
-      }
       // With no explicit selection, fall back to deleting the active node.
       let ids = selectionIds();
       if (ids.length === 0 && !showingDisabled && activeRealNodeId) {
@@ -5136,6 +5198,7 @@
         return;
       }
       pushedNodeIds.add(n.indexId);
+      pushedNodeOrder.push(n.indexId);
       realNodes.set(n.indexId, {
         indexId: n.indexId,
         name: n.name || '',
@@ -5166,6 +5229,10 @@
       });
       pushedNodeIds.clear();
     }
+    // Finalize the round's order (the host pushed the whole list) and keep only
+    // ids that still exist, so deleted nodes cannot linger in the order.
+    nodeOrder = pushedNodeOrder.filter(id => realNodes.has(id));
+    pushedNodeOrder.length = 0;
     // Drop selection ids that no longer exist (e.g. right after a delete), so a
     // stale selection never lingers on the toolbar or in the copy payload.
     [...selectedIds].forEach(id => {
@@ -5213,11 +5280,64 @@
       renderNodes();
     }
   };
+  // Drag-and-drop WireGuard .conf import: while any file drag is over the
+  // window a full-screen hint shows; on drop, every .conf file is read here
+  // (File.text, no host round-trip needed) and handed to the host, which
+  // imports it as a server named after the file. Non-file drags (e.g. the
+  // node-card reorder) pass through untouched.
+  const fileDropOverlay = $('fileDropOverlay');
+  let fileDragDepth = 0;
+  const isFileDrag = (event) => event.dataTransfer
+    && [...event.dataTransfer.types].includes('Files');
+  const hideFileDropOverlay = () => {
+    fileDragDepth = 0;
+    if (fileDropOverlay) {
+      fileDropOverlay.classList.add('hidden');
+      fileDropOverlay.classList.remove('flex');
+    }
+  };
+  window.addEventListener('dragover', (event) => {
+    if (!isFileDrag(event)) {
+      return;
+    }
+    event.preventDefault();
+    fileDragDepth++;
+    if (fileDropOverlay) {
+      fileDropOverlay.classList.remove('hidden');
+      fileDropOverlay.classList.add('flex');
+    }
+  });
+  window.addEventListener('dragleave', (event) => {
+    if (!isFileDrag(event)) {
+      return;
+    }
+    fileDragDepth = Math.max(0, fileDragDepth - 1);
+    if (fileDragDepth === 0) {
+      hideFileDropOverlay();
+    }
+  });
+  window.addEventListener('drop', (event) => {
+    hideFileDropOverlay();
+    if (!event.dataTransfer || !event.dataTransfer.files || event.dataTransfer.files.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    const confs = [...event.dataTransfer.files].filter(f => /\.conf$/i.test(f.name));
+    if (confs.length === 0) {
+      return;
+    }
+    Promise.all(confs.map(async (f) => ({ name: f.name, content: await f.text() })))
+      .then(files => postToHost({ action: 'import_wireguard_conf', files }))
+      .catch(() => notifyNodes('WireGuard .conf could not be read'));
+  });
+
   // Node pool links published by the host (GitHub raw .txt / subscription URLs).
   window.updateNodePool = (links) => {
     nodePoolLinks = Array.isArray(links) ? links.filter(l => typeof l === 'string') : [];
     renderNodePool();
   };
+  // The pool URL currently being edited inline (null when no row is in edit mode).
+  let editingPoolUrl = null;
   function renderNodePool() {
     const list = $('nodePoolList');
     if (!list) return;
@@ -5226,24 +5346,82 @@
       applyTexts();
       return;
     }
-    list.innerHTML = nodePoolLinks.map(link =>
-      `<li class="flex items-center gap-2 min-w-0 group">
+    list.innerHTML = nodePoolLinks.map(link => {
+      if (link === editingPoolUrl) {
+        // Inline edit row: pre-filled input + Save / Cancel (Enter saves, Escape cancels).
+        return `<li class="flex items-center gap-2 min-w-0">
+          <input type="text" data-pool-edit-input value="${escHtml(link)}" spellcheck="false" class="flex-1 min-w-0 bg-white/5 border border-cyan-400/40 rounded-md px-2 py-1 text-[11px] text-slate-200 outline-none focus:border-cyan-400/70" />
+          <button type="button" data-pool-edit-save class="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-400/25 hover:bg-emerald-500/20 transition-colors" data-i18n="nodes.poolSave">Save</button>
+          <button type="button" data-pool-edit-cancel class="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-[#8A94A6] border border-white/10 hover:text-slate-200 transition-colors" data-i18n="nodes.poolCancel">Cancel</button>
+        </li>`;
+      }
+      return `<li class="flex items-center gap-2 min-w-0 group">
         <span class="w-1.5 h-1.5 rounded-full bg-cyan-400/60 shrink-0"></span>
         <span class="text-[11px] text-slate-300 truncate min-w-0">${escHtml(link)}</span>
-        <button type="button" data-pool-remove="${escHtml(link)}" class="ml-auto shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-white/5 text-[#8A94A6] border border-white/10 hover:text-red-300 hover:bg-red-500/10 hover:border-red-400/25 transition-colors" data-i18n="nodes.poolRemove">Remove</button>
-      </li>`).join('');
+        <button type="button" data-pool-edit="${escHtml(link)}" class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-white/5 text-[#8A94A6] border border-white/10 hover:text-cyan-300 hover:bg-cyan-500/10 hover:border-cyan-400/25 transition-colors" data-i18n="nodes.poolEdit">Edit</button>
+        <button type="button" data-pool-remove="${escHtml(link)}" class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-white/5 text-[#8A94A6] border border-white/10 hover:text-red-300 hover:bg-red-500/10 hover:border-red-400/25 transition-colors" data-i18n="nodes.poolRemove">Remove</button>
+      </li>`;
+    }).join('');
+
+    // Normal rows: switch a row into inline-edit mode, or remove the link.
+    list.querySelectorAll('[data-pool-edit]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        editingPoolUrl = btn.dataset.poolEdit;
+        renderNodePool();
+        const input = list.querySelector('[data-pool-edit-input]');
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      });
+    });
     list.querySelectorAll('[data-pool-remove]').forEach(btn => {
       btn.addEventListener('click', () => {
         postToHost({ action: 'remove_node_pool_link', url: btn.dataset.poolRemove });
       });
     });
+
+    // Edit row: Save commits (the host validates, persists and republishes),
+    // Cancel / Escape discards, Enter saves.
+    const editInput = list.querySelector('[data-pool-edit-input]');
+    if (editInput) {
+      const finish = (save) => {
+        const newUrl = editInput.value.trim();
+        const oldUrl = editingPoolUrl;
+        editingPoolUrl = null;
+        if (save && newUrl !== oldUrl) {
+          // Reflect the change locally right away; the host republishes to confirm.
+          const idx = nodePoolLinks.findIndex(l => l === oldUrl);
+          if (idx >= 0) {
+            nodePoolLinks[idx] = newUrl;
+          }
+          postToHost({ action: 'edit_node_pool_link', url: oldUrl, newUrl });
+        }
+        renderNodePool();
+      };
+      editInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          finish(true);
+        } else if (e.key === 'Escape') {
+          finish(false);
+        }
+      });
+      list.querySelector('[data-pool-edit-save]')?.addEventListener('click', () => finish(true));
+      list.querySelector('[data-pool-edit-cancel]')?.addEventListener('click', () => finish(false));
+    }
     applyTexts();
   }
   // Per-node real ping result from the host: a numeric delay (ms), "-1" for a
   // failed test, or a transient status string while the run is in progress.
   window.updateNodeTest = (indexId, delayStr, runId) => {
     if (runId !== undefined && Number(runId) !== activeNodeTestRunId) return;
-    const status = typeof delayStr === 'string' ? delayStr : '';
+    // The host always sends the delay as a string (the native SpeedtestService
+    // path and the WireGuard probe chain both do), but tolerate a raw JSON
+    // number too — a numeric delay must never be silently dropped.
+    const status = typeof delayStr === 'string' ? delayStr
+      : delayStr === null || delayStr === undefined ? ''
+      : String(delayStr);
     // Ignore late callbacks from a cancelled/replaced run. A stale worker must
     // never resurrect the busy state or overwrite a newer ping result.
     if (indexId && !nodeTestRunning && !(nodeTestState.get(indexId) || {}).testing) return;

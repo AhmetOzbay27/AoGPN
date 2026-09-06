@@ -1,15 +1,18 @@
 namespace ServiceLib.Services.CoreConfig;
 
+using ServiceLib.Handler;
+using ServiceLib.Handler.Builder;
+
 public enum RuleDriftState
 {
-    /// <summary>The check does not apply (no active routing/node, or the core is not sing-box).</summary>
+    /// <summary>The check does not apply (no active routing/node, or the core is not mihomo).</summary>
     NotApplicable,
 
     /// <summary>The freshly generated rules match the rules the running core loaded.</summary>
     InSync,
 
     /// <summary>
-    /// The active RoutingItem in the database no longer matches the sing-box config the
+    /// The active RoutingItem in the database no longer matches the mihomo config the
     /// running core is using — stale-rule drift. Reconnecting/reloading would regenerate
     /// the config and close the gap.
     /// </summary>
@@ -21,7 +24,7 @@ public enum RuleDriftState
 
 /// <summary>
 /// Result of comparing the active <see cref="RoutingItem"/> (database) against the
-/// sing-box config the core actually loaded (on-disk config.json). Serialized to the
+/// mihomo config the core actually loaded (on-disk config file). Serialized to the
 /// dashboard with camelCase keys when pushed through the WebView2 bridge.
 /// </summary>
 public sealed class RuleDriftReport
@@ -47,9 +50,6 @@ public sealed class RuleDriftReport
     /// <summary>Number of route rules in the config the running core loaded.</summary>
     public int LiveRuleCount { get; init; }
 
-    public string? ExpectedFinal { get; init; }
-    public string? LiveFinal { get; init; }
-
     /// <summary>Rules the fresh config contains that the live config does not (stale rules).</summary>
     public List<string> MissingRules { get; init; } = [];
 
@@ -59,7 +59,7 @@ public sealed class RuleDriftReport
     /// <summary>True when the rule sets match but their order differs (first-match-wins changes).</summary>
     public bool Reordered { get; init; }
 
-    /// <summary>Non-fatal observations (e.g. rule-set .srs file missing locally).</summary>
+    /// <summary>Non-fatal observations.</summary>
     public List<string> Warnings { get; init; } = [];
 
     public bool IsDrifted => State == RuleDriftState.Drifted;
@@ -67,9 +67,9 @@ public sealed class RuleDriftReport
 
 /// <summary>
 /// Health check that detects stale-rule drift before it causes failures: it rebuilds the
-/// exact sing-box config the active core would use right now (same context builder +
+/// exact mihomo config the active core would use right now (same context builder +
 /// generator as a live connect, using the active <see cref="RoutingItem"/> from the
-/// database) and compares its <c>route.rules</c> against the config file on disk that the
+/// database) and compares its <c>rules</c> against the config file on disk that the
 /// running core loaded. A mismatch means the tunnel is enforcing rules the user no longer
 /// configured (e.g. rules edited in the routing settings without a reload), or vice versa.
 ///
@@ -110,46 +110,42 @@ public sealed class RoutingDriftHealthCheck
                         + string.Join("; ", builderResult.ValidatorResult.Errors));
             }
 
-            if (builderResult.Context.RunCoreType != ECoreType.sing_box)
+            if (builderResult.Context.RunCoreType != ECoreType.mihomo)
             {
                 return Report(RuleDriftState.NotApplicable,
-                    error: $"Rule-drift check is sing-box only (current core: {builderResult.Context.RunCoreType}).");
+                    error: $"Rule-drift check is mihomo only (current core: {builderResult.Context.RunCoreType}).");
             }
 
-            var generated = new CoreConfigSingboxService(builderResult.Context).GenerateClientConfigContent();
+            var generated = await CoreConfigHandler.GenerateClientConfig(builderResult.Context, null);
             if (!generated.Success || generated.Data is null)
             {
-                return Report(RuleDriftState.Unknown, error: "Cannot generate the sing-box config: " + generated.Msg);
+                return Report(RuleDriftState.Unknown, error: "Cannot generate the mihomo config: " + generated.Msg);
             }
 
-            var expected = JsonUtils.Deserialize<SingboxConfig>(generated.Data.ToString());
-            var expectedRules = expected?.route?.rules ?? [];
-            var expectedFinal = expected?.route?.final;
+            var expectedRules = RouteTesterService.ExtractRules(generated.Data.ToString());
 
             var livePath = Utils.GetBinConfigPath(Global.CoreConfigFileName);
             if (!File.Exists(livePath))
             {
                 return Report(RuleDriftState.Unknown,
-                    error: "No live sing-box config found on disk.",
+                    error: "No live mihomo config found on disk.",
                     routing: routing,
                     warnings: [$"No config file at {livePath} — the core may not have started, or it was never regenerated."],
-                    expectedRules: expectedRules,
-                    expectedFinal: expectedFinal);
+                    expectedRules: expectedRules);
             }
 
             var liveText = await File.ReadAllTextAsync(livePath);
-            var live = JsonUtils.Deserialize<SingboxConfig>(liveText);
-            if (live?.route is null)
+            var liveRules = RouteTesterService.ExtractRules(liveText);
+            if (liveRules.Count == 0 && !liveText.Contains("rules:", StringComparison.OrdinalIgnoreCase))
             {
                 return Report(RuleDriftState.Unknown,
-                    error: "The live sing-box config could not be parsed.",
+                    error: "The live mihomo config could not be parsed.",
                     routing: routing,
-                    warnings: [$"File at {livePath} is not a readable sing-box config."],
-                    expectedRules: expectedRules,
-                    expectedFinal: expectedFinal);
+                    warnings: [$"File at {livePath} is not a readable mihomo config."],
+                    expectedRules: expectedRules);
             }
 
-            return BuildReport(routing, expectedRules, expectedFinal, live.route?.rules ?? [], live.route?.final);
+            return BuildReport(routing, expectedRules, liveRules);
         }
         catch (Exception ex)
         {
@@ -165,54 +161,43 @@ public sealed class RoutingDriftHealthCheck
     /// </summary>
     internal static RuleDriftReport BuildReport(
         RoutingItem routing,
-        IReadOnlyList<Rule4Sbox> expectedRules,
-        string? expectedFinal,
-        IReadOnlyList<Rule4Sbox> liveRules,
-        string? liveFinal,
+        IReadOnlyList<string> expectedRules,
+        IReadOnlyList<string> liveRules,
         IReadOnlyList<string>? externalWarnings = null)
     {
-        var expectedFp = expectedRules.Select(RuleFingerprint).ToList();
-        var liveFp = liveRules.Select(RuleFingerprint).ToList();
-
         var missing = new List<string>();
-        var liveFpSet = new HashSet<string>(liveFp);
+        var liveSet = new HashSet<string>(liveRules, StringComparer.Ordinal);
         for (var i = 0; i < expectedRules.Count; i++)
         {
-            if (!liveFpSet.Contains(expectedFp[i]))
+            if (!liveSet.Contains(expectedRules[i]))
             {
-                missing.Add(SingboxRouteSimulator.DescribeRule(expectedRules[i], i + 1));
+                missing.Add($"{i + 1}. {expectedRules[i]}");
             }
         }
 
         var extra = new List<string>();
-        var expectedFpSet = new HashSet<string>(expectedFp);
+        var expectedSet = new HashSet<string>(expectedRules, StringComparer.Ordinal);
         for (var i = 0; i < liveRules.Count; i++)
         {
-            if (!expectedFpSet.Contains(liveFp[i]))
+            if (!expectedSet.Contains(liveRules[i]))
             {
-                extra.Add(SingboxRouteSimulator.DescribeRule(liveRules[i], i + 1));
+                extra.Add($"{i + 1}. {liveRules[i]}");
             }
         }
 
         var reordered = missing.Count == 0
             && extra.Count == 0
-            && !expectedFp.SequenceEqual(liveFp);
-        var finalDrifted = !string.Equals(expectedFinal, liveFinal, StringComparison.Ordinal);
+            && !expectedRules.SequenceEqual(liveRules);
 
         var warnings = new List<string>(externalWarnings ?? []);
-        if (finalDrifted)
-        {
-            warnings.Add($"route.final differs — expected '{expectedFinal ?? "(none)"}', live '{liveFinal ?? "(none)"}'.");
-        }
-
-        var drifted = missing.Count > 0 || extra.Count > 0 || reordered || finalDrifted;
+        var drifted = missing.Count > 0 || extra.Count > 0 || reordered;
         if (drifted)
         {
             Logging.SaveLog($"[{_tag}] DRIFT detected: routing='{routing.Remarks}' (id={routing.Id}) "
-                + $"expected={expectedRules.Count} rules (final={expectedFinal}), live={liveRules.Count} rules (final={liveFinal}), "
+                + $"expected={expectedRules.Count} rules, live={liveRules.Count} rules, "
                 + $"missing={missing.Count}, extra={extra.Count}, reordered={reordered}.");
             DiagLog.Write($"RULE_DRIFT routing={routing.Id} expected={expectedRules.Count} live={liveRules.Count} "
-                + $"missing={missing.Count} extra={extra.Count} reordered={reordered} final={expectedFinal}->{liveFinal}");
+                + $"missing={missing.Count} extra={extra.Count} reordered={reordered}");
         }
         else
         {
@@ -232,8 +217,6 @@ public sealed class RoutingDriftHealthCheck
             ActiveRuleCount = activeRuleCount,
             ExpectedRuleCount = expectedRules.Count,
             LiveRuleCount = liveRules.Count,
-            ExpectedFinal = expectedFinal,
-            LiveFinal = liveFinal,
             MissingRules = missing,
             ExtraRules = extra,
             Reordered = reordered,
@@ -241,20 +224,12 @@ public sealed class RoutingDriftHealthCheck
         };
     }
 
-    /// <summary>
-    /// Canonical fingerprint of a rule: compact JSON with nulls omitted. Both configs are
-    /// produced by the same generator / deserializer, so property order is stable and two
-    /// semantically identical rules produce identical fingerprints.
-    /// </summary>
-    private static string RuleFingerprint(Rule4Sbox rule) => JsonUtils.Serialize(rule, indented: false);
-
     private static RuleDriftReport Report(
         RuleDriftState state,
         string? error = null,
         RoutingItem? routing = null,
         List<string>? warnings = null,
-        List<Rule4Sbox>? expectedRules = null,
-        string? expectedFinal = null)
+        List<string>? expectedRules = null)
     {
         return new RuleDriftReport
         {
@@ -264,7 +239,6 @@ public sealed class RoutingDriftHealthCheck
             ActiveRoutingId = routing?.Id,
             ActiveRoutingName = routing?.Remarks,
             ExpectedRuleCount = expectedRules?.Count ?? 0,
-            ExpectedFinal = expectedFinal,
             Warnings = warnings ?? [],
         };
     }
