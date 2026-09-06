@@ -1,0 +1,52 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: red-phantom
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="red-phantom"] {
+  --bg: #0A0305;
+  --violet: #FF4058;
+  --cyan: #FF8148;
+  --emerald: #61FF9A;
+  --glass: rgba(255, 64, 88, 0.04);
+  --glass-border: rgba(255, 129, 72, 0.16);
+  --violet-rgb: 255,64,88;
+  --cyan-rgb: 255,129,72;
+  --emerald-rgb: 97,255,154;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(255,64,88,.16);
+  --theme-glass-shadow: 0 1px 16px rgba(255,64,88,.07);
+  --theme-glass-hover-border: rgba(255,129,72,.38);
+  --theme-glass-hover-shadow: 0 3px 26px rgba(255,64,88,.14);
+  --theme-font-shadow: 0 0 12px rgba(255,64,88,.3);
+  --theme-ring-glow: drop-shadow(0 0 10px #FF4058) drop-shadow(0 0 4px #FF8148);
+  --theme-spinner-top: #FF4058;
+  --theme-spinner-right: #FF8148;
+  --theme-spinner-bottom: rgba(255,64,88,.2);
+  --theme-spinner-duration: .58s;
+  --theme-tooltip-border: rgba(255,64,88,.36);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(255,64,88,.18);
+  --theme-toast-border: rgba(255,64,88,.34);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(255,64,88,.15);
+  --theme-badge-border: rgba(255,64,88,.3);
+  --theme-badge-color: #FFA8B5;
+}
+
+/* Signature — phantom radar sweep, opacity/transform only. */
+body[data-theme="red-phantom"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(520px 520px at 20% 80%, rgba(255,64,88,.1), transparent 55%),
+    radial-gradient(700px 420px at 90% 10%, rgba(255,129,72,.09), transparent 58%);
+  animation: red-phantom-sweep 8s ease-in-out infinite alternate;
+  opacity: .5;
+  will-change: opacity, transform;
+}
+@keyframes red-phantom-sweep {
+  0%   { opacity: .35; transform: translate3d(-6px, 0, 0) scale(1); }
+  100% { opacity: .85; transform: translate3d(6px, 0, 0) scale(1.06); }
+}
+body[data-theme="red-phantom"]::before {
+  animation-duration: 40s !important;
+}
+

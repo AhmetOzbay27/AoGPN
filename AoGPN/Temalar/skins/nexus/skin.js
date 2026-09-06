@@ -941,7 +941,7 @@
       : (action === 'direct' ? 'DIRECT' : (action === 'block' ? 'BLOCKED' : nxT('kind.tunneled')));
     const on = nxIsTunneled(action);
     return '<div class="nx-game">'
-      + '<div class="nx-gameIcon">' + (icon || '◈') + '</div>'
+      + '<div class="nx-gameIcon">' + (nxAppIconUri(item.exePath) ? '<img src="' + nxAppIconUri(item.exePath) + '" alt="" draggable="false">' : (icon || '◈')) + '</div>'
       + '<div><b>' + escHtml(name) + '</b><span>' + escHtml(kindLabel.toUpperCase()) + (running ? ' · ' + escHtml(nxT('running')) : '') + '</span></div>'
       + '<div class="nx-switch' + (on ? ' on' : '') + '" role="switch" aria-checked="' + on + '" tabindex="0" data-nx-pname="' + escHtml(pname) + '" title="Toggle routing (Enter/Space or ←/→)"></div>'
       + '</div>';
@@ -1009,6 +1009,25 @@
 
   function nxRouteTagFor(action) { return action === 'vpn' ? 'proxy' : (['direct', 'block', 'warp'].includes(action) ? action : 'unknown'); }
 
+  // Gerçek exe ikonu: ana dashboard'un AppIconService'ten çözüp skinBridge
+  // üzerinden paylaştığı shell ikonları (path -> data URI). İkon yoksa iki
+  // harfli yer tutucu kutu basılır (standalone demo'da da aynı davranır).
+  function nxAppIconUri(exePath) {
+    if (!exePath || !B) return '';
+    try {
+      const icons = B.appIcons;
+      if (!icons) return '';
+      return icons[String(exePath).trim().toLowerCase()] || '';
+    } catch (e) { return ''; }
+  }
+
+  function nxAppIcon(exePath, fallbackText, cls) {
+    const uri = nxAppIconUri(exePath);
+    const label = String(fallbackText || 'APP').slice(0, 2).toUpperCase() || '?';
+    if (uri) return '<span class="nx-appIco ' + (cls || '') + '"><img src="' + uri + '" alt="" draggable="false"></span>';
+    return '<span class="nx-appIco ' + (cls || '') + '">' + escHtml(label) + '</span>';
+  }
+
   // order { index, total, filterActive } lets the row disable the move buttons at
   // the list edges and hide them entirely while a filter is active (the move
   // targets the real position, not the filtered one).
@@ -1027,13 +1046,35 @@
     const live = item.liveRouteTag
       ? '<span class="nx-routeBadge ' + nxRouteTagFor(item.liveRouteTag) + '">' + escHtml(item.liveRouteText || item.liveRouteTag) + '</span>'
       : '<span class="nx-idle">' + escHtml(nxT('boost.idle')) + '</span>';
+    // WARP rozeti seçilen egress düğümünü gösterir ("WARP · İtalya" gibi).
+    if (item.action === 'warp' && item.warpNodeIndexId && B && Array.isArray(B.nodes)) {
+      const nxWarpNode = B.nodes.find(n => String(n.indexId) === String(item.warpNodeIndexId));
+      if (nxWarpNode && nxWarpNode.name && effLabel && effLabel.toUpperCase() !== 'DIRECT' && effLabel.toUpperCase() !== 'BLOCKED') {
+        effLabel = effLabel + ' · ' + nxWarpNode.name;
+      }
+    }
     const running = item.isRunning === true;
     const normalized = ['proxy', 'vpn+proxy'].includes(item.action) ? 'vpn' : item.action;
     const value = ['vpn', 'direct', 'block', 'warp'].includes(normalized) ? normalized : '';
     const opts = [['', nxT('route.assign')], ['vpn', blacklist ? nxT('dir.selectVpn') : nxT('route.vpn')], ['direct', blacklist ? nxT('dir.selectDirect') : nxT('route.direct')], ['block', blacklist ? nxT('dir.selectBlock') : nxT('route.block')], ['warp', blacklist ? nxT('dir.selectWarp') : nxT('route.warp')]]
       .map(o => '<option value="' + o[0] + '"' + (o[0] === value ? ' selected' : '') + '>' + escHtml(o[1]) + '</option>').join('');
+    // WARP rotasındaki satırlarda düğüm seçici görünür (mevcut düğüm listesinden
+    // bu uygulamanın WARP egress düğümü seçilir; boş = varsayılan/aktif düğüm).
+    const warpNode = (value === 'warp' || item.warpNodeIndexId)
+      ? '<select class="nx-routeSel" data-nx-warpnode="' + escHtml(processName) + '" data-nx-display="' + escHtml(item.displayName || processName) + '">'
+        + '<option value="">' + escHtml(nxT('warp.nodeDefault')) + '</option>'
+        + (B && Array.isArray(B.nodes)
+            ? B.nodes.map(n => {
+              const id = n.indexId || n.key || '';
+              return id
+                ? '<option value="' + escHtml(id) + '"' + (String(id) === String(item.warpNodeIndexId || '') ? ' selected' : '') + '>' + escHtml(n.name || n.id || id) + '</option>'
+                : '';
+            }).join('')
+            : '')
+        + '</select>'
+      : '';
     return '<div class="nx-trow" data-nx-pname="' + escHtml(processName) + '">'
-      + '<div class="nx-tcol prog"><b>' + escHtml(item.displayName || processName) + '</b><span>' + escHtml(processName) + '</span></div>'
+      + '<div class="nx-tcol prog"><div class="nx-progCell">' + nxAppIcon(item.exePath, item.displayName || processName) + '<div class="nx-progTxt"><b>' + escHtml(item.displayName || processName) + '</b><span>' + escHtml(processName) + '</span></div></div></div>'
       + '<div class="nx-tcol"><span class="nx-routeBadge ' + nxRouteTagFor(eff) + '">' + escHtml(effLabel) + '</span>' + dirMark + '</div>'
       + '<div class="nx-tcol">' + live + '</div>'
       + '<div class="nx-tcol"><span class="nx-status' + (running ? ' on' : '') + '"><i></i>' + escHtml(running ? nxT('boost.statusRunning') : nxT('boost.statusNotRunning')) + '</span></div>'
@@ -1041,7 +1082,7 @@
       + '<div class="nx-tcol">' + nxTargetIpsCell(item) + '</div>'
       + '<div class="nx-tcol down">' + escHtml(item.downloadText || '—') + '</div>'
       + '<div class="nx-tcol up">' + escHtml(item.uploadText || '—') + '</div>'
-      + '<div class="nx-tcol"><select class="nx-routeSel" data-nx-route="' + escHtml(processName) + '" data-nx-display="' + escHtml(item.displayName || processName) + '">' + opts + '</select></div>'
+      + '<div class="nx-tcol"><select class="nx-routeSel" data-nx-route="' + escHtml(processName) + '" data-nx-display="' + escHtml(item.displayName || processName) + '">' + opts + '</select>' + warpNode + '</div>'
       + '<div class="nx-tcol rm">'
       + (order && order.filterActive
           ? ''
@@ -1077,7 +1118,7 @@
         + '<input type="search" class="nx-inp nx-pickerFilter" data-nx-pickerfilter placeholder="' + escHtml(nxT('boost.filterRunning')) + '" value="' + escHtml(_nxBoostFilter) + '">'
         + '<div class="nx-pickerList">' + (S.processCatalog.length
             ? S.processCatalog.filter(p => !_nxBoostFilter || (p.displayName + ' ' + p.processName + ' ' + (p.exePath || '')).toLowerCase().includes(_nxBoostFilter.toLowerCase())).map(p =>
-                '<button type="button" class="nx-pickerRow" data-nx-pid="' + escHtml(String(p.pid)) + '" data-nx-pname="' + escHtml(p.processName || '') + '" data-nx-dname="' + escHtml(p.displayName || '') + '"><i>EXE</i><span><b>' + escHtml(p.displayName || p.processName) + '</b><em>' + escHtml((p.exePath || p.processName || '') + ' · PID ' + p.pid) + '</em></span></button>').join('')
+                '<button type="button" class="nx-pickerRow" data-nx-pid="' + escHtml(String(p.pid)) + '" data-nx-pname="' + escHtml(p.processName || '') + '" data-nx-dname="' + escHtml(p.displayName || '') + '">' + nxAppIcon(p.exePath, p.displayName || p.processName, 'nx-pickerIco') + '<span><b>' + escHtml(p.displayName || p.processName) + '</b><em>' + escHtml((p.exePath || p.processName || '') + ' · PID ' + p.pid) + '</em></span></button>').join('')
             : '<p class="nx-empty center slim">' + escHtml(nxT('boost.noProcesses')) + '</p>') + '</div></div>'
       : '';
     root.innerHTML =
@@ -1198,6 +1239,26 @@
       sel.addEventListener('change', () => {
         if (!sel.value) return;
         if (B) B.postToHost({ action: 'set_app_route', processName: sel.dataset.nxRoute, displayName: sel.dataset.nxDisplay, route: sel.value });
+      });
+    });
+    // Per-app WARP egress düğümü (Ayarlar → GPN bypass'ın yerine): warp rotasındaki
+    // satırın yanındaki seçici, bu uygulamanın WARP trafiğinin hangi mevcut düğümden
+    // çıkacağını belirler. Boş değer = varsayılan (aktif düğümün WARP egress'i).
+    root.querySelectorAll('[data-nx-warpnode]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const nodeId = sel.value || '';
+        const displayName = sel.dataset.nxDisplay || '';
+        const nodeName = nodeId && B && B.nodes
+          ? (() => { const n = B.nodes.find(x => String(x.indexId) === String(nodeId)); return n ? (n.name || '') : ''; })()
+          : '';
+        if (B) B.postToHost({
+          action: 'set_app_route',
+          processName: sel.dataset.nxWarpnode,
+          displayName,
+          route: 'warp',
+          warpNodeIndexId: nodeId,
+          warpNodeName: nodeName
+        });
       });
     });
     root.querySelectorAll('[data-nx-rm]').forEach(btn => {
@@ -1338,7 +1399,7 @@
       realLine = '<span class="nx-boostReal">' + escHtml(nxT('boost.before') + ' ' + realBefore) + '</span>';
     }
     return '<div class="nx-boost' + (isRunning ? '' : ' dim') + '">'
-      + '<div class="nx-boostIcon">' + escHtml(label) + '</div>'
+      + '<div class="nx-boostIcon">' + (nxAppIconUri(item.exePath) ? '<img src="' + nxAppIconUri(item.exePath) + '" alt="" draggable="false">' : escHtml(label)) + '</div>'
       + '<div class="nx-boostTxt"><b>' + escHtml(item.displayName || item.processName || item.value) + '</b>'
       + '<span>' + escHtml(isRunning ? nxT('boost.routeActive', { route: routeLabel }) : nxT('boost.idleNoBoost')) + '</span>'
       + realLine + '</div>'
@@ -2100,7 +2161,7 @@
     if (!root) return;
     const S = nxState();
     const info = S.appInfo || {};
-    const version = (info && info.version) ? 'V' + String(info.version) : 'V1.1.0';
+    const version = (info && info.version) ? 'V' + String(info.version) : 'V1.1.1';
     const appName = (info && info.appName) ? String(info.appName) : 'AO GPN';
     const tab = (v) => (v === _nxAboutTab ? ' active' : '');
     root.innerHTML =

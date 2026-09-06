@@ -371,3 +371,9 @@
   .if-apps, .if-telemetry, .if-proxy, .if-nodes { display: none; }
   .if-center { grid-row: 2; }
 }
+
+/* ---- Real executable icons (host AppIconService -> skinBridge.appIcons) ---- */
+.if-appIco { width: 26px; height: 26px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  overflow: hidden; font-style: normal; font-weight: 700; font-size: 10px; color: var(--if-state);
+  background: rgba(255,255,255,.05); border: 1px solid var(--if-line); }
+.if-appIco img { width: 100%; height: 100%; object-fit: contain; padding: 2px; }

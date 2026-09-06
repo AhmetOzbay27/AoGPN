@@ -140,6 +140,16 @@ public sealed class GpnCoreLauncher : IGpnConnectionLauncher
                         softContext = softContext with { GpnVlessBypass = bypass };
                     }
                 }
+                // Per-app WARP egress düğümleri: politika girişlerinin WarpNodeId
+                // değerleri düğüm listesinden (ProfileItem) bağlantı anında çözülür
+                // ve context'e taşınır — üretici bu düğümler için ayrı egress
+                // outbound'ları üretir (Ayarlar → GPN VLESS bypass düğümünün yerini
+                // alan yeni akış; çözülemeyen satırlar varsayılan WARP egress'e düşer).
+                var warpNodes = await ResolveWarpNodesAsync(softContext.GpnSoftPolicy, ct).ConfigureAwait(false);
+                if (warpNodes.Count > 0)
+                {
+                    softContext = softContext with { GpnWarpNodes = warpNodes };
+                }
                 mainContext = softContext;
             }
 
@@ -193,6 +203,61 @@ public sealed class GpnCoreLauncher : IGpnConnectionLauncher
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Politika girişlerinin per-app WARP düğümlerini (ProfileItem.IndexId) bağlantı
+    /// anında çözer: WireGuard profilleri <see cref="GpnServerProfile"/>'a eşlenir
+    /// (mihomo'da ayrı wg-&lt;id&gt; tüneli olur), desteklenen diğer protokoller
+    /// (VLESS/VMess/SS/Trojan/Hysteria2/TUIC/SOCKS/HTTP — Global.MihomoSupportConfigType)
+    /// ProfileItem olarak taşınır (üretici kendi adında proxy outbound'una çevirir).
+    /// Silinmiş, devre dışı ya da desteklenmeyen tipler atlanır — ilgili satır
+    /// varsayılan WARP egress'e düşer ve kural geçersiz outbound'a işaret etmez.
+    /// </summary>
+    private static async Task<IReadOnlyDictionary<string, WarpNodeProfile>> ResolveWarpNodesAsync(
+        GpnSoftRoutingPolicy? policy,
+        CancellationToken ct)
+    {
+        var result = new Dictionary<string, WarpNodeProfile>(StringComparer.Ordinal);
+        if (policy is null)
+        {
+            return result;
+        }
+        foreach (var id in policy.Entries
+                     .Select(e => e.WarpNodeId)
+                     .Where(i => i.IsNotEmpty())
+                     .Distinct(StringComparer.Ordinal))
+        {
+            ct.ThrowIfCancellationRequested();
+            ProfileItem? profile;
+            try
+            {
+                profile = await AppManager.Instance.GetProfileItem(id!).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog("AoGPN per-app warp node resolve failed", ex);
+                continue;
+            }
+            if (profile is null)
+            {
+                continue;
+            }
+            if (profile.ConfigType == EConfigType.WireGuard)
+            {
+                if (WireGuardServerCatalog.TryMap(profile, out var wg))
+                {
+                    result[id!] = new WarpNodeProfile(
+                        id!, profile.Remarks ?? profile.IndexId, null, wg);
+                }
+            }
+            else if (Global.MihomoSupportConfigType.Contains(profile.ConfigType))
+            {
+                result[id!] = new WarpNodeProfile(
+                    id!, profile.Remarks ?? profile.IndexId, profile, null);
+            }
+        }
+        return result;
     }
 
     /// <summary>

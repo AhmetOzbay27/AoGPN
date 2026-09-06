@@ -2441,3 +2441,153 @@ test('dashboard: VLESS-style run (string delays) renders and clears end-to-end',
 
   dash.close();
 });
+
+// ---------------------------------------------------------------------------
+// Canvas effects engine (confetti, matrix rain)
+// ---------------------------------------------------------------------------
+// These boots keep the FX canvases in the DOM (opts.keepCanvasFx) and use the
+// recording context + rAF flush exposed by the sandbox, so they assert the
+// effects actually paint — not just that the handlers exist.
+
+const fxBoot = () => loadDashboard({ keepCanvasFx: true });
+const count = (ctx, name) => ctx._calls.filter(c => c[0] === name).length;
+
+async function moveMouse(dash, x, y) {
+  dash.document.dispatchEvent(new dash.window.MouseEvent('mousemove', {
+    bubbles: true, cancelable: true, clientX: x, clientY: y
+  }));
+}
+
+test('dashboard: mousemove paints no cursor trails (cursor effect removed)', async () => {
+  const dash = await fxBoot();
+  const ctx = dash.fx.cursorCtx();
+  assert.ok(ctx, 'cursor canvas context exists (initCanvasEffects wired)');
+
+  await moveMouse(dash, 120, 80);
+  await moveMouse(dash, 140, 90);
+  dash.fx.flushRaf(300);
+
+  assert.equal(count(ctx, 'arc'), 0, 'mouse movement draws no trail dots');
+  assert.equal(count(ctx, 'fill'), 0, 'mouse movement fills no trail shapes');
+  dash.close();
+});
+
+test('dashboard: confetti paints on connect and is suppressed by the reduced tier', async () => {
+  const dash = await fxBoot();
+  const ctx = dash.fx.cursorCtx();
+
+  dash.window.fireConfetti();
+  dash.fx.flushRaf(400);
+  assert.ok(count(ctx, 'fillRect') > 0, 'confetti squares are painted');
+
+  // Reduced tier: the engine must not paint anything new.
+  dash.window.setEffectsTier('reduced');
+  const before = ctx._calls.length;
+  dash.window.fireConfetti();
+  dash.fx.flushRaf(50);
+  assert.equal(ctx._calls.length, before, 'reduced tier: no canvas painting');
+  dash.close();
+});
+
+test('dashboard: matrix rain paints on the matrix theme and stops when it leaves', async () => {
+  const dash = await fxBoot();
+  const mctx = dash.fx.matrixCtx();
+  assert.ok(mctx, 'matrix canvas context exists');
+
+  dash.window.applyTheme('matrix');
+  dash.fx.flushRaf(50);
+  assert.ok(count(mctx, 'fillText') > 0, 'matrix rain paints glyphs on the matrix theme');
+
+  const before = count(mctx, 'fillText');
+  dash.window.applyTheme('nebula');
+  dash.fx.flushRaf(50);
+  assert.equal(count(mctx, 'fillText'), before, 'matrix rain stops after leaving the matrix theme');
+  dash.close();
+});
+
+test('dashboard: balanced tier freezes the matrix rain loop', async () => {
+  const dash = await fxBoot();
+  const mctx = dash.fx.matrixCtx();
+
+  dash.window.applyTheme('matrix');
+  dash.fx.flushRaf(50);
+  assert.ok(count(mctx, 'fillText') > 0, 'matrix rain painted before balancing');
+
+  dash.window.setEffectsTier('balanced');
+  const before = count(mctx, 'fillText');
+  dash.fx.flushRaf(50);
+  assert.equal(count(mctx, 'fillText'), before, 'balanced tier: matrix loop frozen');
+  dash.close();
+});
+
+test('dashboard: effects freeze on blur/minimize and resume on focus', async () => {
+  const dash = await fxBoot();
+  const { window } = dash;
+  const body = dash.document.body;
+  const mctx = dash.fx.matrixCtx();
+
+  // Alt+Tab away: the window blur freezes the whole motion budget.
+  window.dispatchEvent(new window.Event('blur'));
+  assert.ok(body.classList.contains('effects-hidden'), 'blur freezes effects');
+
+  // While frozen the matrix rain must not paint, even on the matrix theme.
+  window.setEffectsTier('full');
+  window.applyTheme('matrix');
+  dash.fx.flushRaf(50);
+  assert.equal(count(mctx, 'fillText'), 0, 'frozen: matrix rain does not paint');
+
+  // Returning to the app: focus unfreezes and the rain loop restarts.
+  window.dispatchEvent(new window.Event('focus'));
+  assert.ok(!body.classList.contains('effects-hidden'), 'focus unfreezes effects');
+  dash.fx.flushRaf(50);
+  assert.ok(count(mctx, 'fillText') > 0, 'unfrozen: matrix rain paints again');
+
+  // Minimize path: visibilitychange with document.hidden freezes too.
+  window.setEffectsTier('full');
+  window.applyTheme('nebula');
+  dash.fx.flushRaf(50);
+  Object.defineProperty(dash.document, 'hidden', { value: true, configurable: true });
+  dash.document.dispatchEvent(new window.Event('visibilitychange'));
+  assert.ok(body.classList.contains('effects-hidden'), 'visibilitychange(hidden) freezes effects');
+  Object.defineProperty(dash.document, 'hidden', { value: false, configurable: true });
+  dash.document.dispatchEvent(new window.Event('visibilitychange'));
+  assert.ok(!body.classList.contains('effects-hidden'), 'visibilitychange(visible) unfreezes effects');
+
+  // The explicit API is idempotent and resumable.
+  window.setEffectsHidden(true);
+  window.setEffectsHidden(true);
+  assert.ok(body.classList.contains('effects-hidden'), 'setEffectsHidden(true) freezes');
+  window.setEffectsHidden(false);
+  assert.ok(!body.classList.contains('effects-hidden'), 'setEffectsHidden(false) unfreezes');
+  dash.close();
+});
+
+// ---------------------------------------------------------------------------
+// Settings → Appearance: theme deck
+// ---------------------------------------------------------------------------
+
+test('dashboard: Appearance tab renders the theme deck and applies a theme on click', async () => {
+  const dash = await bootDashboard();
+  const d = dash.document, w = dash.window;
+  assert.ok(dash.openView('settings'), 'settings nav item must exist and be clickable');
+
+  const tab = d.querySelector('[data-settings-tab="appearance"]');
+  assert.ok(tab, 'Appearance tab exists');
+  tab.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  const panel = d.querySelector('[data-settings-panel="appearance"]');
+  assert.ok(panel, 'appearance panel exists');
+  assert.ok(!panel.classList.contains('hidden'), 'appearance panel shows after clicking its tab');
+
+  const cards = panel.querySelectorAll('#themePicker [data-theme-id]');
+  assert.equal(cards.length, 25, 'theme deck renders all 25 themes');
+  const matrix = panel.querySelector('#themePicker [data-theme-id="matrix"]');
+  assert.ok(matrix, 'matrix theme card exists');
+
+  matrix.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(d.body.getAttribute('data-theme'), 'matrix', 'clicking a card applies the theme');
+  const post = dash.postsWith('set_theme').at(-1);
+  assert.equal(post && post.theme, 'matrix', 'theme change is posted to the host');
+  assert.ok(matrix.classList.contains('active'), 'applied card carries the active state');
+  dash.close();
+});

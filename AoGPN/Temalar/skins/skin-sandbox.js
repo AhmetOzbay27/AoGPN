@@ -243,30 +243,36 @@ const DASHBOARD_ROOT = path.join(__dirname, '..', '..'); // AoGPN/ (html, Temala
 
 // The dashboard markup is large (~200 KB) and jsdom re-parses it on every
 // boot, so pre-shrink it once and reuse the cached string across tests:
-//   - the cursor-trail / matrix-rain canvases are dropped (initCursorEffects
+//   - the FX canvases (confetti + matrix rain) are dropped (initCanvasEffects
 //     short-circuits when they are absent, so the whole animation machinery
 //     never runs in tests),
 //   - comments and whitespace between tags are stripped (no layout impact;
 //     jsdom tokenizes every boot).
-let _dashboardHtmlCache = null;
-function dashboardHtml() {
-  if (_dashboardHtmlCache) return _dashboardHtmlCache;
+const _dashboardHtmlCache = {};
+function dashboardHtml(opts) {
+  const key = (opts && opts.keepCanvasFx) ? 'fx' : 'plain';
+  if (_dashboardHtmlCache[key]) return _dashboardHtmlCache[key];
   let html = fs.readFileSync(path.join(DASHBOARD_ROOT, 'vpn-gpn-dashboard.html'), 'utf8');
   html = html
-    .replace(/<canvas[^>]*id="cursorCanvas"[^>]*>\s*<\/canvas>/gi, '')
-    .replace(/<canvas[^>]*id="matrixRainCanvas"[^>]*>\s*<\/canvas>/gi, '')
+    .replace(/<canvas[^>]*id="cursorCanvas"[^>]*>\s*<\/canvas>/gi, opts && opts.keepCanvasFx ? '$&' : '')
+    .replace(/<canvas[^>]*id="matrixRainCanvas"[^>]*>\s*<\/canvas>/gi, opts && opts.keepCanvasFx ? '$&' : '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/>\s+</g, '><');
-  _dashboardHtmlCache = html;
-  return _dashboardHtmlCache;
+  _dashboardHtmlCache[key] = html;
+  return html;
 }
 
 async function loadDashboard(opts) {
   const clock = { now: (opts && typeof opts.now === 'number') ? opts.now : 1_000_000 };
   const posts = [];
 
-  const dom = new JSDOM(dashboardHtml(), {
+  const dom = new JSDOM(dashboardHtml(opts), {
     runScripts: 'outside-only',
+    // A visible, focused window like the packaged WebView2: without this,
+    // jsdom reports document.hidden === true and the dashboard's effects
+    // freeze (blur/minimize handling) would kick in at boot and silence the
+    // canvas effects under test.
+    pretendToBeVisual: true,
     url: 'http://localhost/vpn-gpn-dashboard.html'
   });
   const w = dom.window;
@@ -306,7 +312,11 @@ async function loadDashboard(opts) {
   w.clearInterval = (id) => { delete _intervals[id]; };
   w.setTimeout = () => 1;
   w.clearTimeout = () => {};
-  w.requestAnimationFrame = () => 1;
+  // rAF callbacks are COLLECTED instead of dropped so effects tests can flush
+  // them deterministically (dash.fx.flushRaf). Boots that never flush behave
+  // exactly like the old no-op stub.
+  const _rafQueue = [];
+  w.requestAnimationFrame = (fn) => { _rafQueue.push(fn); return _rafQueue.length; };
 
   // ---- fetch stub: serve the real config/lang/registry files from disk ----
   w.fetch = (url) => {
@@ -360,17 +370,73 @@ async function loadDashboard(opts) {
     get shadowOffsetX() { return 0; }, set shadowOffsetX(v) {},
     get shadowOffsetY() { return 0; }, set shadowOffsetY(v) {}
   });
+  // Recording canvas context: wraps the Canvas2D stub and logs every method
+  // call / property set so effect tests can assert what the engine painted.
+  const fxCtxs = [];
+  function RecordingCtx(canvasEl) {
+    const base = Canvas2D();
+    const calls = [];
+    const rec = { _calls: calls, canvas: canvasEl };
+    const methods = ['fillRect','strokeRect','clearRect','fillText','strokeText',
+      'beginPath','closePath','moveTo','lineTo','arc','arcTo','rect','fill','stroke',
+      'clip','save','restore','translate','scale','rotate','setTransform',
+      'resetTransform','drawImage','putImageData'];
+    methods.forEach(m => {
+      rec[m] = (...args) => { calls.push([m].concat(args)); if (typeof base[m] === 'function') base[m](...args); };
+    });
+    const props = ['fillStyle','strokeStyle','font','textAlign','textBaseline',
+      'globalAlpha','globalCompositeOperation','lineWidth','lineCap','lineJoin',
+      'shadowBlur','shadowColor','shadowOffsetX','shadowOffsetY'];
+    props.forEach(p => {
+      Object.defineProperty(rec, p, {
+        get: () => base[p],
+        set: (v) => { calls.push([p + ' =', v]); base[p] = v; }
+      });
+    });
+    return rec;
+  }
   if (w.HTMLCanvasElement && w.HTMLCanvasElement.prototype) {
-    w.HTMLCanvasElement.prototype.getContext = () => Canvas2D();
+    w.HTMLCanvasElement.prototype.getContext = function (type) {
+      if (type !== '2d') return null;
+      const ctx = RecordingCtx(this);
+      fxCtxs.push({ id: this.id, ctx });
+      return ctx;
+    };
   }
 
-  // Boot the real dashboard (IIFE runs immediately on eval).
+  // Boot the real dashboard exactly as the packaged index.html loads it: the
+  // core/feature modules first (they register onto window.aogpn), then app.js
+  // (the coordinator). Each IIFE runs immediately on eval.
+  const MODULE_FILES = [
+    'core/events.js', 'core/util.js', 'core/dom.js', 'core/bridge.js',
+    'core/i18n.js', 'core/selects.js', 'core/theme.js', 'core/tooltips.js',
+    'features/window-controls.js', 'features/release-notes.js',
+    'features/telemetry.js', 'features/settings.js', 'features/game-boost.js',
+    'features/gpn.js', 'features/views.js', 'features/nodes.js', 'features/connection.js'
+  ];
+  for (const m of MODULE_FILES) {
+    w.eval(fs.readFileSync(path.join(__dirname, '..', m), 'utf8'));
+  }
   w.eval(fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8'));
 
   // Let the async startup chains (themes.json, Dil/*.json, skins.json) settle.
   // A single macrotask flush is enough: every fetch resolves immediately and
   // the dependent microtasks finish within the same event-loop turn.
   await new Promise(res => setImmediate(res));
+
+  // Run pending rAF callbacks until the queue drains (or a cap is hit, so a
+  // perpetual loop like the matrix rain can never hang a test). Returns the
+  // number of callbacks executed.
+  function flushRaf(maxIter) {
+    const cap = maxIter || 500;
+    let n = 0;
+    while (_rafQueue.length && n < cap) {
+      const fns = _rafQueue.splice(0);
+      fns.forEach(fn => { try { fn(); } catch (e) { /* ignore */ } });
+      n += fns.length;
+    }
+    return n;
+  }
 
   const boostBody = () => d.getElementById('splitAppsBody');
   const postsWith = (action) => posts.filter(p => p && p.action === action);
@@ -382,6 +448,14 @@ async function loadDashboard(opts) {
     posts,
     clock,
     advance(ms) { clock.now += ms; },
+    // Canvas-effect handle: per-canvas recording contexts (only present when
+    // opts.keepCanvasFx kept the canvases in the DOM) + the rAF flush.
+    fx: {
+      get contexts() { return fxCtxs; },
+      cursorCtx() { const c = fxCtxs.find(x => x.id === 'cursorCanvas'); return c && c.ctx; },
+      matrixCtx() { const c = fxCtxs.find(x => x.id === 'matrixRainCanvas'); return c && c.ctx; },
+      flushRaf
+    },
     postsWith,
     openView(view) {
       const el = d.querySelector('[data-view="' + view + '"]');

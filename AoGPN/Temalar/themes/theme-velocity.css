@@ -11,6 +11,24 @@
     --emerald: #22C55E;
     --glass: rgba(59, 130, 246, 0.045);
     --glass-border: rgba(239, 68, 68, 0.15);
+
+    /* Theme scaffold — shared rules in components.css consume these variables. */
+    --theme-glass-border: rgba(59,130,246,.14);
+    --theme-glass-shadow: 0 1px 18px rgba(30,64,175,.09), inset 0 0 16px rgba(239,68,68,.018);
+    --theme-glass-hover-border: rgba(96,165,250,.32);
+    --theme-glass-hover-shadow: 0 4px 26px rgba(59,130,246,.13), inset 0 0 20px rgba(239,68,68,.025);
+    --theme-font-shadow: 0 0 12px rgba(59,130,246,.2);
+    --theme-ring-glow: drop-shadow(0 0 10px #3B82F6) drop-shadow(0 0 4px #EF4444);
+    --theme-spinner-top: #EF4444;
+    --theme-spinner-right: #3B82F6;
+    --theme-spinner-bottom: rgba(239,68,68,.25);
+    --theme-spinner-duration: .55s;
+    --theme-tooltip-border: rgba(59,130,246,.35);
+    --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(59,130,246,.15), 0 0 24px rgba(239,68,68,.07);
+    --theme-toast-border: rgba(239,68,68,.32);
+    --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(59,130,246,.12), 0 0 26px rgba(239,68,68,.08);
+    --theme-badge-border: rgba(96,165,250,.3);
+    --theme-badge-color: #93C5FD;
   }
 
   /* --- Velocity: red/blue high-speed network telemetry --- */
@@ -37,20 +55,4 @@
     animation-duration: 42s !important;
     /* no filter: full-screen blur on the animated aurora layer is the biggest
        per-frame GPU cost in the dashboard; the shared gradient is soft already */
-  }
-  body[data-theme="velocity"] .glass {
-    border-color: rgba(59,130,246,.14);
-    box-shadow: 0 1px 18px rgba(30,64,175,.09), inset 0 0 16px rgba(239,68,68,.018);
-  }
-  body[data-theme="velocity"] .glass:hover {
-    border-color: rgba(96,165,250,.32);
-    box-shadow: 0 4px 26px rgba(59,130,246,.13), inset 0 0 20px rgba(239,68,68,.025);
-  }
-  body[data-theme="velocity"] .font-display { text-shadow: 0 0 12px rgba(59,130,246,.2); }
-  body[data-theme="velocity"]  .ring-wrap .ring-svg { filter: drop-shadow(0 0 10px #3B82F6) drop-shadow(0 0 4px #EF4444); }
-  body[data-theme="velocity"] .theme-spinner {
-    border-top-color: #EF4444;
-    border-right-color: #3B82F6;
-    border-bottom-color: rgba(239,68,68,.25);
-    animation-duration: .55s;
   }

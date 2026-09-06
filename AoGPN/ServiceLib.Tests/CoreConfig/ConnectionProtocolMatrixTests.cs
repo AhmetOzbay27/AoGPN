@@ -246,7 +246,6 @@ public class ConnectionProtocolMatrixTests
 
             case EConfigType.VLESS:
                 node.Password = Guid.NewGuid().ToString();
-                node.Id = Guid.NewGuid().ToString();
                 node.SetProtocolExtra(node.GetProtocolExtra() with
                 {
                     Flow = string.Empty,
@@ -276,7 +275,6 @@ public class ConnectionProtocolMatrixTests
                 node.Network = string.Empty;
                 node.StreamSecurity = Global.StreamSecurity;
                 node.Alpn = "h3";
-                node.Id = Guid.NewGuid().ToString();
                 node.CoreType = ECoreType.mihomo;
                 break;
 

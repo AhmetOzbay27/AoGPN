@@ -237,6 +237,8 @@
   "route.vpn": "VPN",
   "route.warp": "WARP",
   "warp.fallbackNotice": "WARP 路由需要 WireGuard 節點 — 目前連線不是 WireGuard，WARP 應用將走 VPN。",
+  "warp.nodeDefault": "預設（目前節點）",
+  "warp.nodePickerHint": "此應用程式的 WARP 流量從所選節點出口 — 可從清單中選擇任何節點（義大利、德國、南非…）。",
   "settings.language": "語言",
   "settings.save": "儲存設定",
   "settings.stack": "堆疊",

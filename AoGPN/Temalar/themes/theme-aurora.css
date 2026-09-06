@@ -1,6 +1,52 @@
-/* Copper Aurora — deep teal, copper and parchment accents. */
-body[data-theme="aurora"] { --violet:#B87333; --cyan:#2DD4BF; --emerald:#A3E635; --violet-rgb:184,115,51; --cyan-rgb:45,212,191; --emerald-rgb:163,230,53; background:#071B1B; color:#E7F5F2; }
-body[data-theme="aurora"]::before { content:""; position:fixed; inset:0; pointer-events:none; background:radial-gradient(ellipse at 20% 10%,rgba(45,212,191,.18),transparent 42%),radial-gradient(ellipse at 85% 85%,rgba(184,115,51,.16),transparent 40%); }
-body[data-theme="aurora"] .glass { border-color:rgba(45,212,191,.25); box-shadow:0 0 24px rgba(45,212,191,.08); }
-body[data-theme="aurora"] .ring-wrap .ring-svg { filter:drop-shadow(0 0 10px #2DD4BF) drop-shadow(0 0 5px #B87333); }
-body[data-theme="aurora"] .theme-spinner { border-top-color:#B87333; border-right-color:#2DD4BF; }
+/* ==========================================================================
+   AoGPN dashboard — theme: aurora
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="aurora"] {
+  --bg: #071B1B;
+  --violet: #B87333;
+  --cyan: #2DD4BF;
+  --emerald: #A3E635;
+  --glass: rgba(45, 212, 191, 0.04);
+  --glass-border: rgba(184, 115, 51, 0.16);
+  --violet-rgb: 184,115,51;
+  --cyan-rgb: 45,212,191;
+  --emerald-rgb: 163,230,53;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(45,212,191,.22);
+  --theme-glass-shadow: 0 1px 18px rgba(45,212,191,.09);
+  --theme-glass-hover-border: rgba(163,230,53,.32);
+  --theme-glass-hover-shadow: 0 4px 28px rgba(45,212,191,.16);
+  --theme-font-shadow: 0 0 10px rgba(45,212,191,.26), 0 0 20px rgba(184,115,51,.14);
+  --theme-ring-glow: drop-shadow(0 0 10px #2DD4BF) drop-shadow(0 0 5px #B87333);
+  --theme-spinner-top: #B87333;
+  --theme-spinner-right: #2DD4BF;
+  --theme-spinner-bottom: rgba(45,212,191,.2);
+  --theme-spinner-duration: .68s;
+  --theme-tooltip-border: rgba(45,212,191,.34);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 16px rgba(45,212,191,.16);
+  --theme-toast-border: rgba(45,212,191,.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(45,212,191,.12);
+  --theme-badge-border: rgba(45,212,191,.3);
+  --theme-badge-color: #A7E8DC;
+}
+
+/* Signature — copper aurora curtain sweep, opacity/transform only. */
+body[data-theme="aurora"]::after {
+  content: ''; position: fixed; inset: -420px 0 0 0; z-index: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(115deg, transparent 0 70px, rgba(45,212,191,.05) 70px 72px),
+    repeating-linear-gradient(295deg, transparent 0 110px, rgba(184,115,51,.045) 110px 113px);
+  animation: aurora-curtain 24s linear infinite;
+  opacity: .55;
+  will-change: transform;
+}
+@keyframes aurora-curtain {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(113px, 420px, 0); }
+}
+body[data-theme="aurora"]::before {
+  animation-duration: 40s !important;
+}
+

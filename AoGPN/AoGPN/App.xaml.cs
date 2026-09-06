@@ -12,6 +12,22 @@ namespace AoGPN;
 public partial class App
 {
     public static EventWaitHandle ProgramStarted;
+
+    /// <summary>
+    /// The boot splash, shown before any heavy initialization and dismissed by
+    /// <see cref="MainWindow.RevealStartupWindow"/> at the exact moment the
+    /// dashboard has painted (see <see cref="SplashWindow"/>). Null after a
+    /// successful startup handoff.
+    /// </summary>
+    public static SplashWindow? Splash { get; private set; }
+
+    /// <summary>
+    /// Process-boot anchor for the WEBVIEW_BOOT end-to-end timing (splash →
+    /// first dashboard frame, see MainWindow.ProbeFirstFrameAsync). Initialized
+    /// when the App type is first touched, i.e. at process start.
+    /// </summary>
+    public static readonly DateTime BootStartedAt = DateTime.UtcNow;
+
     private bool _startupCompleted;
 
     /// <summary>
@@ -57,10 +73,27 @@ public partial class App
         }
 
         // Decide the WPF render mode for this session before any window is
-        // created: hardware by default, with automatic software
-        // fallbacks (no GPU path, or a crash budget exceeded — see
-        // HardwareAccelerationGuard). WebView2 is not affected.
+        // created — the guard's documented contract is "before any window is
+        // shown", so it must run before the splash appears. Hardware by default,
+        // with automatic software fallbacks (no GPU path, or a crash budget
+        // exceeded — see HardwareAccelerationGuard). WebView2 is not affected.
         HardwareAccelerationGuard.ApplyOnStartup();
+
+        // Apply the configured UI font (config is loaded now; a static x:Static would
+        // run too early, before the config exists, so the font is applied via a resource).
+        // Applied BEFORE the splash is created: the splash's window region is cut from
+        // a snapshot of its tree, so the environment must be final before it renders.
+        Resources[MaterialDesignFonts.FontResourceKey] = MaterialDesignFonts.GetFont(AppManager.Instance.Config.UiItem.CurrentFontFamily);
+
+        // Startup splash: appears before InitComponents / WebView2 boot so a launch
+        // never looks dead, and stays until MainWindow.RevealStartupWindow dismisses
+        // it at the exact moment the dashboard has loaded and been seeded. The
+        // loading bar is driven by the real stages below (SetProgress); the status
+        // line itself is fixed (see SplashWindow).
+        Splash = new SplashWindow();
+        Splash.Show();
+        Splash.SetProgress(10);
+        DiagLog.Write("WEBVIEW_BOOT splash-shown");
 
         // Headless build-time mode: download/refresh the sing-box and Xray cores
         // into the bin folder next to this executable, then exit. Used by the
@@ -72,10 +105,6 @@ public partial class App
             Environment.Exit(exitCode);
             return;
         }
-
-        // Apply the configured UI font (config is loaded now; a static x:Static would
-        // run too early, before the config exists, so the font is applied via a resource).
-        Resources[MaterialDesignFonts.FontResourceKey] = MaterialDesignFonts.GetFont(AppManager.Instance.Config.UiItem.CurrentFontFamily);
 
         // Keep the font live-updating from any settings window (no restart needed).
         AppEvents.FontFamilyChanged.AsObservable().Subscribe(fontFamily =>
@@ -109,6 +138,8 @@ public partial class App
         }
 
         AppManager.Instance.InitComponents();
+        Splash?.SetProgress(30);
+        DiagLog.Write("WEBVIEW_BOOT components-done");
 
         RxAppBuilder.CreateReactiveUIBuilder()
             .WithWpf()
@@ -122,13 +153,30 @@ public partial class App
 
         var mainWindow = (MainWindow)viewFor;
 
-        // Show the window already invisible: WebView2 needs the window created (its
-        // Loaded handler initializes the dashboard), but painting the raw frame first
-        // would flash an empty black window while the dashboard boots. MainWindow
-        // reveals itself (RevealStartupWindow) once the dashboard has rendered.
-        mainWindow.Opacity = 0;
+        // Show the window PARKED OFF-SCREEN instead of invisible: WebView2 needs
+        // the window created (its Loaded handler initializes the dashboard), but
+        // painting the raw frame first would flash an empty black window while the
+        // dashboard boots. The old "Opacity 0" trick must NOT be used: WPF window
+        // opacity below 1 requires a layered window, and layered windows paint as
+        // a solid black RECTANGLE on machines where compositing is broken (software
+        // rendering, some drivers, remote sessions — the same failure the splash's
+        // SetWindowRgn rewrite exists for). The maximized main window therefore
+        // blackened the ENTIRE screen behind the splash for the whole boot. The
+        // parked window still loads normally (Loaded fires, WebView2 boots) but no
+        // pixel is ever painted; RevealStartupWindow moves it to its saved spot (or
+        // maximizes it) in the same tick the dashboard becomes visible.
+        mainWindow.WindowStartupLocation = WindowStartupLocation.Manual;
+        mainWindow.Left = -32000;
+        mainWindow.Top = -32000;
         mainWindow.Show();
         MainWindow = mainWindow;
+        Splash?.SetProgress(45);
+        // Prove the park worked: if the window is NOT far off-screen / has been
+        // pushed back onto a monitor (some drivers clamp), the boot would paint it
+        // over the desktop behind the splash — the exact black screen this parking
+        // exists to prevent. The log line below makes the next run self-verifying.
+        DiagLog.Write($"WEBVIEW_BOOT window-shown state={mainWindow.WindowState} "
+            + $"left={mainWindow.Left:0} top={mainWindow.Top:0} w={mainWindow.ActualWidth:0} h={mainWindow.ActualHeight:0}");
         _startupCompleted = true;
     }
 
@@ -152,6 +200,8 @@ public partial class App
         {
             // Startup failed before the main window appeared. Exit with a visible
             // error instead of running headless with no window (silent failure mode).
+            // The topmost splash must not cover the error dialog, so close it first.
+            Splash?.CloseNow();
             UI.Show($"Startup failed: {e.Exception.Message}{Environment.NewLine}Başlangıç başarısız: {e.Exception.Message}");
             Environment.Exit(1);
             return;
@@ -175,6 +225,18 @@ public partial class App
     protected override void OnExit(ExitEventArgs e)
     {
         Logging.SaveLog("OnExit");
+
+        // Insurance for a teardown that starts while the splash is still up (e.g.
+        // the user closes the app mid-boot): never let the topmost splash outlive
+        // the main window.
+        try
+        {
+            Splash?.CloseNow();
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("SplashWindow.CloseNow failed during exit", ex);
+        }
 
         // The whole dispatch below is bounded by an escalator. A subscriber that
         // THROWS is caught and logged, but log traces (2026-09-03) showed a

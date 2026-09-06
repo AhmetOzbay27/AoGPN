@@ -173,8 +173,9 @@ public sealed class GpnMihomoConfigService
     /// Kurallar geldikleri sırayla yazılır; sıra anlamsaldır (önce özel, sonra genel).
     /// </summary>
     public string GenerateYaml(GpnServerProfile server, IReadOnlyList<RulesItem> rules, GpnMihomoOptions options,
-        VlessProfileItem? bypass = null, IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
-        => GenerateCore(nodes: null, active: server, policy: null, rules, options, bypass, launcherBypasses);
+        VlessProfileItem? bypass = null, IReadOnlyList<LauncherBypassItem>? launcherBypasses = null,
+        IReadOnlyDictionary<string, WarpNodeProfile>? warpNodes = null)
+        => GenerateCore(nodes: null, active: server, policy: null, rules, options, bypass, launcherBypasses, warpNodes);
 
     /// <summary>
     /// Aday düğüm listesi + aktif düğüm + rota kurallarından eksiksiz mihomo YAML üretir.
@@ -197,8 +198,9 @@ public sealed class GpnMihomoConfigService
         IReadOnlyList<RulesItem> rules,
         GpnMihomoOptions options,
         VlessProfileItem? bypass = null,
-        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
-        => GenerateCore(nodes, active, policy: null, rules, options, bypass, launcherBypasses);
+        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null,
+        IReadOnlyDictionary<string, WarpNodeProfile>? warpNodes = null)
+        => GenerateCore(nodes, active, policy: null, rules, options, bypass, launcherBypasses, warpNodes);
 
     /// <summary>
     /// Kesintisiz rota (superset) biçimi: politika (mod + yön + tüm girişler) + korunan
@@ -227,8 +229,9 @@ public sealed class GpnMihomoConfigService
         IReadOnlyList<RulesItem> preservedRules,
         GpnMihomoOptions options,
         VlessProfileItem? bypass = null,
-        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
-        => GenerateCore(nodes, active, policy, preservedRules ?? [], options, bypass, launcherBypasses);
+        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null,
+        IReadOnlyDictionary<string, WarpNodeProfile>? warpNodes = null)
+        => GenerateCore(nodes, active, policy, preservedRules ?? [], options, bypass, launcherBypasses, warpNodes);
 
     /// <summary>
     /// Tek ortak üretici: <paramref name="policy"/> null ise legacy (tek/çoklu düğüm,
@@ -243,7 +246,8 @@ public sealed class GpnMihomoConfigService
         IReadOnlyList<RulesItem> rules,
         GpnMihomoOptions options,
         VlessProfileItem? bypass = null,
-        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null)
+        IReadOnlyList<LauncherBypassItem>? launcherBypasses = null,
+        IReadOnlyDictionary<string, WarpNodeProfile>? warpNodes = null)
     {
         var server = active;
         var superset = policy is not null;
@@ -324,6 +328,16 @@ public sealed class GpnMihomoConfigService
             ["mtu"] = ResolveMtu(server, options),
         };
 
+        // Oturum sürekliliği: seçili düğüm (store-selected) ve fake-ip eşlemesi
+        // (store-fake-ip) çekirdek yeniden başlatıldığında bile korunur — kurtarma
+        // sonrası oyun istemcisinin tuttuğu fake-ip'ler aynı gerçek hedeflere
+        // eşlenir (yeniden DNS çözümü gerekmez) ve seçili node değişmez.
+        root["profile"] = new Dictionary<string, object?>
+        {
+            ["store-selected"] = true,
+            ["store-fake-ip"] = true,
+        };
+
         // DNS — fake-ip + hijack: TUN içinden geçen sorgular yakalanır, uygulamalar
         // ISP'ye domain sızdırmaz; PROCESS/DOMAIN kuralları bağlantı kurarken işler.
         if (options.DnsEnabled)
@@ -354,6 +368,57 @@ public sealed class GpnMihomoConfigService
             root["dns"] = new Dictionary<string, object?> { ["enable"] = false };
         }
 
+        // ── Per-app WARP egress düğümleri ────────────────────────────────
+        // Ayarlar → GPN'deki küresel VLESS bypass'ın yerini alan yeni akış: her
+        // uygulama satırı kendi "warp" düğümünü (düğüm listesinden) seçebilir.
+        //   * WG düğümü      → o düğüme ayrı wg-<indexId> tüneli üretilir; uygulama
+        //                      o düğümün egress'inden çıkar (farklı sunucu = farklı
+        //                      çıkış IP'si — WAF/engel aşma amacının ta kendisi).
+        //   * Diğer protokol → profil, kendi adında (warp-<indexId>) mihomo proxy
+        //                      outbound'una çevrilir (eski VLESS bypass'ın geneli).
+        // Çözülemeyen düğüm (silindi/devre dışı/geçersiz tip) → varsayılan WARP
+        // egress'e düşer (warp-socks / dual'de vless-launcher) — kural geçersiz
+        // bir outbound'a asla işaret etmez.
+        var warpNodeMembers = new string?[policy?.Entries.Count ?? 0];
+        var warpNodeWgProxies = new List<object>();
+        var warpNodeProxies = new List<object>();
+        if (policy is not null && warpNodes is { Count: > 0 })
+        {
+            var emittedWg = new HashSet<string>(StringComparer.Ordinal);
+            var emittedProxy = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < policy.Entries.Count; i++)
+            {
+                var nodeId = policy.Entries[i].WarpNodeId;
+                if (nodeId.IsNullOrEmpty()
+                    || !warpNodes.TryGetValue(nodeId!, out var warpNode)
+                    || !warpNode.IsResolved)
+                {
+                    continue;
+                }
+                if (warpNode.IsWireGuard)
+                {
+                    var warpWgName = $"wg-{nodeId}";
+                    // Aday listesinde zaten varsa (aktif/aday düğüm) ikinci tünel
+                    // üretilmez — aynı wg-<id> outbound'u paylaşılır.
+                    if (emittedWg.Add(warpWgName)
+                        && ordered.All(n => !string.Equals(WireGuardProxyName(n), warpWgName, StringComparison.Ordinal)))
+                    {
+                        var wgNode = warpNode.WireGuard!;
+                        var warpNodeIp = wgNode.ClientAddress?.Split(',')[0].Trim().Split('/')[0].Trim() ?? "10.66.66.2";
+                        warpNodeWgProxies.Add(BuildWireGuardProxy(wgNode, warpWgName, warpNodeIp, ResolveMtu(wgNode, options), options));
+                    }
+                    warpNodeMembers[i] = warpWgName;
+                }
+                else if (warpNode.Profile is not null
+                         && emittedProxy.Add(GpnSoftRouting.WarpNodeProxyName(nodeId!)))
+                {
+                    warpNodeProxies.Add(MihomoGlobalConfigService.BuildProxy(
+                        warpNode.Profile, GpnSoftRouting.WarpNodeProxyName(nodeId!)));
+                    warpNodeMembers[i] = GpnSoftRouting.WarpNodeProxyName(nodeId!);
+                }
+            }
+        }
+
         // ── proxies ──
         var proxies = new List<object>();
         foreach (var node in ordered)
@@ -361,6 +426,13 @@ public sealed class GpnMihomoConfigService
             var nodeName = WireGuardProxyName(node);
             var nodeIp = node.ClientAddress?.Split(',')[0].Trim().Split('/')[0].Trim() ?? "10.66.66.2";
             proxies.Add(BuildWireGuardProxy(node, nodeName, nodeIp, ResolveMtu(node, options), options));
+        }
+        if (warpNodeWgProxies.Count > 0)
+        {
+            // Per-app warp düğümlerinin özel WG tünelleri aday outbound'larının hemen
+            // ardına yazılır (GPN-Nodes grubuna üye DEĞİLDİR — düğüm değişimi bunları
+            // etkilemez; uygulama seçtiği düğüme sabitlenir).
+            proxies.AddRange(warpNodeWgProxies);
         }
         if (dual)
         {
@@ -375,6 +447,10 @@ public sealed class GpnMihomoConfigService
             // (dialer-proxy grup adı kabul eder — mihomo ortak alan şeması).
             // Tek düğümde legacy: wg-<id>.
             proxies.Add(BuildWarpSocksProxy(gateway, tunnelTarget));
+        }
+        if (warpNodeProxies.Count > 0)
+        {
+            proxies.AddRange(warpNodeProxies);
         }
         root["proxies"] = proxies;
 
@@ -395,13 +471,29 @@ public sealed class GpnMihomoConfigService
         IReadOnlyList<string>? appTargets = null;
         if (superset)
         {
-            var (modeTarget, targets) = GpnSoftRouting.ComputeSelectionVector(policy!);
+            var (modeTarget, rawTargets) = GpnSoftRouting.ComputeSelectionVector(policy!);
+            var targets = rawTargets.ToList();
             // Çift Bağlantı: "warp" seçimi grup üyelerinde vless-launcher ile temsil
             // edilir (warp-socks üretilmez) — seçim vektörü ve kanonik üye sırası
             // bypass moduna göre kurulur. Legacy'de kanonik sıra aynen korunur.
             IReadOnlyList<string> canonicalAppOrder = dual
                 ? new[] { NodesGroupName, GpnSoftRouting.ClashDirect, GpnSoftRouting.ClashReject, BypassProxyName }
                 : GpnSoftRouting.AppMemberOrder;
+            // Çözülemeyen per-app warp düğümleri (silindi / devre dışı / desteklenmeyen
+            // tip): seçim vektörü warp-<id> üyesini hedefler ama config'te o üye
+            // YOKTUR — kural geçersiz outbound'a işaret etmesin diye varsayılan
+            // WARP egress'e düşürülür (restart'lı fallback üreticiyle aynı karar).
+            var defaultWarpMember = dual ? BypassProxyName : WarpProxyName;
+            for (var i = 0; i < targets.Count; i++)
+            {
+                var nodeId = policy!.Entries[i].WarpNodeId;
+                if (nodeId.IsNotEmpty()
+                    && warpNodeMembers[i] is null
+                    && targets[i] == GpnSoftRouting.WarpNodeProxyName(nodeId!))
+                {
+                    targets[i] = defaultWarpMember;
+                }
+            }
             if (dual)
             {
                 modeTarget = NormalizeDualMember(modeTarget);
@@ -440,13 +532,21 @@ public sealed class GpnMihomoConfigService
                 });
             }
             // Giriş grupları: her girişin kural satırı kendi ao-<i> grubuna işaret eder.
+            // Satırın warp düğümü varsa üye listesine warp-<id>/wg-<id> de eklenir —
+            // canlı oturumda rota warp'a çevrildiğinde PUT hedefi üye olarak bulunur.
             for (var i = 0; i < policy!.Entries.Count; i++)
             {
+                var entryOrder = canonicalAppOrder;
+                if (warpNodeMembers[i] is { } warpMember
+                    && !entryOrder.Contains(warpMember, StringComparer.Ordinal))
+                {
+                    entryOrder = entryOrder.Concat(new[] { warpMember }).ToList();
+                }
                 groups.Add(new Dictionary<string, object?>
                 {
                     ["name"] = GpnSoftRouting.AppGroupName(i),
                     ["type"] = "select",
-                    ["proxies"] = OrderMembers(targets[i], canonicalAppOrder),
+                    ["proxies"] = OrderMembers(targets[i], entryOrder),
                 });
             }
         }
@@ -457,10 +557,12 @@ public sealed class GpnMihomoConfigService
 
         // ── rules ──
         var clashRules = new List<string>();
-        // Launcher bypass domainleri her şeyden ÖNCE eşleşir (first-match-wins):
+        // Launcher bypass domainleri (Ayarlar → GPN paneli kaldırıldı ancak eski
+        // kayıtlar çalışmaya devam eder) first-match-wins ile erken eşleşir:
         // launcher/auth trafiği süreç kuralından bağımsız olarak kendi egress'inden
-        // çıkar — MATCH / GPN-Nodes / FINAL'dan önce listelenir. Her launcher'ın
-        // satırı yalnızca hedefi bu config biçiminde TANIMLIYSA yazılır.
+        // çıkar. Her launcher'ın satırı yalnızca hedefi bu config biçiminde
+        // TANIMLIYSA yazılır.
+        var launcherRules = new List<string>();
         foreach (var launcher in launcherBypasses)
         {
             var target = ResolveLauncherTarget(launcher, dual, needWarp, warpTarget, launcherGroupTarget);
@@ -470,7 +572,7 @@ public sealed class GpnMihomoConfigService
             }
             foreach (var domain in launcher.Domains)
             {
-                clashRules.Add($"DOMAIN-SUFFIX,{domain},{target}");
+                launcherRules.Add($"DOMAIN-SUFFIX,{domain},{target}");
             }
         }
         if (superset)
@@ -484,19 +586,40 @@ public sealed class GpnMihomoConfigService
             {
                 clashRules.Add($"DOMAIN-SUFFIX,{domain},{GpnSoftRouting.CheckGroupName}");
             }
-            // 1) Giriş satırları (sıra = politika sırası): hedef her zaman kendi ao-<i>.
+            // 1) Per-app WARP düğümü OLAN giriş satırları launcher domainlerinden ÖNCE:
+            //    kullanıcının açık seçimi (ör. BsGLauncher.exe → warp düğümü) eski
+            //    launcher bypass domain kurallarını gölgeler — yoksa domain satırı
+            //    süreç kuralından önce eşleşir ve seçilen düğüm hiç kullanılmazdı.
             for (var i = 0; i < policy!.Entries.Count; i++)
             {
+                if (warpNodeMembers[i] is null)
+                {
+                    continue;
+                }
+                var warpEntry = policy.Entries[i];
+                var warpRule = ManualRoutingRules.BuildEntryRule(
+                    warpEntry.EntryType, warpEntry.Value, warpEntry.Port, warpEntry.Action, invertManual: false);
+                AppendRuleRows(warpRule, GpnSoftRouting.AppGroupName(i), clashRules);
+            }
+            // 2) Launcher bypass domainleri (warp-düğümlü süreçlerin trafiği dışında).
+            clashRules.AddRange(launcherRules);
+            // 3) Diğer giriş satırları (sıra = politika sırası): hedef her zaman kendi ao-<i>.
+            for (var i = 0; i < policy!.Entries.Count; i++)
+            {
+                if (warpNodeMembers[i] is not null)
+                {
+                    continue;
+                }
                 var entry = policy.Entries[i];
                 var rule = ManualRoutingRules.BuildEntryRule(
                     entry.EntryType, entry.Value, entry.Port, entry.Action, invertManual: false);
                 AppendRuleRows(rule, GpnSoftRouting.AppGroupName(i), clashRules);
             }
-            // 2) Yakalayıcı — legacy'deki yönetilen catch-all satırının konumu: giriş
+            // 4) Yakalayıcı — legacy'deki yönetilen catch-all satırının konumu: giriş
             //    satırlarından sonra, kullanıcı kurallarından ÖNCE (MATCH her şeyi
             //    yakaladığı için legacy'de kullanıcı satırları da aynen bu konumdadır).
             clashRules.Add($"MATCH,{GpnSoftRouting.ModeGroupName}");
-            // 3) Kullanıcının korunan kuralları (legacy sıra: yönetilen satırlardan sonra).
+            // 5) Kullanıcının korunan kuralları (legacy sıra: yönetilen satırlardan sonra).
             foreach (var rule in rules.Where(r => r.Enabled))
             {
                 BuildRuleStrings(rule, NodesGroupName, warpTarget, clashRules);
@@ -504,6 +627,7 @@ public sealed class GpnMihomoConfigService
         }
         else
         {
+            clashRules.AddRange(launcherRules);
             foreach (var rule in rules.Where(r => r.Enabled))
             {
                 BuildRuleStrings(rule, tunnelTarget, warpTarget, clashRules);
@@ -531,6 +655,10 @@ public sealed class GpnMihomoConfigService
         header.Add(dual
             ? $"# Bypass (VLESS/Reality): {BypassProxyName} @ {bypass!.ServerAddress}:{bypass.ServerPort}"
             : $"# Gateway (WARP SOCKS): {gateway}:{Global.WarpSocksDefaultPort}");
+        if (warpNodeWgProxies.Count + warpNodeProxies.Count > 0)
+        {
+            header.Add($"# Per-app WARP düğümleri: {warpNodeWgProxies.Count + warpNodeProxies.Count} egress outbound");
+        }
         header.Add(string.Empty);
         return string.Join(Environment.NewLine, header) + yaml;
     }

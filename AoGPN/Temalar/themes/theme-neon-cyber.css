@@ -1,0 +1,52 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: neon-cyber
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="neon-cyber"] {
+  --bg: #05060E;
+  --violet: #19E7FF;
+  --cyan: #9B5CFF;
+  --emerald: #61FF9A;
+  --glass: rgba(25, 231, 255, 0.04);
+  --glass-border: rgba(155, 92, 255, 0.16);
+  --violet-rgb: 25,231,255;
+  --cyan-rgb: 155,92,255;
+  --emerald-rgb: 97,255,154;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(25,231,255,.14);
+  --theme-glass-shadow: 0 1px 16px rgba(25,231,255,.05);
+  --theme-glass-hover-border: rgba(25,231,255,.34);
+  --theme-glass-hover-shadow: 0 3px 26px rgba(25,231,255,.12);
+  --theme-font-shadow: 0 0 10px rgba(25,231,255,.25), 0 0 22px rgba(155,92,255,.2);
+  --theme-ring-glow: drop-shadow(0 0 9px #19E7FF) drop-shadow(0 0 5px #9B5CFF);
+  --theme-spinner-top: #19E7FF;
+  --theme-spinner-right: #9B5CFF;
+  --theme-spinner-bottom: rgba(25,231,255,.2);
+  --theme-spinner-duration: .6s;
+  --theme-tooltip-border: rgba(25,231,255,.35);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 16px rgba(25,231,255,.16), 0 0 24px rgba(155,92,255,.08);
+  --theme-toast-border: rgba(25,231,255,.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(25,231,255,.12), inset 0 0 26px rgba(155,92,255,.05);
+  --theme-badge-border: rgba(25,231,255,.3);
+  --theme-badge-color: #9FF3FF;
+}
+
+/* Signature — drifting neon grid, transform-only scroll (compositor-cheap). */
+body[data-theme="neon-cyber"]::after {
+  content: ''; position: fixed; inset: -400px 0 0 0; z-index: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(180deg, transparent 0 32px, rgba(25,231,255,.06) 32px 33px),
+    repeating-linear-gradient(90deg, transparent 0 32px, rgba(155,92,255,.05) 32px 33px);
+  animation: neon-grid 16s linear infinite;
+  opacity: .55;
+  will-change: transform;
+}
+@keyframes neon-grid {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(0, 400px, 0); }
+}
+body[data-theme="neon-cyber"]::before {
+  animation-duration: 40s !important;
+}
+

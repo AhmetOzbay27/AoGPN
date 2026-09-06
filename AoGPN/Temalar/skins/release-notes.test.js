@@ -42,7 +42,8 @@ test('release notes: milestones load from release-notes.json and toggle', async 
   clickTab(d, w, 'release');
   assert.ok(panelVisible(d, 'release'), 'release panel shows after clicking its tab');
 
-  // Count comes from the shipped JSON.
+  // Version + count come from the shipped JSON (never hard-coded, so a
+  // version bump in the JSON cannot silently break this assertion).
   const notes = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'release-notes.json'), 'utf8'));
   const expected = notes.milestones.length;
 
@@ -50,7 +51,8 @@ test('release notes: milestones load from release-notes.json and toggle', async 
   assert.equal(rows.length, expected, 'one row per milestone');
 
   const meta = d.getElementById('releaseMeta');
-  assert.ok(meta && /V1\.1\.0/.test(meta.textContent), 'meta shows version + count: ' + (meta && meta.textContent));
+  const versionLabel = 'V' + notes.version;
+  assert.ok(meta && meta.textContent.includes(versionLabel), 'meta shows version ' + versionLabel + ': ' + (meta && meta.textContent));
   assert.match(meta.textContent, new RegExp(String(expected)), 'meta shows milestone count');
 });
 

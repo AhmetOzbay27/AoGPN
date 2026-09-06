@@ -77,35 +77,58 @@ public sealed class DashboardAssetTests
     {
         // The inline <style id="embedded-dashboard-css"> copy is what renders the
         // dashboard when @import targets cannot be resolved (offline / preview).
-        // If a theme stylesheet is edited but the embedded copy is not regenerated,
-        // the two diverge — this test catches that drift for every imported file.
+        // It is regenerated from the Temalar/dashboard.css import chain by
+        // Temalar/build-embedded-dashboard-css.js on every AoGPN build; the C#
+        // side deliberately does NOT re-implement the concatenation so there is
+        // exactly one source of truth for what the embedded copy must contain.
+        // This test binds to that producer: it runs the generator in --check
+        // mode and fails whenever the embedded copy would be rewritten, i.e.
+        // whenever a stylesheet was edited without regenerating the HTML.
         var root = FindRepositoryRoot();
-        var html = File.ReadAllText(Path.Combine(root, "vpn-gpn-dashboard.html"));
-        var manifest = File.ReadAllText(Path.Combine(root, "Temalar", "dashboard.css"));
+        var script = Path.Combine(root, "Temalar", "build-embedded-dashboard-css.js");
+        Assert.True(File.Exists(script), "Embedded-CSS generator is missing: Temalar/build-embedded-dashboard-css.js");
 
-        var start = html.IndexOf("<style id=\"embedded-dashboard-css\">", StringComparison.Ordinal);
-        Assert.True(start >= 0, "embedded-dashboard-css block is missing from the dashboard.");
-        start = html.IndexOf('>', start) + 1;
-        var end = html.IndexOf("</style>", start, StringComparison.Ordinal);
-        Assert.True(end > start, "embedded-dashboard-css closing tag is missing.");
-        var embedded = html.Substring(start, end - start);
-
-        var imported = System.Text.RegularExpressions.Regex.Matches(manifest, @"(?m)^\s*@import url\(""([^""]+)""\)")
-            .Select(m => m.Groups[1].Value)
-            .ToList();
-        Assert.True(imported.Count >= 18, "Expected base.css + components.css + at least 16 themes in the manifest.");
-
-        foreach (var rel in imported)
+        if (!TryRunNode("--version", out _, out _))
         {
-            var fileText = File.ReadAllText(Path.Combine(root, "Temalar", rel));
-            Assert.True(
-                NormalizeNewlines(embedded).Contains(NormalizeNewlines(fileText), StringComparison.Ordinal),
-                $"Embedded dashboard CSS is out of sync with {rel}. Regenerate the embedded copy after editing theme stylesheets.");
+            Assert.Skip("node.js not found on PATH; skipping embedded-CSS sync check.");
+        }
+
+        var (exitCode, output) = RunNode(script, "--check", root);
+        Assert.True(
+            exitCode == 0,
+            $"Embedded dashboard CSS is out of sync with the import chain. Regenerate it by running " +
+            $"\"node Temalar/build-embedded-dashboard-css.js\" (or rebuild AoGPN).\n{output}");
+    }
+
+    private static bool TryRunNode(string arguments, out int exitCode, out string output)
+    {
+        try
+        {
+            (exitCode, output) = RunNode(null, arguments, null);
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            exitCode = -1;
+            output = string.Empty;
+            return false;
         }
     }
 
-    private static string NormalizeNewlines(string s)
-        => s.Replace("\r\n", "\n").Replace('\r', '\n');
+    private static (int ExitCode, string Output) RunNode(string? script, string arguments, string? workingDirectory)
+    {
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo.FileName = "node";
+        process.StartInfo.Arguments = script is null ? arguments : $"\"{script}\" {arguments}";
+        process.StartInfo.WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory;
+        process.StartInfo.UseShellExecute = false;
+        process.StartInfo.RedirectStandardOutput = true;
+        process.StartInfo.RedirectStandardError = true;
+        process.Start();
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, output);
+    }
 
     private static string FindRepositoryRoot()
     {

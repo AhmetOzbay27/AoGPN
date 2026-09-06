@@ -11,6 +11,30 @@
     --emerald: #818CF8;
     --glass: rgba(165, 180, 252, 0.03);
     --glass-border: rgba(165, 180, 252, 0.09);
+
+    /* Theme scaffold — shared rules in components.css consume these variables.
+       Spinner keeps its own ring colours; tooltip/toast are ghostly white. */
+    --theme-glass-border: rgba(165, 180, 252, 0.06);
+    --theme-glass-shadow: 0 1px 12px rgba(99, 102, 241, 0.02);
+    --theme-glass-hover-border: rgba(224, 224, 255, 0.24);
+    --theme-glass-hover-shadow: 0 3px 20px rgba(99, 102, 241, 0.09);
+    --theme-font-shadow: 0 0 14px rgba(165, 180, 252, 0.22), 0 0 28px rgba(99, 102, 241, 0.12);
+    --theme-ring-glow: drop-shadow(0 0 8px #A5B4FC);
+    --theme-spinner-top: #E0E0FF;
+    --theme-spinner-right: #6C63FF;
+    --theme-spinner-bottom: transparent;
+    --theme-spinner-duration: 2s;
+    --theme-spinner-animation: phantom-ring 2s ease-in-out infinite;
+    --theme-tooltip-bg: rgba(8,8,14,.95);
+    --theme-tooltip-border: rgba(224,224,255,.2);
+    --theme-tooltip-color: #C7D2FE;
+    --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 15px rgba(108,99,255,.1);
+    --theme-toast-bg: rgba(8,8,14,.97);
+    --theme-toast-border: rgba(224,224,255,.18);
+    --theme-toast-color: #C7D2FE;
+    --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px rgba(108,99,255,.08);
+    --theme-badge-border: rgba(224,224,255,.2);
+    --theme-badge-color: #C7D2FE;
   }
 
   /* --- Phantom: ghostly slow float --- */
@@ -32,40 +56,12 @@
        per-frame GPU cost in the dashboard; the shared gradient is soft already */
   }
 
-  /* --- Phantom accent: spectral shimmer --- */
-  body[data-theme="phantom"] .glass {
-    border-color: rgba(165, 180, 252, 0.06);
-    box-shadow: 0 1px 12px rgba(99, 102, 241, 0.02);
-  }
-  body[data-theme="phantom"] .accent-gradient-text {
-    background-image: linear-gradient(90deg, #A5B4FC, #6366F1, #A5B4FC);
-  }
-  body[data-theme="phantom"]   .ring-wrap .ring-svg { filter: drop-shadow(0 0 8px #A5B4FC); }
-
   /* Phantom: fading ring spinner */
-  body[data-theme="phantom"] .theme-spinner {
-    border-top-color: #E0E0FF;
-    border-right-color: #6C63FF;
-    animation: phantom-ring 2s ease-in-out infinite;
-  }
   @keyframes phantom-ring {
     0% { transform: rotate(0deg); opacity: .3; }
     50% { transform: rotate(180deg); opacity: 1; }
     100% { transform: rotate(360deg); opacity: .3; }
   }
-  /* Phantom: ghostly fade tooltip */
-  body[data-theme="phantom"] [title]:hover::after {
-    background: rgba(8,8,14,.95);
-    border-color: rgba(224,224,255,.2);
-    color: #C7D2FE;
-    box-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 15px rgba(108,99,255,.1);
+  body[data-theme="phantom"] .accent-gradient-text {
+    background-image: linear-gradient(90deg, #A5B4FC, #6366F1, #A5B4FC);
   }
-  /* Phantom: ghostly white toast */
-  body[data-theme="phantom"] #nodeToast {
-    background: rgba(8,8,14,.97);
-    border-color: rgba(224,224,255,.18);
-    color: #C7D2FE;
-    box-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px rgba(108,99,255,.08);
-  }
-  body[data-theme="phantom"] .status-badge { border-color: rgba(224,224,255,.2); color: #C7D2FE; }
-  body[data-theme="phantom"] #phantomCursor { display: block; }

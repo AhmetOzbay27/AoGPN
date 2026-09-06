@@ -13,6 +13,14 @@ public class ProcessService : IDisposable
     public IntPtr Handle => _process.Handle;
     public bool HasExited => _process.HasExited;
 
+    // Exit code captured inside the Exited handler while the Process object is
+    // still valid (reading it later after Dispose throws). Null until the process
+    // has exited. Used to log WHY a core crashed (crash-recovery timeline).
+    // Single writer (the Exited handler); read from the same exit callback or a
+    // task scheduled off it, so no lock is needed.
+    public int? ExitCode => _exitCode;
+    private int? _exitCode;
+
     /// <summary>
     /// Wraps a child process (core binary, helper shell, etc.).
     /// </summary>
@@ -163,6 +171,17 @@ public class ProcessService : IDisposable
 
         _process.Exited += (s, e) =>
         {
+            try
+            {
+                // Capture while the Process object can still report it; a concurrent
+                // Dispose would otherwise make the property throw for the caller.
+                _exitCode = _process.ExitCode;
+            }
+            catch
+            {
+                // Process already disposed or access denied — leave ExitCode null.
+            }
+
             try
             {
                 _exitedCallback?.Invoke();

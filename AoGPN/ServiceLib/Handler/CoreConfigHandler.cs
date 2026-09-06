@@ -161,7 +161,8 @@ public static class CoreConfigHandler
                 // kullanıcının kendi (yönetilmeyen) kuralları korunur. Mod/rota
                 // değişiklikleri artık restart'sız grup seçimi olur.
                 var preserved = rules.Where(r => !ManualRoutingRules.IsManagedRule(r)).ToList();
-                yaml = generator.GenerateYaml(candidateNodes, server, policy, preserved, options, bypassNode);
+                yaml = generator.GenerateYaml(candidateNodes, server, policy, preserved, options, bypassNode,
+                    warpNodes: context.GpnWarpNodes);
                 // Çalışan config artık superset oturumun parmak izini taşır: yumuşak
                 // uygulayıcı (GpnSoftPolicyApplier) giriş listesinde yapısal değişiklik
                 // olup olmadığını bu parmak iziyle doğrular ve gerektiğinde restart'lı

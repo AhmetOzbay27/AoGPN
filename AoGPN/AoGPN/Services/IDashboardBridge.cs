@@ -115,6 +115,7 @@ public interface IDashboardBridge
     Task PushLanguageAsync();
     Task PushMonitorSnapshotAsync(bool force = false);
     Task PushProcessCatalogAsync();
+    Task PushAppIconsAsync(string[] paths);
     Task PushNodePoolAsync();
     Task PushSettingsAsync();
 

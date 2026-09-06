@@ -2,22 +2,45 @@
    AoGPN dashboard — theme: inferno
    Part of the split stylesheet (see Temalar/dashboard.css for the load order).
    ========================================================================== */
+body[data-theme="inferno"] {
+  --bg: #0F0608;
+  --violet: #DC2626;
+  --cyan: #D97706;
+  --emerald: #16A34A;
+  --glass: rgba(220, 38, 38, 0.04);
+  --glass-border: rgba(220, 38, 38, 0.12);
+  --violet-rgb: 220,38,38;
+  --cyan-rgb: 217,119,6;
+  --emerald-rgb: 22,163,74;
 
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(220, 38, 38, 0.14);
+  --theme-glass-shadow: 0 1px 16px rgba(217, 119, 6, 0.06);
+  --theme-glass-hover-border: rgba(217, 119, 6, 0.32);
+  --theme-glass-hover-shadow: 0 4px 26px rgba(220, 38, 38, 0.13);
+  --theme-font-shadow: 0 0 12px rgba(220, 38, 38, 0.28), 0 0 22px rgba(217,119,6,.16);
+  --theme-ring-glow: drop-shadow(0 0 9px #DC2626) drop-shadow(0 0 5px #D97706);
+  --theme-spinner-top: #DC2626;
+  --theme-spinner-right: #D97706;
+  --theme-spinner-bottom: rgba(220, 38, 38, 0.2);
+  --theme-spinner-duration: .6s;
+  --theme-tooltip-border: rgba(217, 119, 6, 0.36);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(220, 38, 38, 0.16);
+  --theme-toast-border: rgba(220, 38, 38, 0.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(220, 38, 38, 0.13);
+  --theme-badge-border: rgba(217, 119, 6, 0.32);
+  --theme-badge-color: #FCA5A5;
+}
 
-  body[data-theme="inferno"] {
-    --bg: #0F0608;
-    --violet: #DC2626;
-    --cyan: #D97706;
-    --emerald: #16A34A;
-    --glass: rgba(220, 38, 38, 0.04);
-    --glass-border: rgba(220, 38, 38, 0.12);
-  }
+/* Signature effects — one subtle, unique animated layer per theme. */
+body[data-theme="inferno"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(560px 320px at 50% 118%, var(--cyan), transparent 66%);
+  opacity: .45; /* blur removed: a filter on an animated layer re-rasterizes per frame */
+  animation: ember-pulse 3.6s ease-in-out infinite;
+}
+@keyframes ember-pulse { 0%, 100% { opacity: .3; transform: scale(1); } 50% { opacity: .6; transform: scale(1.08); } }
+body[data-theme="inferno"]::before {
+  animation-duration: 40s !important;
+}
 
-  /* Signature effects — one subtle, unique animated layer per theme. */
-  body[data-theme="inferno"]::after {
-    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background: radial-gradient(560px 320px at 50% 118%, var(--cyan), transparent 66%);
-    opacity: .45; /* blur removed: a filter on an animated layer re-rasterizes per frame */
-    animation: ember-pulse 3.6s ease-in-out infinite;
-  }
-  @keyframes ember-pulse { 0%, 100% { opacity: .3; transform: scale(1); } 50% { opacity: .6; transform: scale(1.08); } }

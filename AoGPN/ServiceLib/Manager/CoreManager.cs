@@ -1,5 +1,6 @@
 namespace ServiceLib.Manager;
 
+using System.Collections.Concurrent;
 using System.Threading;
 
 /// <summary>
@@ -23,8 +24,21 @@ public class CoreManager
     /// <summary>How long after launch the core's stdout/stderr is mirrored to ao_diag.txt.</summary>
     private static readonly TimeSpan CoreStartupCaptureWindow = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Son N satır çekirdek stdout/stderr'i her zaman (başlangıç penceresi dışında
+    /// da) bellekte tutulur — beklenmedik bir çıkışta kuyruğun ucu ao_diag'a ve
+    /// başarısızlık kartına dökülür ve "neden çıktı" sorusu sessiz kalmaz.
+    /// </summary>
+    private const int CoreOutputTailCapacity = 64;
+    private readonly ConcurrentQueue<string> _coreOutputTail = new();
+
+    // Beklenmedik ana-çekirdek çıkışının anlık görüntüsü (OnMainProcessExited'te
+    // yakalanır, RecoverMainCoreAsync terminal Failed yayınlarken başarısızlık
+    // kartına taşınır).
+    private int? _lastUnexpectedExitCode;
+    private string[]? _lastUnexpectedExitTail;
+
     private readonly System.Diagnostics.Stopwatch _coreStartupCapture = new();
-    private readonly CoreRestartPolicy _restartPolicy = new();
     private TunCleanupTransaction? _tunTransaction;
     private readonly object _lifecycleLock = new();
     private CancellationTokenSource _lifecycleCts = new();
@@ -66,14 +80,57 @@ public class CoreManager
         Logging.SaveLog($"[{diagnostic.Code}] {diagnostic.Message} {diagnostic.TechnicalDetails}");
     }
 
-    private void PublishHealth(CoreHealthRole role, CoreHealthState state, ECoreType? coreType = null, int? port = null, string? error = null)
+    private void PublishHealth(
+        CoreHealthRole role,
+        CoreHealthState state,
+        ECoreType? coreType = null,
+        int? port = null,
+        string? error = null,
+        bool recovering = false,
+        int? exitCode = null,
+        string? outputTail = null)
     {
-        var snapshot = new CoreHealthSnapshot(role, state, coreType, port, error);
+        CoreHealthState? previousState;
+        CoreHealthSnapshot snapshot;
         lock (_healthLock)
         {
+            previousState = _health.TryGetValue(role, out var existing) ? existing.State : null;
+            snapshot = new CoreHealthSnapshot(role, state, coreType, port, error,
+                changedAt: null, recovering: recovering, exitCode: exitCode, outputTail: outputTail);
             _health[role] = snapshot;
         }
+
+        // Zaman damgalı STATE satırı: "hangi olay hangi sağlık geçişini yaptı"
+        // zaman çizelgesi ao_diag'da tek akışta toplanır (kullanıcının gördüğü
+        // "bağlandı → Bağlan → kendiliğinden bağlandı" döngüsünün kaynağı burada
+        // ayrışır: çökme kurtarması mı, istek mi, başlatma hatası mı).
+        if (previousState != state)
+        {
+            var recovery = recovering ? " recovering=true" : string.Empty;
+            var detail = error is null ? string.Empty : $" error=\"{error}\"";
+            var code = exitCode is { } c ? $" exitCode={c}" : string.Empty;
+            DiagLog.Write($"STATE health {role} {previousState?.ToString() ?? "none"}→{state} core={coreType?.ToString() ?? "-"} port={port?.ToString() ?? "-"}{recovery}{code}{detail}");
+            if (role == CoreHealthRole.Main)
+            {
+                Logging.SaveLog($"[{_tag}] health {previousState?.ToString() ?? "none"} → {state}{(error is null ? string.Empty : " | " + error)}");
+            }
+        }
+
         AppEvents.CoreHealthChanged.Publish(snapshot);
+    }
+
+    /// <summary>
+    /// Kuyruktan son stdout/stderr satırlarını alır ve temizler (çıkış anında bir
+    /// kez dökülür — sonraki oturum temiz başlar).
+    /// </summary>
+    private string[] DrainCoreOutputTail()
+    {
+        var lines = new List<string>(CoreOutputTailCapacity);
+        while (_coreOutputTail.TryDequeue(out var line))
+        {
+            lines.Add(line);
+        }
+        return lines.ToArray();
     }
 
     public async Task Init(Config config, Func<bool, string, Task> updateFunc)
@@ -128,6 +185,12 @@ public class CoreManager
             return;
         }
 
+        // Soft reload kararı için önceki oturum bağlamı SNAPSHOT'u — BeginLifecycle
+        // aşağıda _activeMainContext'i yeni bağlamla değiştirir, eski bilgi buradan
+        // okunur (oturum sürekliliği: mihomo restart'sız config yeniden yüklemesi).
+        var previousMainContext = _activeMainContext;
+        var previousPreContext = _activePreContext;
+
         var node = mainContext.Node;
         // Başlatma stratejisi: TUN sahipliği / native-tunnel politikası çekirdek
         // tipine göre CoreStartStrategyFactory'den gelir (mihomo own-TUN + host
@@ -158,6 +221,20 @@ public class CoreManager
         await UpdateFunc(false, $"{node.GetSummary()}");
         await UpdateFunc(false, $"{Utils.GetRuntimeInfo()}");
         await UpdateFunc(false, string.Format(ResUI.StartService, DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss")));
+
+        // Oturum sürekliliği hızlı yolu: çalışan mihomo + aynı TUN durumu + süreç
+        // canlıysa config yeni dosyadan API ile yüklenir (PUT /configs) — süreç
+        // DURMAZ, mevcut TCP/UDP oturumları korunur. Herhangi bir koşul sağlanmaz
+        // veya API reddederse eski durdur/başlat yoluna düşülür (güvenli varsayılan).
+        if (preContext == null
+            && await TrySoftReloadAsync(mainContext, previousMainContext, previousPreContext, fileName))
+        {
+            PublishHealth(CoreHealthRole.Main, CoreHealthState.Ready, mainContext.RunCoreType,
+                AppManager.Instance.GetLocalPort(EInboundProtocol.socks));
+            DiagLog.Write($"SOFT_RELOAD ok → {node.GetSummary()} (process kept, sessions preserved)");
+            return;
+        }
+
         await StopProcessesOnly();
         await Task.Delay(100);
 
@@ -614,6 +691,13 @@ public class CoreManager
             _activePreContext = preContext;
             _activeMainStrategy = CoreStartStrategyFactory.For(mainContext);
             _mainCrashAttempts = 0;
+            // Yeni oturum temiz başlar — önceki oturumdan kalan çıktı kuyruğu
+            // sonraki bir çökme dökümüne karışmasın.
+            while (_coreOutputTail.TryDequeue(out _))
+            {
+            }
+            _lastUnexpectedExitCode = null;
+            _lastUnexpectedExitTail = null;
             return ++_lifecycleGeneration;
         }
     }
@@ -646,6 +730,25 @@ public class CoreManager
         {
             return;
         }
+
+        // Sebep avı: çıkış kodunu ve kuyruğun ucundaki son stdout/stderr satırlarını
+        // çökme anında ao_diag'a dök — AUTO_RESTART satırlarıyla birlikte "çekirdek
+        // neden çıktı + kaç saniyede ne oldu" zaman çizelgesi tamamlanır.
+        var exitCode = _processService?.ExitCode;
+        var pid = _processService?.Id;
+        _lastUnexpectedExitCode = exitCode;
+        _lastUnexpectedExitTail = DrainCoreOutputTail();
+        DiagLog.Write($"CORE_EXIT main pid={pid?.ToString() ?? "?"} exitCode={exitCode?.ToString() ?? "?"} — auto-restart scheduling");
+        if (_lastUnexpectedExitTail is { Length: > 0 } tail)
+        {
+            var lines = string.Join(Environment.NewLine, tail);
+            DiagLog.Write($"CORE_EXIT stdout/stderr tail ({tail.Length} lines):{Environment.NewLine}{lines}");
+            Logging.SaveLog($"[{_tag}] Core output tail at exit (exitCode={exitCode?.ToString() ?? "unknown"}):{Environment.NewLine}{lines}");
+        }
+        else
+        {
+            Logging.SaveLog($"[{_tag}] Main core exited unexpectedly (pid={pid?.ToString() ?? "?"}, exitCode={(exitCode?.ToString() ?? "unknown")}).");
+        }
         _ = RecoverMainCoreAsync(generation);
     }
 
@@ -658,7 +761,68 @@ public class CoreManager
         var context = _activePreContext;
         if (context != null)
         {
+            var exitCode = _processPreService?.ExitCode;
+            DiagLog.Write($"STATE health PreSocks exit pid={_processPreService?.Id.ToString() ?? "?"} exitCode={exitCode?.ToString() ?? "?"} (unexpected)");
             PublishHealth(CoreHealthRole.PreSocks, CoreHealthState.Failed, context.RunCoreType, context.Node.Port, "Pre-SOCKS core exited unexpectedly.");
+        }
+    }
+
+    /// <summary>
+    /// Çalışan mihomo çekirdeğini DURDURMADAN yeni config'i yükler
+    /// (<c>PUT /configs?force=true</c> — mihomo hot reload). Başarılıysa <c>true</c>:
+    /// süreç yerinde kalır, mevcut oturumlar korunur (soft reload — Faz 1
+    /// oturum sürekliliği). Koşullar sağlanmazsa veya API reddederse <c>false</c>:
+    /// çağıran durdur/başlat yoluna düşer, davranış değişmez.
+    /// </summary>
+    private async Task<bool> TrySoftReloadAsync(
+        CoreConfigContext mainContext,
+        CoreConfigContext? previousMainContext,
+        CoreConfigContext? previousPreContext,
+        string configPath)
+    {
+        // Pre-SOCKS yardımcı çekirdeği reload ile yeniden başlatılamaz — restart yolunda kal.
+        if (_activePreContext != null || previousPreContext != null)
+        {
+            return false;
+        }
+        if (!CoreSoftReloadPolicy.CanReload(
+                previousMainContext,
+                mainContext,
+                mainProcessAlive: _processService is { HasExited: false },
+                runningCoreIsMihomo: AppManager.Instance.IsRunningCore(ECoreType.mihomo)))
+        {
+            return false;
+        }
+
+        try
+        {
+            DiagLog.Write("SOFT_RELOAD begin (PUT /configs — process kept)");
+            var api = ClashApiManager.Instance;
+            var ok = await api.ClashConfigReload(configPath).ConfigureAwait(false);
+            if (!ok)
+            {
+                DiagLog.Write("SOFT_RELOAD api reddedildi — fallback durdur/başlat");
+                return false;
+            }
+
+            // Reload sonrası hazırlık: süreç hâlâ ayakta + SOCKS dinleyicisi açık.
+            var ready = _processService is { HasExited: false }
+                && await CoreHealthProbe.WaitForSocks5Async(Global.Loopback,
+                    AppManager.Instance.GetLocalPort(EInboundProtocol.socks), TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            if (!ready)
+            {
+                DiagLog.Write("SOFT_RELOAD hazırlık doğrulaması başarısız — fallback durdur/başlat");
+                return false;
+            }
+
+            DiagLog.Write("SOFT_RELOAD ok — oturumlar korundu (process kept)");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            DiagLog.Write($"SOFT_RELOAD hata: {ex.Message} — fallback durdur/başlat");
+            return false;
         }
     }
 
@@ -681,22 +845,39 @@ public class CoreManager
             token = _lifecycleCts.Token;
         }
 
-        if (mainContext == null || !_restartPolicy.CanRestart(attempt))
+        // Kurtarma politikası her çökmede güncel config'ten okunur: "Otomatik
+        // yeniden bağlan" ayarı kapatıldıysa (AutoReconnectEnabled=false) çekirdek
+        // çökmesi otomatik yeniden başlatma döngüsüne GİRMEZ — açıklayıcı hata ile
+        // Failed yayınlanır; açıksa AutoReconnectMaxAttempts deneme sayısıdır.
+        var policy = BuildRestartPolicy();
+        var exitCode = _lastUnexpectedExitCode;
+        var exitTail = _lastUnexpectedExitTail is { Length: > 0 } crashLines
+            ? string.Join(Environment.NewLine, crashLines)
+            : null;
+
+        if (mainContext == null || !policy.CanRestart(attempt))
         {
             if (mainContext != null)
             {
+                var reason = policy.IsDisabled
+                    ? "Core exited unexpectedly — automatic restart is disabled (Auto reconnect is off)."
+                    : $"Core stopped repeatedly ({attempt} attempts) and automatic recovery was exhausted.";
+                DiagLog.Write($"AUTO_RESTART skip attempt={attempt} disabled={policy.IsDisabled} — publishing Failed: {reason}");
                 PublishHealth(CoreHealthRole.Main, CoreHealthState.Failed, mainContext.RunCoreType,
-                    AppManager.Instance.GetLocalPort(EInboundProtocol.socks), "Core stopped repeatedly and recovery was disabled.");
+                    AppManager.Instance.GetLocalPort(EInboundProtocol.socks), reason,
+                    exitCode: exitCode, outputTail: exitTail);
             }
             return;
         }
 
+        var delay = policy.GetDelay(attempt);
+        DiagLog.Write($"AUTO_RESTART begin attempt={attempt}/{policy.MaxAttempts} delayMs={(int)delay.TotalMilliseconds} exitCode={exitCode?.ToString() ?? "?"}");
         PublishHealth(CoreHealthRole.Main, CoreHealthState.Degraded, mainContext.RunCoreType,
-            AppManager.Instance.GetLocalPort(EInboundProtocol.socks), "Core exited unexpectedly; restarting.");
+            AppManager.Instance.GetLocalPort(EInboundProtocol.socks), "Core exited unexpectedly; restarting.", recovering: true);
 
         try
         {
-            await Task.Delay(_restartPolicy.GetDelay(attempt), token);
+            await Task.Delay(delay, token);
             if (!IsCurrentGeneration(generation))
             {
                 return;
@@ -724,11 +905,14 @@ public class CoreManager
             }
             if (!ready)
             {
+                DiagLog.Write($"AUTO_RESTART failed attempt={attempt}/{policy.MaxAttempts} (readiness check)");
                 PublishHealth(CoreHealthRole.Main, CoreHealthState.Failed, mainContext.RunCoreType,
-                    AppManager.Instance.GetLocalPort(EInboundProtocol.socks), "Core recovery failed readiness check.");
+                    AppManager.Instance.GetLocalPort(EInboundProtocol.socks), "Core recovery failed readiness check.",
+                    exitCode: exitCode, outputTail: exitTail);
                 return;
             }
 
+            DiagLog.Write($"AUTO_RESTART ok attempt={attempt}/{policy.MaxAttempts}");
             PublishHealth(CoreHealthRole.Main, CoreHealthState.Ready, mainContext.RunCoreType,
                 AppManager.Instance.GetLocalPort(EInboundProtocol.socks));
             await CoreStartPreService(preContext, generation);
@@ -739,9 +923,24 @@ public class CoreManager
         catch (Exception ex)
         {
             Logging.SaveLog(_tag, ex);
+            DiagLog.Write($"AUTO_RESTART failed attempt={attempt}/{policy.MaxAttempts} error={ex.Message}");
             PublishHealth(CoreHealthRole.Main, CoreHealthState.Failed, mainContext.RunCoreType,
-                AppManager.Instance.GetLocalPort(EInboundProtocol.socks), ex.Message);
+                AppManager.Instance.GetLocalPort(EInboundProtocol.socks), ex.Message,
+                exitCode: exitCode, outputTail: exitTail);
         }
+    }
+
+    /// <summary>
+    /// Çökme-kurtarma politikasını GÜNCEL config'ten üretir — kullanıcı otomatik
+    /// yeniden bağlanmayı kapatmışsa kurtarma tamamen devre dışı, açıksa deneme
+    /// sayısı AutoReconnectMaxAttempts (1-10).
+    /// </summary>
+    private CoreRestartPolicy BuildRestartPolicy()
+    {
+        var connection = _config?.ConnectionItem;
+        return CoreRestartPolicy.FromConfig(
+            enabled: connection?.AutoReconnectEnabled ?? true,
+            configuredMaxAttempts: connection?.AutoReconnectMaxAttempts ?? 5);
     }
 
     private async Task CoreStart(CoreConfigContext context, int generation, ICoreStartStrategy strategy)
@@ -1026,9 +1225,16 @@ public class CoreManager
             // Steady-state core output is already written by the core itself to
             // its own log file (ao_mihomo_*.log / Verror_*.txt / Vaccess_*.txt);
             // mirroring it forever duplicated every line into ao_diag.txt and
-            // vpn-session.log for the whole session.
+            // vpn-session.log for the whole session. The RING BUFFER below keeps
+            // the most recent lines in memory at all times so an unexpected exit
+            // (even hours later) can dump why — see OnMainProcessExited.
             outputSink: line =>
             {
+                _coreOutputTail.Enqueue(line);
+                while (_coreOutputTail.Count > CoreOutputTailCapacity
+                       && _coreOutputTail.TryDequeue(out _))
+                {
+                }
                 if (_coreStartupCapture.Elapsed <= CoreStartupCaptureWindow)
                 {
                     DiagLog.Write("CORE_OUT " + line);

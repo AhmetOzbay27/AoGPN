@@ -1,0 +1,52 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: ocean-blue
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="ocean-blue"] {
+  --bg: #030710;
+  --violet: #42B9FF;
+  --cyan: #557CFF;
+  --emerald: #61FF9A;
+  --glass: rgba(66, 185, 255, 0.04);
+  --glass-border: rgba(85, 124, 255, 0.16);
+  --violet-rgb: 66,185,255;
+  --cyan-rgb: 85,124,255;
+  --emerald-rgb: 97,255,154;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(66,185,255,.15);
+  --theme-glass-shadow: 0 1px 16px rgba(85,124,255,.06);
+  --theme-glass-hover-border: rgba(66,185,255,.34);
+  --theme-glass-hover-shadow: 0 3px 26px rgba(66,185,255,.13);
+  --theme-font-shadow: 0 0 10px rgba(66,185,255,.26);
+  --theme-ring-glow: drop-shadow(0 0 9px #42B9FF) drop-shadow(0 0 5px #557CFF);
+  --theme-spinner-top: #42B9FF;
+  --theme-spinner-right: #557CFF;
+  --theme-spinner-bottom: rgba(66,185,255,.2);
+  --theme-spinner-duration: .62s;
+  --theme-tooltip-border: rgba(66,185,255,.34);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 16px rgba(66,185,255,.16);
+  --theme-toast-border: rgba(66,185,255,.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(66,185,255,.13);
+  --theme-badge-border: rgba(66,185,255,.3);
+  --theme-badge-color: #A8E3FF;
+}
+
+/* Signature — deep ocean currents, transform-only drift. */
+body[data-theme="ocean-blue"]::after {
+  content: ''; position: fixed; inset: -420px 0 0 0; z-index: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(180deg, transparent 0 44px, rgba(66,185,255,.045) 44px 46px),
+    repeating-linear-gradient(90deg, transparent 0 90px, rgba(85,124,255,.035) 90px 93px);
+  animation: ocean-drift 26s linear infinite;
+  opacity: .6;
+  will-change: transform;
+}
+@keyframes ocean-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-90px, 420px, 0); }
+}
+body[data-theme="ocean-blue"]::before {
+  animation-duration: 40s !important;
+}
+

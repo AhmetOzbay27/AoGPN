@@ -128,19 +128,33 @@ public sealed class ClashApiManager
         await HttpClientHelper.Instance.PatchAsync(urlBase, headers);
     }
 
-    public async Task ClashConfigReload(string filePath)
+    /// <summary>
+    /// Çekirdek config'ini SÜRECİ DURDURMADAN yeniden yükler
+    /// (<c>PUT /configs?force=true</c>, mihomo hot reload). Mevcut TCP/UDP
+    /// oturumları korunur — bağlantı kapatma (<c>DELETE /connections</c>) bilinçli
+    /// olarak ÇAĞRILMAZ; oturum sürekliliği (soft reload) yolunun temelidir.
+    /// Başarı = HTTP 2xx. Hata/reddedilme durumunda çağıran restart yoluna düşer.
+    /// </summary>
+    public async Task<bool> ClashConfigReload(string filePath)
     {
-        await ClashConnectionClose("");
         try
         {
             var url = $"{GetApiUrl()}/configs?force=true";
-            var headers = new Dictionary<string, string>();
-            headers.Add("path", filePath);
-            await HttpClientHelper.Instance.PutAsync(url, headers);
+            var headers = new Dictionary<string, string>
+            {
+                ["path"] = filePath,
+            };
+            var (ok, body) = await HttpClientHelper.Instance.TryPutAsync(url, headers);
+            if (!ok)
+            {
+                Logging.SaveLog($"[{_tag}] config reload reddedildi: {body ?? "(yanıt yok)"}");
+            }
+            return ok;
         }
         catch (Exception ex)
         {
             Logging.SaveLog(_tag, ex);
+            return false;
         }
     }
 

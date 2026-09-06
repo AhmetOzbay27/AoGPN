@@ -45,6 +45,11 @@ public partial class MainWindow : IDashboardBridge
     private bool _webViewReady;
     private bool _connectionState;
     private bool _connectionStarting;
+    // Otomatik çekirdek kurtarma (beklenmedik çıkış → yeniden başlatma) penceresinde
+    // dashboard "kopmuş → Bağlan" yerine "yeniden bağlanıyor" göstersin — çökme
+    // kurtarmasının başladığını CoreHealthChanged üzerindeki Degraded+Recovering
+    // olayı işaretler (bkz. OnMainCoreHealthChangedAsync). 0/1 Volatile bayrak.
+    private int _autoRecovering;
 
 
     // WARP egress otomatik kurtarma — WARP dial sağlığı faulted olunca aktif WG
@@ -66,11 +71,23 @@ public partial class MainWindow : IDashboardBridge
     // the window is not hidden before the tray icon exists.
     private bool _startupTrayPending;
 
-    // App.OnStartup shows the window with Opacity 0 so a launch never flashes an
-    // empty black frame while WebView2 boots the dashboard (a startup splash used
-    // to mask that gap). True until the dashboard has rendered its first frame
-    // (see RevealStartupWindow).
+    // App.OnStartup parks the window OFF-SCREEN while WebView2 boots the dashboard
+    // (never "Opacity 0" — that needs a layered window, which paints solid black on
+    // machines with broken compositing; the boot splash covers the gap). True until
+    // the dashboard has painted its first frame (see RevealStartupWindow).
     private bool _dashboardFirstPaintPending = true;
+
+    // While the dashboard is booting, WindowBase must not restore the saved window
+    // placement: the window is parked at -32000,-32000, and applying the saved
+    // size/position/maximize there would drag it on screen mid-boot.
+    // RevealStartupWindow applies the placement (ApplyStartupPlacement) in the same
+    // tick the dashboard becomes visible.
+    protected override bool DeferPlacementUntilReveal => _dashboardFirstPaintPending;
+
+    // Set once the initial dashboard state has been pushed (or the push failed);
+    // guards the two ready signals (NavigationCompleted / readyState poll) so the
+    // seeds run exactly once.
+    private bool _startupSeeded;
 
     // Nodes already advised about the sing-box -> Xray REALITY fallback, keyed by
     // "IndexId|tunEnabled" so the advice fires once per node per TUN state but can
@@ -251,7 +268,17 @@ public partial class MainWindow : IDashboardBridge
             readActualConnectionState: ReadActualConnectionState);
 
         AppEvents.CoreHealthChanged.AsObservable()
-            .Subscribe(_failureLedger.RecordCoreHealth);
+            .Subscribe(health =>
+            {
+                _failureLedger.RecordCoreHealth(health);
+                // Otomatik kurtarma penceresini UI durumuna çevir (Dispatcher: health
+                // olayları çekirdek yönetiminden gelir; ViewModel/WebView2 yalnızca UI
+                // iş parçacığında okunur).
+                if (health.Role == CoreHealthRole.Main)
+                {
+                    _ = Dispatcher.InvokeAsync(() => OnMainCoreHealthChangedAsync(health));
+                }
+            });
         AppEvents.CoreStartupDiagnosticChanged.AsObservable()
             .Subscribe(_failureLedger.RecordDiagnostic);
 
@@ -283,6 +310,10 @@ public partial class MainWindow : IDashboardBridge
                 theme != _config.UiItem.CurrentTheme)
             {
                 _config.UiItem.CurrentTheme = theme;
+                // Keep the persisted dashboard theme in lockstep so the WebView2
+                // dashboard survives restarts with the same palette when the user
+                // switches themes from the native sidebar.
+                _config.UiItem.DashboardTheme = MapWpfThemeToWeb(theme);
                 _ = ConfigHandler.SaveConfig(_config);
                 _sidebarThemeVm.CurrentTheme = theme;
                 _sidebarThemeVm.ModifyTheme();
@@ -429,6 +460,12 @@ public partial class MainWindow : IDashboardBridge
              .ObserveOn(RxSchedulers.MainThreadScheduler)
              .Subscribe(_ => PushWinDivertHealthAsync())
              .DisposeWith(disposables);
+
+            // Oturum hayatta kalma probu: çekirdek kurtarma/soft-reload
+            // pencerelerinde TCP+UDP bacaklarının kesilip kesilmediğini ölçer ve
+            // sonucu diag'e "SURVIVAL tcp=… udp=… gapMs=…" olarak yazar
+            // (bkz. SessionSurvivalProbeService — docs/session-continuity-design.md).
+            SessionSurvivalProbeService.Instance.Start();
         });
 
         Title = $"{Utils.GetVersion()} - {(Utils.IsAdministrator() ? ResUI.RunAsAdmin : ResUI.NotRunAsAdmin)}";
@@ -473,36 +510,30 @@ public partial class MainWindow : IDashboardBridge
         style |= WsThickFrame | WsMaximizeBox;
         SetWindowLong(handle, GwlStyle, style);
 
-        MeasureNonClientBorders(handle);
-
+        // Windows 11 draws an accent-colored frame band around borderless
+        // thick-frame windows (follows the user's "Show accent color on title
+        // bars and window borders" setting — the purple line, unchanged by the
+        // app theme). Disabling DWM rendering removes it but falls back to the
+        // classic cream-colored frame, so instead the non-client area is
+        // collapsed to zero via WM_NCCALCSIZE in WindowProc: neither the
+        // accent band nor the classic frame is ever visible and the WebView2
+        // content fills the window edge to edge. Resize hit-testing is
+        // restored manually (WM_NCHITTEST); maximized bounds are clamped to
+        // the work area in WM_GETMINMAXINFO.
         HwndSource.FromHwnd(handle)?.AddHook(WindowProc);
     }
 
-    private int _borderLeft;
-    private int _borderTop;
-    private int _borderRight;
-    private int _borderBottom;
-
-    /// <summary>
-    /// The invisible thick-frame border insets the client area from the window
-    /// edges. Measuring it once lets the maximize clamp extend the window by
-    /// exactly this amount, so the rendered client fills the work area with no
-    /// visible desktop gap around it.
-    /// </summary>
-    private void MeasureNonClientBorders(IntPtr handle)
-    {
-        GetWindowRect(handle, out var windowRect);
-        GetClientRect(handle, out var clientRect);
-        var clientOrigin = new NativePoint { X = 0, Y = 0 };
-        ClientToScreen(handle, ref clientOrigin);
-
-        _borderLeft = clientOrigin.X - windowRect.Left;
-        _borderTop = clientOrigin.Y - windowRect.Top;
-        _borderRight = windowRect.Right - (clientOrigin.X + clientRect.Right);
-        _borderBottom = windowRect.Bottom - (clientOrigin.Y + clientRect.Bottom);
-    }
-
     private const int WmGetMinMaxInfo = 0x0024;
+    private const int WmNcCalcSize = 0x0083;
+    private const int WmNcHitTest = 0x0084;
+    private const int HtLeft = 10;
+    private const int HtRight = 11;
+    private const int HtTop = 12;
+    private const int HtTopLeft = 13;
+    private const int HtTopRight = 14;
+    private const int HtBottom = 15;
+    private const int HtBottomLeft = 16;
+    private const int HtBottomRight = 17;
     private const int WmMouseMove = 0x0200;
     private const int WmLButtonUp = 0x0202;
     private const int WmCaptureChanged = 0x0215;
@@ -540,6 +571,31 @@ public partial class MainWindow : IDashboardBridge
             }
         }
 
+        if (msg == WmNcCalcSize)
+        {
+            // Client area = whole window: the DWM accent frame band and the
+            // classic fallback frame are never visible, so the WebView2 content
+            // fills the window edge to edge in windowed mode too.
+            handled = true;
+            return IntPtr.Zero;
+        }
+
+        if (msg == WmNcHitTest && WindowState != WindowState.Maximized)
+        {
+            // With the non-client area collapsed DefWindowProc reports HTCLIENT
+            // everywhere and edge-resize would be dead; restore the resize
+            // handles explicitly (lParam = screen coordinates).
+            var x = (short)((long)lParam & 0xFFFF);
+            var y = (short)(((long)lParam >> 16) & 0xFFFF);
+            var hit = HitTestResizeEdges(hwnd, x, y);
+            if (hit != 0)
+            {
+                handled = true;
+                return new IntPtr(hit);
+            }
+            return IntPtr.Zero;
+        }
+
         if (msg != WmGetMinMaxInfo)
         {
             return IntPtr.Zero;
@@ -548,26 +604,45 @@ public partial class MainWindow : IDashboardBridge
         // WPF's borderless maximize sizes the window to the whole monitor; clamp
         // it to the work area of the monitor the window is on (multi-monitor safe)
         // so the taskbar stays visible and no content is cut off underneath it.
+        // With the non-client area collapsed (WM_NCCALCSIZE) the window rect IS
+        // the client rect, so the maximized rect is the work area exactly.
         var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
         var info = new MonitorInfo { cbSize = Marshal.SizeOf<MonitorInfo>() };
         if (GetMonitorInfo(monitor, ref info))
         {
             var mmi = Marshal.PtrToStructure<MinMaxInfo>(lParam);
-            // Extend the maximized window beyond the work area by the measured
-            // non-client border so the invisible border sits off-screen and the
-            // client (WebView2) fills the work area edge to edge. The extra +1 on
-            // right/bottom compensates the DWM growing the border by one pixel on
-            // maximize; it biases toward an invisible 1 px overhang rather than a
-            // visible desktop gap.
-            mmi.ptMaxPosition.X = info.rcWork.Left - _borderLeft;
-            mmi.ptMaxPosition.Y = info.rcWork.Top - _borderTop;
-            mmi.ptMaxSize.X = (info.rcWork.Right - info.rcWork.Left) + _borderLeft + _borderRight + 1;
-            mmi.ptMaxSize.Y = (info.rcWork.Bottom - info.rcWork.Top) + _borderTop + _borderBottom + 1;
+            mmi.ptMaxPosition.X = info.rcWork.Left;
+            mmi.ptMaxPosition.Y = info.rcWork.Top;
+            mmi.ptMaxSize.X = info.rcWork.Right - info.rcWork.Left;
+            mmi.ptMaxSize.Y = info.rcWork.Bottom - info.rcWork.Top;
             Marshal.StructureToPtr(mmi, lParam, false);
             handled = true;
         }
 
         return IntPtr.Zero;
+    }
+
+    private int HitTestResizeEdges(IntPtr hwnd, int screenX, int screenY)
+    {
+        GetWindowRect(hwnd, out var r);
+        var grip = Math.Max(6, (int)(6 * GetDpiForWindow(hwnd) / 96.0));
+        var left = screenX - r.Left;
+        var right = r.Right - screenX;
+        var top = screenY - r.Top;
+        var bottom = r.Bottom - screenY;
+        var onLeft = left >= 0 && left <= grip;
+        var onRight = right >= 0 && right <= grip;
+        var onTop = top >= 0 && top <= grip;
+        var onBottom = bottom >= 0 && bottom <= grip;
+        if (onLeft && onTop) return HtTopLeft;
+        if (onRight && onTop) return HtTopRight;
+        if (onLeft && onBottom) return HtBottomLeft;
+        if (onRight && onBottom) return HtBottomRight;
+        if (onLeft) return HtLeft;
+        if (onRight) return HtRight;
+        if (onTop) return HtTop;
+        if (onBottom) return HtBottom;
+        return 0;
     }
 
     /// <summary>
@@ -578,27 +653,33 @@ public partial class MainWindow : IDashboardBridge
     {
         Loaded -= MainWindow_Loaded;
 
-        // First run has no saved window size; open the dashboard maximized so it
-        // fills the work area instead of the default small frame. Later sessions
-        // restore exactly what the user left (see WindowBase.OnLoaded).
-        if (ConfigHandler.GetWindowSizeItem(AppManager.Instance.Config, GetType().Name) is null)
+        // The dashboard always opens maximized so it fills the work area instead
+        // of the default small frame — ApplyStartupPlacement does this at the
+        // reveal; this block is only the reload-after-boot fallback. While the
+        // dashboard is booting the window is parked off-screen (see App.OnStartup)
+        // and placement is applied by ApplyStartupPlacement at the reveal — this
+        // block only runs if the window is ever reloaded after a completed boot.
+        if (!_dashboardFirstPaintPending)
         {
-            WindowState = WindowState.Maximized;
-        }
-        else if (Width < MinWidth || Height < MinHeight)
-        {
-            // Guard against a corrupt saved size (older builds could persist a
-            // degenerate 157x25 entry): fall back to the designed default instead
-            // of opening a sliver of a window.
-            Width = 1200;
-            Height = 800;
+            if (ConfigHandler.GetWindowSizeItem(AppManager.Instance.Config, GetType().Name) is null)
+            {
+                WindowState = WindowState.Maximized;
+            }
+            else if (Width < MinWidth || Height < MinHeight)
+            {
+                // Guard against a corrupt saved size (older builds could persist a
+                // degenerate 157x25 entry): fall back to the designed default instead
+                // of opening a sliver of a window.
+                Width = 1200;
+                Height = 800;
+            }
         }
 
         // Safety net: if the dashboard never raises NavigationCompleted — or the
-        // WebView2 initialization below hangs — never leave the invisible startup
-        // window (Opacity 0 + Hidden WebView2) invisible forever. Started BEFORE
-        // InitializeWebViewAsync so it also covers an init hang. The reveal itself
-        // is idempotent, so this can only help.
+        // WebView2 initialization below hangs — never leave the off-screen startup
+        // window (parked at -32000,-32000 + Hidden WebView2) hidden forever.
+        // Started BEFORE InitializeWebViewAsync so it also covers an init hang. The
+        // reveal itself is idempotent, so this can only help.
         var revealSafety = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
         revealSafety.Tick += (_, _) =>
         {
@@ -607,9 +688,19 @@ public partial class MainWindow : IDashboardBridge
         };
         revealSafety.Start();
 
+        // The splash status line is fixed (see SplashWindow); only the bar
+        // advances here as the dashboard boots.
+        App.Splash?.SetProgress(60);
+        DiagLog.Write("WEBVIEW_BOOT webview-init-start");
+
         try
         {
             await InitializeWebViewAsync();
+            DiagLog.Write("WEBVIEW_BOOT webview-init-done");
+            // Fast ready signal: NavigationCompleted can lag 2+ seconds behind the
+            // page's own load on loaded/virtualized machines, so also poll the
+            // document.readyState directly. Whichever fires first runs the seeds.
+            _ = PollForDashboardReadyAsync();
         }
         catch (Exception ex)
         {
@@ -651,62 +742,89 @@ public partial class MainWindow : IDashboardBridge
 
         if (!e.IsSuccess)
         {
-            // Navigation failed: never leave the Opacity-0 startup window invisible.
+            // Navigation failed: never leave the off-screen startup window hidden.
             RevealStartupWindow();
             Logging.SaveLog($"AoGPN dashboard navigation failed: {e.WebErrorStatus}");
             return;
         }
 
+        // Normal ready signal. On machines where NavigationCompleted lags far behind
+        // the page's own load event (measured 2+ s), the readiness poll started in
+        // MainWindow_Loaded gets here first; _startupSeeded keeps both paths safe.
+        if (!_startupSeeded)
+        {
+            DiagLog.Write("WEBVIEW_BOOT nav-fired");
+            await RunStartupSeedsAsync();
+        }
+    }
+
+    /// <summary>
+    /// Pushes the initial dashboard state (theme/settings/language/nodes/…), reveals
+    /// the startup window, then completes the remaining boot work. Runs exactly once
+    /// — triggered by whichever comes first: NavigationCompleted or the
+    /// document.readyState poll (see <see cref="PollForDashboardReadyAsync"/>).
+    /// </summary>
+    private async Task RunStartupSeedsAsync()
+    {
+        if (_isClosing || _startupSeeded)
+        {
+            return;
+        }
+
+        _startupSeeded = true;
         try
         {
             _webViewReady = true;
+            App.Splash?.SetProgress(80);
+            DiagLog.Write("WEBVIEW_BOOT seeds-start");
             // If AutoHideStartup left the window minimized, freeze the WebView2
             // right away so the hidden dashboard never starts compositing.
             await SyncWebViewSuspensionAsync(WindowState == WindowState.Minimized);
-            await SynchronizeConnectionStateAsync(forcePublish: true);
-            await SynchronizeWindowStateAsync();
-            await PushNodeListAsync();
-            await PushSettingsAsync();
-            await PushMonitorSnapshotAsync(force: true);
-            await PushGpnTelemetryAsync();
-            await PushGpnCaptureStatsAsync();
 
-            // Push the startup WinDivert/environment state (bridge availability)
-            // and the current warp dial health so banners render immediately
-            // instead of waiting for the next event.
-            await PushWinDivertHealthAsync();
-            await PushWarpHealthAsync();
-
-
-            // Sync initial theme so the dashboard loads with the correct palette.
-            var wpfTheme = AppManager.Instance.Config.UiItem.CurrentTheme ?? nameof(ETheme.Dark);
-            var webThemeId = wpfTheme switch
-            {
-                nameof(ETheme.Dusk) => "plasma",
-                nameof(ETheme.NightSky) => "cryo",
-                nameof(ETheme.Aquatic) => "matrix",
-                nameof(ETheme.Desert) => "inferno",
-                nameof(ETheme.Light) => "phantom",
-                nameof(ETheme.Crimson) => "crimson",
-                nameof(ETheme.Velocity) => "velocity",
-                nameof(ETheme.Venom) => "venom",
-                nameof(ETheme.Synthwave) => "synthwave",
-                nameof(ETheme.Cyberpunk) => "cyberpunk",
-                _ => "nebula",
-            };
-            await PushThemeAsync(webThemeId);
-            await PushEffectsTierAsync();
-            await PushLanguageAsync();
-            await PushAppInfoAsync();
-            await ShowHwaFallbackNoticeIfNeededAsync();
+            // Critical first-paint state, pushed in parallel: the pushes are
+            // independent JS setters and each await releases the UI thread between
+            // browser round-trips, so concurrent pushes overlap instead of
+            // serializing.
+            await Task.WhenAll(
+                SynchronizeConnectionStateAsync(forcePublish: true),
+                SynchronizeWindowStateAsync(),
+                PushNodeListAsync(),
+                PushSettingsAsync(),
+                PushMonitorSnapshotAsync(force: true),
+                PushThemeAsync(ResolveInitialDashboardTheme()),
+                PushEffectsTierAsync(),
+                PushLanguageAsync());
 
             // The dashboard has now loaded and been seeded with the initial state
             // (theme, settings, language, ...): reveal the startup window. It was
             // shown at Opacity 0 so launching never flashes an empty black frame
-            // while WebView2 boots (see RevealStartupWindow). The AutoRun wait and
-            // the proxy-only reconcile below can take seconds and must not delay
-            // the window from appearing.
+            // while WebView2 boots (the boot splash covers that phase and
+            // cross-fades out here). Note: a renderer-side "first paint" signal
+            // cannot be used while the WebView is still hidden — WebView2
+            // suspends the hidden renderer, so page timers/fetches never run
+            // until the reveal unfreezes it. The AutoRun wait and the proxy-only
+            // reconcile below can take seconds and must not delay the window
+            // from appearing.
+            DiagLog.Write("WEBVIEW_SEEDED initial-state-pushed");
             RevealStartupWindow();
+
+            // Secondary state (banners/telemetry/app info) — pushed after the
+            // reveal so the splash hands off on the critical state alone; their
+            // event feeds republish them anyway.
+            try
+            {
+                await Task.WhenAll(
+                    PushGpnTelemetryAsync(),
+                    PushGpnCaptureStatsAsync(),
+                    PushWinDivertHealthAsync(),
+                    PushWarpHealthAsync(),
+                    PushAppInfoAsync(),
+                    ShowHwaFallbackNoticeIfNeededAsync());
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog("AoGPN dashboard secondary state push failed", ex);
+            }
 
             // Auto-run (start on boot) may fire before the network stack is ready.
             // Wait for network availability first so the proxy-only core and OS proxy
@@ -743,18 +861,65 @@ public partial class MainWindow : IDashboardBridge
             // ping atılır — GPN bağlantısı kurulunca "sonra" ölçümüyle karşılaştırılır.
             // Ağ/DB ısınması için kısa bir gecikmeyle arka planda koşar (best-effort).
             _ = MeasureRealPingAsync(isBefore: true, delay: TimeSpan.FromSeconds(4));
+
         }
         catch (Exception ex)
         {
-            // Event handlers are async-void; contain unexpected browser teardown
-            // errors so they cannot escape onto WPF's dispatcher as fatal exceptions.
-            // A failed startup script must never leave the Opacity-0 window invisible
-            // forever, so reveal anyway (the dashboard may still be usable).
+            // Contain unexpected browser teardown errors so they cannot escape onto
+            // WPF's dispatcher as fatal exceptions. A failed startup script must
+            // never leave the off-screen window hidden forever, so reveal anyway
+            // (the dashboard may still be usable).
             RevealStartupWindow();
             if (!_isClosing)
             {
                 Logging.SaveLog("AoGPN dashboard startup script failed", ex);
             }
+        }
+    }
+
+    /// <summary>
+    /// Waits for the dashboard document to finish loading by polling
+    /// document.readyState over ExecuteScriptAsync instead of relying solely on
+    /// NavigationCompleted, which on some machines (loaded CPUs, virtualized
+    /// displays) lags 2+ seconds behind the page's own load event. The page-side
+    /// load is what actually matters for the seeds, and ExecuteScriptAsync is a
+    /// fast, proven channel even while the WebView is hidden. Capped and
+    /// failure-safe: NavigationCompleted remains the authority for failed
+    /// navigations, and the 15 s reveal safety net still stands.
+    /// </summary>
+    private async Task PollForDashboardReadyAsync()
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (!_isClosing && !_startupSeeded && DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                if (WebView.CoreWebView2 is null)
+                {
+                    await Task.Delay(120);
+                    continue;
+                }
+
+                var result = await WebView.CoreWebView2.ExecuteScriptAsync("document.readyState");
+                if (string.Equals(result, "\"complete\"", StringComparison.Ordinal))
+                {
+                    DiagLog.Write("WEBVIEW_BOOT ready-poll-fired");
+                    await RunStartupSeedsAsync();
+                    return;
+                }
+            }
+            catch
+            {
+                // Document not created yet (navigation still starting) — retry.
+            }
+
+            await Task.Delay(120);
+        }
+
+        // 15 s cap: reveal anyway (idempotent) so nothing can stay invisible.
+        if (!_startupSeeded)
+        {
+            RevealStartupWindow();
         }
     }
 
@@ -781,8 +946,30 @@ public partial class MainWindow : IDashboardBridge
             return;
         }
 
+        DiagLog.Write($"STATE ui toggle requested mode={requestedMode} transport={transport} actualConnected={ReadActualConnectionState()} autoRecovering={Volatile.Read(ref _autoRecovering) == 1}");
+
         try
         {
+            // Otomatik kurtarma (çekirdek çökmesi → yeniden başlatma) penceresinde
+            // gelen toggle, "Bağlan" isteği DEĞİL kullanıcının kurtarmayı iptal
+            // edip temiz kesme isteğidir — recovery Ready dönmeden gerçek durumu
+            // yayınla, çekirdeği durdur.
+            if (Volatile.Read(ref _autoRecovering) == 1)
+            {
+                _connectionStarting = false;
+                Volatile.Write(ref _autoRecovering, 0);
+                Volatile.Write(ref _connectionState, false);
+                await SendConnectionStateAsync();
+                var cancelViewModel = ViewModel?.ConnectionViewModel;
+                if (cancelViewModel is not null)
+                {
+                    cancelViewModel.Transport = "";
+                    await ApplyConnectionModeAsync(cancelViewModel, SplitTunnelViewModel.ModeOff);
+                }
+                DiagLog.Write("STATE ui disconnect (auto-recovery cancelled by user)");
+                return; // finally kapıyı bırakır
+            }
+
             var connectionViewModel = ViewModel?.ConnectionViewModel;
             if (connectionViewModel is null)
             {
@@ -795,6 +982,7 @@ public partial class MainWindow : IDashboardBridge
                 // Disconnect: release capture and clear any transport override so
                 // ModeOff maps to the clean (no TUN, no system proxy) default.
                 connectionViewModel.Transport = "";
+                DiagLog.Write("STATE ui disconnect (user toggle)");
                 await ApplyConnectionModeAsync(connectionViewModel, SplitTunnelViewModel.ModeOff);
 
                 // VPN oturum günlüğünü kapat (aktif değilse no-op — GPN bağlantı
@@ -841,6 +1029,7 @@ public partial class MainWindow : IDashboardBridge
                 {
                     DiagLog.Write("VPN_LOG connected transport=" + effectiveTransport);
                 }
+                DiagLog.Write($"STATE ui connect settled (user toggle) connected={ReadActualConnectionState()} mode={requestedMode}");
                 if (protocolNotice.IsNotEmpty())
                 {
                     NoticeManager.Instance.Enqueue(protocolNotice);
@@ -874,8 +1063,18 @@ public partial class MainWindow : IDashboardBridge
             return;
         }
 
+        DiagLog.Write($"STATE ui GPN connect requested actualConnected={ReadActualConnectionState()}");
+
         try
         {
+            // Kurtarma penceresinde yeni bağlantı isteği görmezden gelinir (buton
+            // zaten kilitli — tray/hotkey için koruma).
+            if (Volatile.Read(ref _autoRecovering) == 1)
+            {
+                DiagLog.Write("STATE ui GPN connect ignored — auto-recovery in progress");
+                return;
+            }
+
             var viewModel = ViewModel;
             if (viewModel is null)
             {
@@ -891,6 +1090,7 @@ public partial class MainWindow : IDashboardBridge
             }
             _connectionStarting = false;
             await SynchronizeConnectionStateAsync(forcePublish: true);
+            DiagLog.Write($"STATE ui GPN connect settled connected={ReadActualConnectionState()}");
             // Bağlantı kurulamadıysa (koordinatör Failed / çekirdek Failed) nedeni
             // gösteren hata kartını dashboard'a bas.
             await TryPushConnectionFailureAsync();
@@ -1789,8 +1989,14 @@ public partial class MainWindow : IDashboardBridge
         var result = _foreignTunnelDetector.Detect(localPort);
         if (!result.HasConflicts)
         {
+            DiagLog.Write("STATE pre-connect foreign scan clean — no competing tunnel/proxy state");
             return;
         }
+
+        DiagLog.Write("STATE pre-connect foreign state: "
+            + $"tun=[{string.Join(",", result.TunAdapterNames)}] "
+            + $"processes=[{string.Join(",", result.ForeignProcessNames)}] "
+            + $"portConflict={result.HasPortConflict}");
 
         // Conflicting foreign VPN state detected — warn only. AoGPN never closes
         // another VPN client; the user decides whether to close it first.
@@ -1810,8 +2016,26 @@ public partial class MainWindow : IDashboardBridge
             details.Add(string.Join(", ", result.ForeignProcessNames));
         }
 
-        NoticeManager.Instance.SendMessageAndEnqueue(string.Format(
-            ResUI.ForeignTunnelWarning, string.Join("; ", details)));
+        // Resmi WireGuard istemcisinin (WireGuard for Windows) AKTİF tüneli, mihomo
+        // TUN'un default rotasıyla yarışır ve WFP filtreleriyle çakışır — kopma/
+        // kararsızlığın bilinen kaynağı. Ayrı uyarıyla açıkça söyle (isteyen kapatsın;
+        // AoGPN üçüncü taraf istemcileri asla kapatmaz).
+        var activeWgAdapters = result.TunAdapterNames
+            .Where(n => n.Contains("wireguard", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (activeWgAdapters.Length > 0)
+        {
+            var wgNames = string.Join(", ", activeWgAdapters);
+            DiagLog.Write($"STATE pre-connect WireGuard-for-Windows tunnel ACTIVE ({wgNames}) — competing default route can make the new TUN unstable");
+            NoticeManager.Instance.SendMessageAndEnqueue(string.Format(
+                ResUI.ForeignTunnelWarning,
+                string.Join("; ", details.Concat([$"Aktif WireGuard istemcisi tüneli: {wgNames} — kapatılmadan bağlanılırsa yeni TUN ile rota çakışması olur ve bağlantı kopabilir."]))));
+        }
+        else
+        {
+            NoticeManager.Instance.SendMessageAndEnqueue(string.Format(
+                ResUI.ForeignTunnelWarning, string.Join("; ", details)));
+        }
     }
 
     /// <summary>
@@ -1960,6 +2184,15 @@ public partial class MainWindow : IDashboardBridge
 
         if (forcePublish || actualState != previousState)
         {
+            if (actualState != previousState)
+            {
+                // Zaman çizelgesi: telemetri tick'i gerçek durumu değiştirdiğini
+                // gördü — hangi sağlık durumuyla (Ready dışı = çekirdek yok/
+                // çöktü) yayınlandığını kaydet.
+                var healthState = AppManager.Instance.CoreEngineHost
+                    ?.GetHealth(CoreHealthRole.Main)?.State;
+                DiagLog.Write($"STATE ui telemetry flip connected={actualState} (was {previousState}) health={healthState?.ToString() ?? "?"} autoRecovering={Volatile.Read(ref _autoRecovering) == 1}");
+            }
             await SendConnectionStateAsync();
         }
     }
@@ -1983,6 +2216,7 @@ public partial class MainWindow : IDashboardBridge
             // stop waiting so the disconnect state can be published promptly.
             if (!_connectionStarting)
             {
+                DiagLog.Write($"STATE ui connect wait aborted after {(int)sw.Elapsed.TotalMilliseconds} ms");
                 return;
             }
 
@@ -1991,6 +2225,7 @@ public partial class MainWindow : IDashboardBridge
             // kartı hemen yayınlanır.
             if (ViewModel?.GpnCoordinatorSnapshot is { State: GpnConnectionState.Failed })
             {
+                DiagLog.Write($"STATE ui connect wait aborted (coordinator Failed) after {(int)sw.Elapsed.TotalMilliseconds} ms");
                 return;
             }
 
@@ -2007,10 +2242,13 @@ public partial class MainWindow : IDashboardBridge
                 or CoreHealthState.Degraded
                 or CoreHealthState.Failed)
             {
-                return; // settled: connected, degraded, or failed — publish as-is.
+                // settled: connected, degraded, or failed — publish as-is.
+                DiagLog.Write($"STATE ui connect wait settled health={health.State} after {(int)sw.Elapsed.TotalMilliseconds} ms");
+                return;
             }
             await Task.Delay(200);
         }
+        DiagLog.Write($"STATE ui connect wait TIMEOUT after {timeoutSeconds} s — publishing as-is");
     }
 
     public void HandleAppControl(string command)
@@ -2112,6 +2350,65 @@ public partial class MainWindow : IDashboardBridge
         _lastMaximizedState = isMaximized;
         _windowStatePublished = true;
         await PushWindowStateAsync();
+    }
+
+    // All theme ids the dashboard can apply (mirrors Temalar/themes.json). Themes
+    // without a WPF palette never appear in TryMapWebThemeToWpf but must still be
+    // accepted as a persisted DashboardTheme so the startup push survives restarts.
+    private static readonly HashSet<string> DashboardThemeIds = new(StringComparer.Ordinal)
+    {
+        "nebula", "inferno", "venom", "cryo", "synthwave", "cyberpunk", "matrix",
+        "plasma", "phantom", "crimson", "velocity", "aurora", "candy", "obsidian",
+        "sandstorm", "neon-cyber", "titanium-orange", "matrix-green", "ocean-blue",
+        "red-phantom", "violet-nova", "arctic-ice", "gold-elite", "stealth-camo",
+        "crimson-core",
+    };
+
+    /// <summary>
+    /// True when the id names one of the 25 shipped dashboard themes (mirrors
+    /// Temalar/themes.json). Used to validate renderer set_theme payloads before
+    /// they are persisted or interpolated into an ExecuteScriptAsync call.
+    /// </summary>
+    internal static bool IsKnownDashboardTheme(string themeId) => DashboardThemeIds.Contains(themeId);
+
+    /// <summary>
+    /// Maps a native WPF theme (an <see cref="ETheme"/> name) to its dashboard
+    /// theme id. The reverse of <see cref="TryMapWebThemeToWpf"/>; unknown themes
+    /// map to the default "nebula" palette.
+    /// </summary>
+    internal static string MapWpfThemeToWeb(string wpfTheme)
+    {
+        return wpfTheme switch
+        {
+            nameof(ETheme.Dusk) => "plasma",
+            nameof(ETheme.NightSky) => "cryo",
+            nameof(ETheme.Aquatic) => "matrix",
+            nameof(ETheme.Desert) => "inferno",
+            nameof(ETheme.Light) => "phantom",
+            nameof(ETheme.Crimson) => "crimson",
+            nameof(ETheme.Velocity) => "velocity",
+            nameof(ETheme.Venom) => "venom",
+            nameof(ETheme.Synthwave) => "synthwave",
+            nameof(ETheme.Cyberpunk) => "cyberpunk",
+            _ => "nebula",
+        };
+    }
+
+    /// <summary>
+    /// Resolves the dashboard theme for the startup push: the persisted raw theme
+    /// id (any of the 25, including the WPF-less 14) wins when it is a known id;
+    /// otherwise the value is derived from the native <see cref="ETheme"/>.
+    /// </summary>
+    internal static string ResolveInitialDashboardTheme()
+    {
+        var stored = AppManager.Instance.Config.UiItem.DashboardTheme;
+        if (stored is not null && DashboardThemeIds.Contains(stored))
+        {
+            return stored;
+        }
+
+        var wpfTheme = AppManager.Instance.Config.UiItem.CurrentTheme ?? nameof(ETheme.Dark);
+        return MapWpfThemeToWeb(wpfTheme);
     }
 
     /// <summary>
@@ -2336,6 +2633,7 @@ public partial class MainWindow : IDashboardBridge
                 break;
             case GpnConnectionState.Connected:
                 Volatile.Write(ref _connectionState, true);
+                DiagLog.Write($"STATE ui gpn snapshot Connected (server={snapshot.Server?.Name ?? "-"} summary={snapshot.ProfileSummary})");
                 await SendConnectionStateAsync();
 
                 // Gerçek ping "sonra" ölçümü: tünel kurulunca aynı uç noktalara
@@ -2346,6 +2644,7 @@ public partial class MainWindow : IDashboardBridge
                 break;
             case GpnConnectionState.Disconnected:
                 Volatile.Write(ref _connectionState, false);
+                DiagLog.Write("STATE ui gpn snapshot Disconnected");
                 // GPN Bağlan butonu bağlıyken ikinci basışta (toggle) koordinatör
                 // Disconnected'a geçer; bekleyen WaitForCoreLeavingStartingAsync 20 sn
                 // beklemesin diye bağlanma bayrağını da kapat (disconnect sonu).
@@ -2357,10 +2656,73 @@ public partial class MainWindow : IDashboardBridge
         }
     }
 
+    /// <summary>
+    /// Çekirdek sağlık olaylarını dashboard bağlantı durumuna çevirir. Kritik dal:
+    /// CoreManager beklenmedik bir çıkışta otomatik kurtarma başlattığında (Degraded
+    /// + <see cref="CoreHealthSnapshot.Recovering"/>) durum "kopmuş/Bağlan" yerine
+    /// "yeniden bağlanıyor" olarak yayınlanır — buton kilitli kalır ve çekirdek
+    /// Ready dönünce bağlantı kullanıcı tıklaması OLMADAN "bağlı"ya döner. Böylece
+    /// kullanıcının gördüğü "bağlandı → Bağlan → 3-5 sn sonra kendiliğinden bağlandı"
+    /// yanıp sönmesi, otomatik kurtarmanın şeffaf göstergesine dönüşür.
+    /// </summary>
+    private async Task OnMainCoreHealthChangedAsync(CoreHealthSnapshot health)
+    {
+        var wasRecovering = Volatile.Read(ref _autoRecovering) == 1;
+        switch (health.State)
+        {
+            case CoreHealthState.Degraded when health.Recovering && !wasRecovering:
+                // Kurtarma başladı: durumu "bağlanıyor (otomatik yeniden bağlanma)"
+                // olarak yayınla — gerçek bir kesinti bildirimi için Ready/Failed
+                // terminal durumunu bekle.
+                Volatile.Write(ref _autoRecovering, 1);
+                Volatile.Write(ref _connectionState, false);
+                DiagLog.Write("STATE ui auto-recovery began — publishing connecting");
+                try
+                {
+                    // Kendiliğinden yeniden bağlanmanın kullanıcıya görünür nedeni:
+                    // kısa "Yeniden bağlanıyor" anonsu — kopma asla sessiz geçmez.
+                    NoticeManager.Instance.SendMessageEx("Bağlantı koptu — otomatik yeniden bağlanıyor…");
+                }
+                catch
+                {
+                    // Bildirim kanalı best-effort; durum yayını asla engellenmez.
+                }
+                await SendConnectionStateAsync();
+                break;
+            case CoreHealthState.Ready when wasRecovering:
+                Volatile.Write(ref _autoRecovering, 0);
+                Volatile.Write(ref _connectionState, true);
+                DiagLog.Write("STATE ui auto-recovery finished ok — publishing connected");
+                await SendConnectionStateAsync();
+                break;
+            case CoreHealthState.Failed when wasRecovering:
+                // Kurtarma denemeleri tükendi: ancak şimdi gerçek kopma + neden kartı.
+                Volatile.Write(ref _autoRecovering, 0);
+                Volatile.Write(ref _connectionState, false);
+                DiagLog.Write($"STATE ui auto-recovery exhausted — publishing disconnected (error={health.Error})");
+                await SendConnectionStateAsync();
+                await TryPushConnectionFailureAsync();
+                break;
+            case CoreHealthState.Stopped when wasRecovering:
+                // İstemli durdurma kurtarmayı iptal etti — normal kesme akışı durumu
+                // yayınlar; burada yalnızca bayrağı kapat.
+                Volatile.Write(ref _autoRecovering, 0);
+                break;
+            case CoreHealthState.Failed:
+                // Kurtarmasız doğrudan Failed (AutoReconnect kapalı ya da deneme
+                // limiti doldu): oturum ortasında kopan bağlantının nedeni hata
+                // kartına düşsün (bağlantı-kurma akışının sonundaki çağrıyla aynı
+                // defter — tekrar zararsızdır).
+                await TryPushConnectionFailureAsync();
+                break;
+        }
+    }
+
     private async Task SendConnectionStateAsync()
     {
         var connectedJson = JsonSerializer.Serialize(Volatile.Read(ref _connectionState));
-        var connectingJson = JsonSerializer.Serialize(_connectionStarting);
+        var connectingJson = JsonSerializer.Serialize(_connectionStarting
+            || Volatile.Read(ref _autoRecovering) == 1);
         var configuredMode = AppManager.Instance.Config.ConnectionItem?.Mode;
         var modeJson = JsonSerializer.Serialize(
             configuredMode == SplitTunnelViewModel.ModeManual ? "gpn" : "vpn");
@@ -2604,8 +2966,23 @@ public partial class MainWindow : IDashboardBridge
 
                 // Verify: tunnel IP must differ from direct IP (otherwise the
                 // proxy is not actually routing traffic).
+                //
+                // Kontaminasyon uyarısı: GPN superset oturumunda doğrulama hostları
+                // (ipify/ip.sb/ipinfo/ip-api) kural gereği GPN-CHECK → WG tüneline
+                // gider; TUN/system proxy etkinken "direct" bacağı da aynı tünelden
+                // çıkar → direct==tunnel olur ve gerçek tünel çalışsa bile yanlış
+                // "Sızıntı" alarmı üretilirdi (canlı gözlenen: direct=92.4.220.236
+                // tunnel=92.4.220.236 verified=False). Böyle durumda tünel IP'si
+                // önbellekteki ISP baz çizgisiyle karşılaştırılır (TUN modundakiyle
+                // aynı mantık). Gerçek sızıntıda tünel yoktur → tunnelIp==directIp
+                // == ISP olur ve sonuç yine false kalır.
+                var directContaminated = tunnelIp is { Length: > 0 }
+                    && string.Equals(tunnelIp, directIp, StringComparison.OrdinalIgnoreCase);
                 tunnelVerified = tunnelIp is { Length: > 0 }
-                    && !string.Equals(tunnelIp, directIp, StringComparison.OrdinalIgnoreCase);
+                    && (!string.Equals(tunnelIp, directIp, StringComparison.OrdinalIgnoreCase)
+                        || (directContaminated
+                            && _realIspIp is { Length: > 0 }
+                            && !string.Equals(tunnelIp, _realIspIp, StringComparison.OrdinalIgnoreCase)));
             }
             else if (connected && transport == "tun")
             {
@@ -2840,6 +3217,8 @@ public partial class MainWindow : IDashboardBridge
     private Task PushRuleDriftAsync(bool force = false) => _pushService.PushRuleDriftAsync(force);
     /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
     public Task PushProcessCatalogAsync() => _pushService.PushProcessCatalogAsync();
+    /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
+    public Task PushAppIconsAsync(string[] paths) => _pushService.PushAppIconsAsync(paths);
     /// <summary>Wave 3: <see cref="DashboardPushService"/> delegasyonu — gövde servise taşındı.</summary>
     public Task PushMonitorSnapshotAsync(bool force = false) => _pushService.PushMonitorSnapshotAsync(force);
 
@@ -3604,11 +3983,12 @@ public partial class MainWindow : IDashboardBridge
     }
 
     /// <summary>
-    /// Makes the startup window visible again once the WebView2 dashboard has
-    /// rendered (App.OnStartup shows the window at Opacity 0 so the raw empty
-    /// frame never flashes — see <see cref="CoreWebView2_NavigationCompleted"/>).
-    /// Skipped while the window is minimized/hidden to the tray (hidden startup):
-    /// the reveal then happens when the window is restored. Safe to call repeatedly.
+    /// Makes the startup window visible once the WebView2 dashboard has loaded
+    /// and been seeded (App.OnStartup parks the window off-screen so the raw
+    /// empty frame never flashes — see <see cref="CoreWebView2_NavigationCompleted"/>).
+    /// The splash closes at the same moment. Skipped while the window is
+    /// minimized/hidden to the tray (hidden startup): the reveal then happens when
+    /// the window is restored. Safe to call repeatedly.
     /// </summary>
     private void RevealStartupWindow()
     {
@@ -3619,28 +3999,106 @@ public partial class MainWindow : IDashboardBridge
 
         if (WindowState == WindowState.Minimized)
         {
-            // Hidden/minimized startup — stay pending; revealed on restore.
+            // Hidden/minimized startup (AutoHideStartup) — stay pending; revealed
+            // on restore. The splash must not linger, though: dismiss it now.
+            App.Splash?.BeginCloseAsync();
             return;
         }
 
         _dashboardFirstPaintPending = false;
 
-        // Show the WebView2 dashboard. It starts Hidden (see MainWindow.xaml) so the
-        // browser surface can never paint its empty dark frame while the window is
-        // invisible — WPF Opacity does not reach the native WebView2 child HWND.
+        // Finish the bar for the handoff (the status line is fixed — see
+        // SplashWindow); the splash closes right below.
+        App.Splash?.SetProgress(100);
+
+        // Move the parked boot window (see App.OnStartup) to its saved spot — or
+        // maximize it on first run — in the SAME tick the browser surface becomes
+        // visible, so the first on-screen frame is the painted dashboard. No
+        // opacity fade: WPF window opacity below 1 needs a layered window, and
+        // layered windows paint solid black on machines with broken compositing
+        // (the whole-screen black this off-screen boot exists to remove).
+        ApplyStartupPlacement();
+        DiagLog.Write($"WEBVIEW_BOOT reveal state={WindowState} "
+            + $"left={Left:0} top={Top:0} w={ActualWidth:0} h={ActualHeight:0}");
+
+        // The WebView2 dashboard is Visible from boot (see MainWindow.xaml) and
+        // painted its frames while the window was parked off-screen; the line
+        // below is a no-op safety net in case anything ever hides it again.
         WebView.Visibility = Visibility.Visible;
 
-        // Fade the window in briefly instead of switching instantly: the WebView2
-        // compositor can lag becoming visible by a frame or two, and an instant jump
-        // could present a stale dark frame. A ~120 ms fade keeps the reveal quick but
-        // masks that gap — a skin iframe still painting its first frame simply
-        // becomes visible mid-fade.
-        var fadeIn = new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(120))
-        {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
-        BeginAnimation(OpacityProperty, fadeIn);
+        // Measure the handoff end-to-end: reveal → first frame, so boot time is
+        // fully traceable from ao_diag.txt (WEBVIEW_BOOT first-frame).
+        _ = ProbeFirstFrameAsync();
+
+        App.Splash?.BeginCloseAsync();
     }
+
+    /// <summary>
+    /// Logs the reveal → first-frame handoff latency and the total boot duration
+    /// (splash → first dashboard frame) as a <c>WEBVIEW_BOOT first-frame</c> line.
+    /// Two <c>requestAnimationFrame</c> callbacks ≈ the first composited frame
+    /// after the reveal (the renderer has produced and delivered a frame to the
+    /// compositor); ExecuteScriptAsync awaits the promise, so the measured delay
+    /// is the renderer round-trip from the reveal tick. True DWM composition
+    /// cannot be observed from inside the process without screen capture, so this
+    /// is the closest host-side proxy. Bounded: a suspended (tray-hidden) or
+    /// still-booting renderer must never hang anything — the probe gives up
+    /// after 2 s and logs a timeout instead. Runs once per reveal (the reveal
+    /// itself is gated by <see cref="_dashboardFirstPaintPending"/>).
+    /// </summary>
+    private async Task ProbeFirstFrameAsync()
+    {
+        try
+        {
+            var frameWatch = System.Diagnostics.Stopwatch.StartNew();
+            var probe = WebView.CoreWebView2?.ExecuteScriptAsync(
+                "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r('painted'))));");
+            if (probe is null)
+            {
+                return;
+            }
+
+            var finished = await Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds(2)));
+            var revealDelayMs = frameWatch.ElapsedMilliseconds;
+            if (finished != probe)
+            {
+                DiagLog.Write("WEBVIEW_BOOT first-frame timeout "
+                    + $"reveal-delay={revealDelayMs} ms (renderer suspended or page still booting)");
+                return;
+            }
+
+            DiagLog.Write($"WEBVIEW_BOOT first-frame reveal-delay={revealDelayMs} ms "
+                + $"splash-to-first-frame={(long)(DateTime.UtcNow - App.BootStartedAt).TotalMilliseconds} ms");
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write($"WEBVIEW_BOOT first-frame probe-failed: {ex.GetType().Name}");
+        }
+    }
+
+    /// <summary>
+    /// Places the main window at the end of startup. Runs from
+    /// <see cref="RevealStartupWindow"/>: the window is parked off-screen during
+    /// boot (see App.OnStartup) and is only moved on-screen once the dashboard has
+    /// painted, so the first frame the user sees is the finished UI. WindowBase
+    /// defers the same placement during boot via
+    /// <see cref="DeferPlacementUntilReveal"/>. Restores the saved placement;
+    /// the first run (no saved placement yet) opens maximized so the dashboard
+    /// fills the work area (see the note in <c>MainWindow_Loaded</c>).
+    /// </summary>
+    private void ApplyStartupPlacement()
+    {
+        ApplySavedPlacement();
+
+        // First run only: no saved placement yet, so open maximized (the
+        // work-area fill is the product look). Later runs restore the user's
+        // last size/position/maximized state.
+        if (ConfigHandler.GetWindowSizeItem(AppManager.Instance.Config, GetType().Name) is null)
+        {
+            WindowState = WindowState.Maximized;
+        }
+    }
+
 
     public void ShowHideWindow(bool? blShow)
     {

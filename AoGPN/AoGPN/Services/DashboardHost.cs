@@ -44,7 +44,19 @@ public sealed class DashboardHost : IAsyncDisposable
             "WebView2");
         Directory.CreateDirectory(userDataFolder);
 
-        var environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+        // The boot window is parked OFF-SCREEN (see App.OnStartup) and the WebView2
+        // control is Visible the whole time, so Chromium never treats the dashboard
+        // as a background page and the load is never throttled (a Hidden controller
+        // stretches the load from ~0.4 s to ~2 s+ and delays first paint). The
+        // switches below are the second half of that guarantee: even when the
+        // parked window is reported occluded, the renderer keeps working and
+        // composites its first frame before the reveal moves the window on screen.
+        var environmentOptions = new CoreWebView2EnvironmentOptions(
+            additionalBrowserArguments: "--disable-backgrounding-occluded-windows "
+                + "--disable-renderer-backgrounding "
+                + "--disable-background-timer-throttling");
+        var environment = await CoreWebView2Environment.CreateAsync(
+            null, userDataFolder, environmentOptions);
         cancellationToken.ThrowIfCancellationRequested();
         await _webView.EnsureCoreWebView2Async(environment);
 

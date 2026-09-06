@@ -1,6 +1,53 @@
-/* Candy Circuit — dark plum with coral, mint and cream accents. */
-body[data-theme="candy"] { --violet:#FB7185; --cyan:#A7F3D0; --emerald:#FDE68A; --violet-rgb:251,113,133; --cyan-rgb:167,243,208; --emerald-rgb:253,230,138; background:#241522; color:#FFF1F2; }
-body[data-theme="candy"]::before { content:""; position:fixed; inset:0; pointer-events:none; background:radial-gradient(circle at 15% 20%,rgba(167,243,208,.15),transparent 28%),radial-gradient(circle at 80% 70%,rgba(251,113,133,.17),transparent 34%); }
-body[data-theme="candy"] .glass { background:rgba(45,25,43,.76); border-color:rgba(167,243,208,.24); }
-body[data-theme="candy"] .ring-wrap .ring-svg { filter:drop-shadow(0 0 9px #A7F3D0) drop-shadow(0 0 5px #FB7185); }
-body[data-theme="candy"] .theme-spinner { border-top-color:#FB7185; border-right-color:#A7F3D0; }
+/* ==========================================================================
+   AoGPN dashboard — theme: candy
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="candy"] {
+  --bg: #241522;
+  --violet: #FB7185;
+  --cyan: #A7F3D0;
+  --emerald: #FDE68A;
+  --glass: rgba(251, 113, 133, 0.045);
+  --glass-border: rgba(167, 243, 208, 0.18);
+  --violet-rgb: 251,113,133;
+  --cyan-rgb: 167,243,208;
+  --emerald-rgb: 253,230,138;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(167,243,208,.24);
+  --theme-glass-shadow: 0 1px 16px rgba(251,113,133,.08);
+  --theme-glass-hover-border: rgba(253,230,138,.36);
+  --theme-glass-hover-shadow: 0 4px 26px rgba(251,113,133,.15);
+  --theme-font-shadow: 0 0 10px rgba(251,113,133,.26);
+  --theme-ring-glow: drop-shadow(0 0 9px #A7F3D0) drop-shadow(0 0 5px #FB7185);
+  --theme-spinner-top: #FB7185;
+  --theme-spinner-right: #A7F3D0;
+  --theme-spinner-bottom: rgba(253,230,138,.3);
+  --theme-spinner-duration: .72s;
+  --theme-tooltip-border: rgba(251,113,133,.32);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 16px rgba(251,113,133,.15);
+  --theme-toast-border: rgba(251,113,133,.3);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(251,113,133,.12);
+  --theme-badge-border: rgba(251,113,133,.3);
+  --theme-badge-color: #FFC2CD;
+}
+
+/* Signature — candy swirl bobbing, opacity/transform only. */
+body[data-theme="candy"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(520px 380px at 18% 22%, rgba(167,243,208,.1), transparent 50%),
+    radial-gradient(560px 400px at 82% 75%, rgba(251,113,133,.11), transparent 52%),
+    radial-gradient(420px 320px at 60% 15%, rgba(253,230,138,.07), transparent 50%);
+  animation: candy-bob 9s ease-in-out infinite alternate;
+  opacity: .55;
+  will-change: transform, opacity;
+}
+@keyframes candy-bob {
+  from { opacity: .4; transform: translate3d(-8px, -4px, 0) scale(1); }
+  to   { opacity: .8; transform: translate3d(8px, 6px, 0) scale(1.05); }
+}
+body[data-theme="candy"]::before {
+  animation-duration: 40s !important;
+}
+

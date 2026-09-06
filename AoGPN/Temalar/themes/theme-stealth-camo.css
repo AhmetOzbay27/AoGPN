@@ -1,0 +1,53 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: stealth-camo
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="stealth-camo"] {
+  --bg: #070A05;
+  --violet: #9AA66B;
+  --cyan: #D0DF73;
+  --emerald: #61FF9A;
+  --glass: rgba(154, 166, 107, 0.04);
+  --glass-border: rgba(208, 223, 115, 0.15);
+  --violet-rgb: 154,166,107;
+  --cyan-rgb: 208,223,115;
+  --emerald-rgb: 97,255,154;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(154,166,107,.16);
+  --theme-glass-shadow: 0 1px 14px rgba(208,223,115,.05);
+  --theme-glass-hover-border: rgba(208,223,115,.36);
+  --theme-glass-hover-shadow: 0 3px 24px rgba(154,166,107,.12);
+  --theme-font-shadow: 0 0 10px rgba(208,223,115,.2);
+  --theme-ring-glow: drop-shadow(0 0 9px #D0DF73) drop-shadow(0 0 4px #9AA66B);
+  --theme-spinner-top: #D0DF73;
+  --theme-spinner-right: #9AA66B;
+  --theme-spinner-bottom: rgba(208,223,115,.2);
+  --theme-spinner-duration: .68s;
+  --theme-tooltip-border: rgba(208,223,115,.34);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 14px rgba(208,223,115,.13);
+  --theme-toast-border: rgba(208,223,115,.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 18px rgba(208,223,115,.1);
+  --theme-badge-border: rgba(208,223,115,.3);
+  --theme-badge-color: #E3EEB8;
+}
+
+/* Signature — camo blotches drifting, transform-only. */
+body[data-theme="stealth-camo"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(480px 320px at 20% 20%, rgba(208,223,115,.05), transparent 55%),
+    radial-gradient(420px 300px at 75% 40%, rgba(154,166,107,.06), transparent 55%),
+    radial-gradient(520px 340px at 50% 85%, rgba(134,239,172,.04), transparent 55%);
+  animation: camo-drift 16s ease-in-out infinite alternate;
+  opacity: .5;
+  will-change: transform, opacity;
+}
+@keyframes camo-drift {
+  from { opacity: .35; transform: translate3d(-12px, -6px, 0); }
+  to   { opacity: .8;  transform: translate3d(12px, 6px, 0); }
+}
+body[data-theme="stealth-camo"]::before {
+  animation-duration: 40s !important;
+}
+

@@ -64,6 +64,7 @@ public static class DashboardMessagePolicy
             "set_window_behavior",
             "request_monitor_snapshot",
             "list_running_processes",
+            "get_app_icons",
             "refresh_monitor",
             "set_app_route",
             "add_app",

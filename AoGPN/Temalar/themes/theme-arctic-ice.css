@@ -1,0 +1,50 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: arctic-ice
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="arctic-ice"] {
+  --bg: #04090F;
+  --violet: #BCECFF;
+  --cyan: #70A8FF;
+  --emerald: #61FF9A;
+  --glass: rgba(188, 236, 255, 0.035);
+  --glass-border: rgba(112, 168, 255, 0.15);
+  --violet-rgb: 188,236,255;
+  --cyan-rgb: 112,168,255;
+  --emerald-rgb: 97,255,154;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(188,236,255,.13);
+  --theme-glass-shadow: 0 1px 14px rgba(112,168,255,.06);
+  --theme-glass-hover-border: rgba(188,236,255,.34);
+  --theme-glass-hover-shadow: 0 3px 24px rgba(112,168,255,.12);
+  --theme-font-shadow: 0 0 10px rgba(188,236,255,.3);
+  --theme-ring-glow: drop-shadow(0 0 9px #BCECFF) drop-shadow(0 0 5px #70A8FF);
+  --theme-spinner-top: #BCECFF;
+  --theme-spinner-right: #70A8FF;
+  --theme-spinner-bottom: rgba(188,236,255,.18);
+  --theme-spinner-duration: .66s;
+  --theme-tooltip-border: rgba(188,236,255,.34);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 16px rgba(188,236,255,.16);
+  --theme-toast-border: rgba(188,236,255,.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(188,236,255,.12);
+  --theme-badge-border: rgba(188,236,255,.3);
+  --theme-badge-color: #D6F2FF;
+}
+
+/* Signature — glacial shimmer, opacity/transform only. */
+body[data-theme="arctic-ice"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(760px 500px at 30% 20%, rgba(188,236,255,.08), transparent 58%);
+  animation: arctic-shimmer 9s ease-in-out infinite alternate;
+  opacity: .5;
+  will-change: opacity, transform;
+}
+@keyframes arctic-shimmer {
+  from { opacity: .3; transform: translate3d(-8px, 0, 0); }
+  to   { opacity: .85; transform: translate3d(8px, 0, 0); }
+}
+body[data-theme="arctic-ice"]::before {
+  animation-duration: 40s !important;
+}
+

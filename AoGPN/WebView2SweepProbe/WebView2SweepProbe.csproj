@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- The WebView2 package always references its WPF control assembly too;
+         we only use WinForms, so silence the WindowsBase unification warning. -->
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+    <AssemblyName>WebView2SweepProbe</AssemblyName>
+    <RootNamespace>WebView2SweepProbe</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same SDK versions the AoGPN app pins (Directory.Packages.props). -->
+    <PackageReference Include="Microsoft.Web.WebView2" />
+  </ItemGroup>
+
+</Project>

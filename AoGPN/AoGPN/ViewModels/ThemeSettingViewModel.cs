@@ -68,6 +68,10 @@ public class ThemeSettingViewModel : MyReactiveObject
                  if (_config.UiItem.CurrentTheme != CurrentTheme)
                  {
                      _config.UiItem.CurrentTheme = CurrentTheme;
+                     // Keep the persisted dashboard theme in lockstep: the startup
+                     // push prefers DashboardTheme, so a native theme change must
+                     // update it too or the WebView2 palette would stay stale.
+                     _config.UiItem.DashboardTheme = MapThemeToWebViewId(CurrentTheme ?? string.Empty);
                      ModifyTheme();
                      _ = ConfigHandler.SaveConfig(_config);
                  }

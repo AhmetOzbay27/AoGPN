@@ -141,6 +141,16 @@ public static class ConfigHandler
             config.UiItem.CurrentTheme = nameof(ETheme.NightSky);
         }
 
+        // The dashboard theme field only exists on configs written by recent builds;
+        // when absent, the startup theme push derives it from CurrentTheme, so an
+        // explicit default here is not needed (and would shadow legacy choices).
+        if (config.UiItem.DashboardTheme is not null && config.UiItem.DashboardTheme.Length > 64)
+        {
+            // Sanitize a corrupt value instead of letting it reach the WebView2
+            // ExecuteScriptAsync string interpolation.
+            config.UiItem.DashboardTheme = null;
+        }
+
         if (config.UiItem.CurrentLanguage.IsNullOrEmpty())
         {
             config.UiItem.CurrentLanguage = Thread.CurrentThread.CurrentCulture.TwoLetterISOLanguageName.Equals("zh", StringComparison.CurrentCultureIgnoreCase)

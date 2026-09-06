@@ -2,19 +2,44 @@
    AoGPN dashboard — theme: cryo
    Part of the split stylesheet (see Temalar/dashboard.css for the load order).
    ========================================================================== */
+body[data-theme="cryo"] {
+  --bg: #060E18;
+  --violet: #2563EB;
+  --cyan: #6366F1;
+  --emerald: #0D9488;
+  --glass: rgba(37, 99, 235, 0.035);
+  --glass-border: rgba(37, 99, 235, 0.10);
+  --violet-rgb: 37,99,235;
+  --cyan-rgb: 99,102,241;
+  --emerald-rgb: 13,148,136;
 
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(37, 99, 235, 0.12);
+  --theme-glass-shadow: 0 1px 16px rgba(99, 102, 241, 0.06);
+  --theme-glass-hover-border: rgba(99, 102, 241, 0.3);
+  --theme-glass-hover-shadow: 0 4px 26px rgba(37, 99, 235, 0.13);
+  --theme-font-shadow: 0 0 12px rgba(99, 102, 241, 0.26);
+  --theme-ring-glow: drop-shadow(0 0 9px #2563EB) drop-shadow(0 0 5px #6366F1);
+  --theme-spinner-top: #2563EB;
+  --theme-spinner-right: #6366F1;
+  --theme-spinner-bottom: rgba(37, 99, 235, 0.2);
+  --theme-spinner-duration: .66s;
+  --theme-tooltip-border: rgba(99, 102, 241, 0.34);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(37, 99, 235, 0.16);
+  --theme-toast-border: rgba(99, 102, 241, 0.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(37, 99, 235, 0.12);
+  --theme-badge-border: rgba(99, 102, 241, 0.3);
+  --theme-badge-color: #A5B4FC;
+}
 
-  body[data-theme="cryo"] {
-    --bg: #060E18;
-    --violet: #2563EB;
-    --cyan: #6366F1;
-    --emerald: #0D9488;
-    --glass: rgba(37, 99, 235, 0.035);
-    --glass-border: rgba(37, 99, 235, 0.10);
-  }
-  body[data-theme="cryo"]::after {
-    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background: radial-gradient(120% 90% at 50% 0%, transparent 52%, var(--cyan-20) 100%);
-    animation: frost-shimmer 7s ease-in-out infinite alternate;
-  }
-  @keyframes frost-shimmer { from { opacity: .45; } to { opacity: 1; } }
+/* Signature — frost shimmer. */
+body[data-theme="cryo"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 0%, transparent 52%, var(--cyan-20) 100%);
+  animation: frost-shimmer 7s ease-in-out infinite alternate;
+}
+@keyframes frost-shimmer { from { opacity: .45; } to { opacity: 1; } }
+body[data-theme="cryo"]::before {
+  animation-duration: 40s !important;
+}
+

@@ -594,18 +594,21 @@
         </Grid>
         </materialDesign:DialogHost>
         <!-- WebView2 is deliberately the only visible child and fills the client area.
-             It starts Hidden: the window is shown at Opacity 0 during startup, and WPF
-             window opacity does not reach a native child HWND (WebView2 airspace), so
-             the browser surface would otherwise paint its empty dark frame over the
-             desktop for the whole boot. Hidden keeps the control laid out (WebView2 can
-             still initialize and load the dashboard); RevealStartupWindow makes it
-             visible once the dashboard has rendered. -->
+             It stays VISIBLE from the very first frame: the boot window is parked
+             OFF-SCREEN (see App.OnStartup), so the browser surface never paints on the
+             desktop — but keeping the control visible (never Hidden) means Chromium
+             never treats the dashboard as a background page. The page loads at full
+             speed and paints real frames while parked, so RevealStartupWindow moves an
+             ALREADY-PAINTED window on screen: no empty dark frame, no waiting on the
+             renderer to wake up. (A Hidden controller throttles the load from ~0.4 s to
+             ~2 s+; the anti-throttling browser flags in DashboardHost are the second
+             half of that guarantee.) -->
         <wv2:WebView2
             x:Name="WebView"
             Panel.ZIndex="10"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch"
-            Visibility="Hidden"
+            Visibility="Visible"
             Focusable="True" />
     </Grid>
 </base:WindowBase>

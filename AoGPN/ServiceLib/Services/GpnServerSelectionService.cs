@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ServiceLib.Services;
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -35,10 +37,54 @@ public sealed record GpnServerProfile(
     int PersistentKeepalive = 25,
     bool IsEnabled = true)
 {
+    /// <summary>
+    /// Resmi WireGuard istemcisinin (WireGuard for Windows) kabul ettiği ASCII
+    /// güvenli tünel adı. Windows istemcisi tünel adlarını
+    /// ^[a-zA-Z0-9_=+.-]{1,32}$ ile sınırlar (upstream conf/name.go) — Türkçe
+    /// noktalı "İ" (U+0130) içeren "İtalya" adı içe aktarılamaz; bu adla
+    /// kalmış bozuk/kayıp yapılandırma, tüneli açarken "The system cannot find
+    /// the file specified" hatası verir. Ayrıca Windows istemcisi tünel adını
+    /// .conf DOSYA ADINDAN alır; "# Name =" yorumu yalnızca wg-quick (Linux)
+    /// kuralıdır ve Windows'ta okunmaz — dosya ASCII adla kaydedilmelidir
+    /// (örn. Italya.conf).
+    /// </summary>
+    public string ConfTunnelName => ToAsciiTunnelName(Name);
+
+    /// <summary>
+    /// Görünen adı resmi istemcinin ad kuralına indirger: İ→I, ı→i, diğer
+    /// ASCII-dışı karakterler '_' olur; 32 karaktere kırpılır.
+    /// </summary>
+    private static string ToAsciiTunnelName(string name)
+    {
+        var sb = new StringBuilder();
+        foreach (var c in name ?? string.Empty)
+        {
+            if (sb.Length >= 32)
+            {
+                break;
+            }
+            sb.Append(c switch
+            {
+                '\u0130' => 'I', // İ (noktalı büyük i)
+                '\u0131' => 'i', // ı (noktasız küçük i)
+                _ when IsAllowedTunnelNameChar(c) => c,
+                _ => '_',
+            });
+        }
+        return sb.Length == 0 ? "tunnel" : sb.ToString();
+    }
+
+    private static bool IsAllowedTunnelNameChar(char c)
+        => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+           || c is '_' or '=' or '+' or '.' or '-';
+
     /// <summary>WireGuard .conf formatı (WireGuardTunnel.dll / wg-quick için).</summary>
     public string ToConf() => string.Join('\n',
         "[Interface]",
-        $"# Name = {Name}",
+        // Tünel adı ASCII güvenli yazılır — resmi Windows istemcisi Unicode
+        // adları reddeder (TunnelNameIsValid) ve adı dosyadan okur; "# Name ="
+        // yalnızca wg-quick/Linux tarafının görünen adına yarar.
+        $"# Name = {ConfTunnelName}",
         $"Address = {ClientAddress}",
         $"PrivateKey = {ClientPrivateKey}",
         $"MTU = {Mtu}",

@@ -359,11 +359,21 @@ public class ManualRouteSetting
     /// <summary>Full executable path (apps only), used for the icon.</summary>
     public string ExePath { get; set; } = "";
 
-    /// <summary>vpn | proxy | vpn+proxy | direct | block</summary>
+    /// <summary>vpn | proxy | vpn+proxy | direct | block | warp</summary>
     public string Action { get; set; } = "proxy";
 
     /// <summary>Connection option suggested when the app was added (games → "vpn"). Empty when none.</summary>
     public string SuggestedAction { get; set; } = "";
+
+    /// <summary>
+    /// WARP egress düğümü: bu satırın "warp" rotasının hangi mevcut düğüm
+    /// (ProfileItem.IndexId) üzerinden çıkacağını tutar. Boş/null → varsayılan
+    /// WARP egress (aktif düğümün WARP SOCKS5 zinciri / legacy davranış). Dolu
+    /// olduğunda mihomo config üreticisi o düğüm için ayrı bir egress outbound'u
+    /// üretir ve bu satırın kuralı ona işaret eder (eski Ayarlar → GPN VLESS
+    /// bypass düğümünün yerini alır). Yalnızca Action == "warp" iken anlamlıdır.
+    /// </summary>
+    public string? WarpNodeIndexId { get; set; }
 }
 
 [Serializable]
@@ -375,6 +385,15 @@ public class UIItem
     public EGirdOrientation MainGirdOrientation { get; set; } = EGirdOrientation.Tab;
     public string? ColorPrimaryName { get; set; }
     public string? CurrentTheme { get; set; }
+
+    /// <summary>
+    /// Raw dashboard (WebView2) theme id persisted from the Appearance deck, e.g.
+    /// "aurora" / "candy" / "neon-cyber". Unlike <see cref="CurrentTheme"/>
+    /// (an <see cref="ETheme"/> value), this stores every theme the dashboard can
+    /// apply, including the ones with no native WPF palette. Null/empty on old
+    /// configs — the startup path then derives it from <see cref="CurrentTheme"/>.
+    /// </summary>
+    public string? DashboardTheme { get; set; }
     public string CurrentLanguage { get; set; }
     public string CurrentFontFamily { get; set; }
     public int CurrentFontSize { get; set; }

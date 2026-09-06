@@ -237,6 +237,8 @@
   "route.vpn": "VPN",
   "route.warp": "WARP",
   "warp.fallbackNotice": "مسیر WARP به گره WireGuard نیاز دارد — اتصال فعال WireGuard نیست، برنامه‌های WARP از طریق VPN هدایت می‌شوند.",
+  "warp.nodeDefault": "پیش‌فرض (گره فعال)",
+  "warp.nodePickerHint": "ترافیک WARP این برنامه از گره انتخابی خارج می‌شود — هر گره‌ای از فهرست خود را انتخاب کنید (ایتالیا، آلمان، آفریقای جنوبی…).",
   "settings.language": "زبان",
   "settings.save": "ذخیره تنظیمات",
   "settings.stack": "پشته",

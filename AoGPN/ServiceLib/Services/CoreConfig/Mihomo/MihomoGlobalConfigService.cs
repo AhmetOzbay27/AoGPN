@@ -120,9 +120,11 @@ public static class MihomoGlobalConfigService
     /// ProfileItem'ı tek bir mihomo proxy bloğuna çevirir. Desteklenen tipler
     /// <see cref="Global.MihomoSupportConfigType"/> ile aynıdır; desteklenmeyen
     /// tip (ör. Anytls/Naive — mihomo'da yok) geçersiz type ile sonuçlanmaz,
-    /// çağıran zaten MihomoSupportConfigType ile filtrelemiştir.
+    /// çağıran zaten MihomoSupportConfigType ile filtrelemiştir. <paramref name="name"/>
+    /// verilirse proxy bloğu o adla yazılır (per-app WARP egress düğümleri gibi
+    /// adlandırılmış ikincil proxy'ler); boşsa <see cref="GlobalProxyName"/>.
     /// </summary>
-    private static Dictionary<string, object?> BuildProxy(ProfileItem node)
+    internal static Dictionary<string, object?> BuildProxy(ProfileItem node, string? name = null)
     {
         var extra = node.GetProtocolExtra();
         var transport = node.GetTransportExtra();
@@ -133,7 +135,7 @@ public static class MihomoGlobalConfigService
 
         var proxy = new Dictionary<string, object?>
         {
-            ["name"] = GlobalProxyName,
+            ["name"] = name.IsNotEmpty() ? name! : GlobalProxyName,
             ["server"] = node.Address,
             ["port"] = node.Port,
         };
@@ -142,7 +144,7 @@ public static class MihomoGlobalConfigService
         {
             case EConfigType.VLESS:
                 proxy["type"] = "vless";
-                proxy["uuid"] = node.Id;
+                proxy["uuid"] = node.Password;
                 proxy["udp"] = true;
                 proxy["network"] = ResolveMihomoNetwork(node.Network, transport);
                 proxy["flow"] = (extra.Flow ?? string.Empty).IsNotEmpty() ? extra.Flow : null;
@@ -173,7 +175,7 @@ public static class MihomoGlobalConfigService
 
             case EConfigType.VMess:
                 proxy["type"] = "vmess";
-                proxy["uuid"] = node.Id;
+                proxy["uuid"] = node.Password;
                 proxy["alterId"] = int.TryParse(extra.AlterId, out var alterId) ? alterId : 0;
                 proxy["cipher"] = extra.VmessSecurity ?? "auto";
                 proxy["udp"] = true;
@@ -191,7 +193,7 @@ public static class MihomoGlobalConfigService
 
             case EConfigType.Shadowsocks:
                 proxy["type"] = "ss";
-                proxy["cipher"] = extra.SsMethod ?? node.Security ?? "aes-256-gcm";
+                proxy["cipher"] = extra.SsMethod ?? "aes-256-gcm";
                 proxy["password"] = node.Password;
                 proxy["udp"] = true;
                 break;
@@ -226,7 +228,7 @@ public static class MihomoGlobalConfigService
 
             case EConfigType.TUIC:
                 proxy["type"] = "tuic";
-                proxy["uuid"] = node.Id;
+                proxy["uuid"] = node.Username;
                 proxy["password"] = node.Password;
                 proxy["congestion-controller"] = extra.CongestionControl ?? "bbr";
                 proxy["udp-relay-mode"] = "native";
@@ -260,7 +262,7 @@ public static class MihomoGlobalConfigService
                 // çağıran MihomoSupportConfigType filtresinden geçemeyen tipleri
                 // zaten buraya göndermez.
                 proxy["type"] = "vless";
-                proxy["uuid"] = node.Id;
+                proxy["uuid"] = node.Password;
                 proxy["network"] = "tcp";
                 break;
         }

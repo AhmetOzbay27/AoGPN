@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AO GPN — v2 Arayüz Prototipi</title>
+
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+  AO GPN v2 — Tek dosya arayüz prototipi (Tailwind CDN + Vanilla JS)
+  ═══════════════════════════════════════════════════════════════════════════
+
+  WebView2 GPU PERFORMANS SÖZLEŞMESİ (bu dosyada HARFİYEN uygulandı):
+  ────────────────────────────────────────────────────────────────────────────
+  [✓] TÜM @keyframes yalnızca transform (translate3d/scale/rotate) + opacity
+      anime eder. background-position / box-shadow / filter animasyonu YOK.
+  [✓] backdrop-filter: blur HİÇBİR YERDE kullanılmadı — derinlik yarı saydam
+      düz renkler (bg-slate-900/80) + statik border ile verildi.
+  [✓] Sürekli hareket eden katmanlarda will-change: transform, opacity var.
+  [✓] Alt-Tab / pencere odağı kaybı: window.blur + visibilitychange ile
+      <body> 'app-paused' class'ı alır → tüm animasyonlar
+      animation-play-state: paused ile ANINDA donar.
+  [✓] requestAnimationFrame döngüsü YOK — canlı veriler setInterval ile.
+  [✓] Auroraya filter: blur uygulanmadı; yumuşaklık radial-gradient geçişleri
+      ile elde edildi (hareket eden blur katmanı GPU maliyetidir).
+  [✓] "Görsel Efekt" ayarı: fx-full / fx-balanced / fx-reduced seviyeleri
+      (sırasıyla: tam / ortam animasyonları donuk / her şey donuk).
+
+  NOT: Bu bir TASARIM PROTOTİPİDİR. Tailwind Play CDN + Google Fonts internet
+  ister; üretime alınırken Tailwind derlenip fontlar pakete gömülmelidir
+  (mevcut gömülü panel tek dosya + offline çalışır).
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          display: ['Outfit', 'system-ui', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        },
+        colors: {
+          base: '#060A13',
+          panel: '#0B1220',
+          gpncyan: '#22D3EE',
+          gpnviolet: '#8B5CF6',
+          gpnemerald: '#34D399',
+          gpnamber: '#FBBF24',
+        },
+      },
+    },
+  };
+</script>
+<style>
+  /* ────────────────────────────────────────────────────────────────────────
+     TEMA DEĞİŞKENLERİ
+     ──────────────────────────────────────────────────────────────────────── */
+  :root {
+    --bg: #060A13;
+    --panel: #0B1220;
+    --line: rgba(148, 163, 184, .14);
+    --text: #E2E8F0;
+    --dim: #8A94A6;
+    --cyan: #22D3EE;
+    --violet: #8B5CF6;
+    --emerald: #34D399;
+    --amber: #FBBF24;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Outfit', system-ui, sans-serif;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection { background: rgba(139, 92, 246, .35); }
+
+  /* İnce, koyu kaydırma çubuğu (WebView2 Chromium) */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, .18); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, .3); }
+
+  /* Metrik rakamlarında titreme yok */
+  .nums { font-variant-numeric: tabular-nums; }
+
+  :focus-visible { outline: 2px solid rgba(34, 211, 238, .6); outline-offset: 2px; border-radius: 6px; }
+
+  /* ────────────────────────────────────────────────────────────────────────
+     KEYFRAMES — SÖZLEŞME: yalnızca transform + opacity
+     ──────────────────────────────────────────────────────────────────────── */
+
+  /* Aurora katmanları: yumuşak radial-gradient bloblar, yavaş sürüklenme.
+     Blur FİLTRESİ YOK — yumuşaklık gradient geçişlerinden gelir. */
+  @keyframes fx-drift-a {
+    0%   { transform: translate3d(-7%, -5%, 0) scale(1);    opacity: .85; }
+    50%  { transform: translate3d(6%,  4%, 0) scale(1.14);  opacity: 1; }
+    100% { transform: translate3d(-2%, 6%, 0) scale(.94);   opacity: .8; }
+  }
+  @keyframes fx-drift-b {
+    0%   { transform: translate3d(6%, 5%, 0) scale(1);      opacity: .8; }
+    50%  { transform: translate3d(-7%, -3%, 0) scale(1.1);  opacity: 1; }
+    100% { transform: translate3d(3%, -6%, 0) scale(.92);   opacity: .75; }
+  }
+  @keyframes fx-drift-c {
+    0%   { transform: translate3d(0%, 4%, 0) scale(1);      opacity: .55; }
+    50%  { transform: translate3d(-5%, -5%, 0) scale(1.2);  opacity: .8; }
+    100% { transform: translate3d(4%, 2%, 0) scale(.95);    opacity: .5; }
+  }
+
+  /* Dönen halkalar (BOOST butonu): maskeli konik gradient, transform-only */
+  @keyframes fx-spin { to { transform: rotate(360deg); } }
+  @keyframes fx-spin-rev { to { transform: rotate(-360deg); } }
+
+  /* Nefes alan parlama: opacity + hafif scale */
+  @keyframes fx-breathe {
+    0%, 100% { opacity: .4;  transform: scale(.985); }
+    50%      { opacity: 1;   transform: scale(1.015); }
+  }
+
+  /* Buton yüzeyinde gezinen ışık şeridi */
+  @keyframes fx-sheen {
+    0%, 55% { transform: translate3d(-140%, -50%, 0) skewX(-18deg); opacity: 0; }
+    75%, 100% { transform: translate3d(340%, -50%, 0) skewX(-18deg); opacity: .32; }
+  }
+
+  /* Durum noktası nabzı */
+  @keyframes fx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+  /* ────────────────────────────────────────────────────────────────────────
+     ANİMASYON SINIFLARI (will-change dahil)
+     ──────────────────────────────────────────────────────────────────────── */
+  .fx-ambient { will-change: transform, opacity; }
+  .fx-ambient.a { animation: fx-drift-a 26s ease-in-out infinite alternate; }
+  .fx-ambient.b { animation: fx-drift-b 32s ease-in-out infinite alternate; }
+  .fx-ambient.c { animation: fx-drift-c 40s ease-in-out infinite alternate; }
+
+  .fx-spin    { will-change: transform; animation: fx-spin var(--spin-dur, 12s) linear infinite; }
+  .fx-spin-rev{ will-change: transform; animation: fx-spin-rev var(--spin-rev-dur, 18s) linear infinite; }
+
+  .fx-breathe { will-change: transform, opacity; animation: fx-breathe 3.8s ease-in-out infinite; }
+  .fx-sheen   { will-change: transform, opacity; animation: fx-sheen 7s ease-in-out infinite; }
+  .fx-pulse   { will-change: opacity; animation: fx-pulse 1.6s ease-in-out infinite; }
+
+  /* BOOST butonu duruma göre dönüş sürelerini değiştirir:
+     idle: dönmez (statik, 0 GPU) · connecting: hızlı spin · connected: radar */
+  .boost-idle        { --spin-dur: 0s; --spin-rev-dur: 0s; }
+  .boost-connecting  { --spin-dur: .9s; --spin-rev-dur: 1.7s; }
+  .boost-connected   { --spin-dur: 12s; --spin-rev-dur: 19s; }
+
+  /* ────────────────────────────────────────────────────────────────────────
+     PERFORMANS KILL SWITCH'LERİ
+     ──────────────────────────────────────────────────────────────────────── */
+
+  /* 1) Alt-Tab / odağı kaybetme: tüm animasyonlar anında donar */
+  body.app-paused *,
+  body.app-paused *::before,
+  body.app-paused *::after {
+    animation-play-state: paused !important;
+  }
+
+  /* 2) Görsel Efekt seviyeleri */
+  body.fx-balanced .fx-ambient { animation: none !important; }           /* ortam akışı durur */
+  body.fx-reduced *,
+  body.fx-reduced *::before,
+  body.fx-reduced *::after { animation: none !important; transition: none !important; }
+  body.fx-reduced .fx-glow { display: none !important; }                 /* parlama katmanları kalkar */
+
+  /* 3) Windows "hareketi azalt" tercihi */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+
+  /* ────────────────────────────────────────────────────────────────────────
+     GÖRÜNÜM GEÇİŞLERİ (view switching — opacity/transform only)
+     ──────────────────────────────────────────────────────────────────────── */
+  .view {
+    position: absolute; inset: 0;
+    opacity: 0; transform: translate3d(0, 10px, 0);
+    pointer-events: none;
+    transition: opacity .22s ease, transform .22s ease;
+  }
+  .view.active { opacity: 1; transform: translate3d(0, 0, 0); pointer-events: auto; }
+
+  /* ────────────────────────────────────────────────────────────────────────
+     BOOST BUTONU KATMANLARI
+     ──────────────────────────────────────────────────────────────────────── */
+  .boost-ring {
+    position: absolute; inset: -14px; border-radius: 50%;
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+            mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+    background: conic-gradient(from 0deg, transparent 0%, var(--ring-a, rgba(34,211,238,.9)) 22%, var(--ring-b, rgba(139,92,246,.9)) 46%, transparent 62%);
+  }
+  .boost-dots {
+    position: absolute; inset: -30px; border-radius: 50%;
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
+            mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
+    background: repeating-conic-gradient(from 0deg, rgba(148,163,184,.5) 0deg 4deg, transparent 4deg 26deg);
+    opacity: .55;
+  }
+
+  /* Geçişler (hover vb.) — kısa, maliyetsiz */
+  .t-card { transition: transform .18s ease, border-color .25s ease, opacity .2s ease; }
+  .t-btn  { transition: transform .15s ease, border-color .2s ease, opacity .2s ease; }
+</style>
+</head>
+
+<body class="font-display app-idle fx-full" data-mode="gpn">
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       AURORA ARKA PLAN (3 gradient blob — transform/opacity only, will-change)
+       ══════════════════════════════════════════════════════════════════════ -->
+  <div class="pointer-events-none fixed inset-0 overflow-hidden" aria-hidden="true">
+    <div class="fx-ambient a absolute -top-[22%] -left-[14%] h-[46rem] w-[46rem] rounded-full"
+         style="background: radial-gradient(circle, rgba(34,211,238,.16), transparent 62%);"></div>
+    <div class="fx-ambient b absolute -bottom-[26%] -right-[12%] h-[42rem] w-[42rem] rounded-full"
+         style="background: radial-gradient(circle, rgba(139,92,246,.18), transparent 62%);"></div>
+    <div class="fx-ambient c absolute top-[30%] right-[24%] h-[30rem] w-[30rem] rounded-full"
+         style="background: radial-gradient(circle, rgba(16,185,129,.09), transparent 60%);"></div>
+    <!-- Statik ince ızgara + vinyet (animasyonsuz, sabit katman) -->
+    <div class="absolute inset-0 opacity-[.035]"
+         style="background-image: linear-gradient(rgba(226,232,240,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(226,232,240,.6) 1px, transparent 1px); background-size: 56px 56px;"></div>
+    <div class="absolute inset-0" style="background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(3,6,13,.75) 100%);"></div>
+  </div>
+
+  <!-- SVG ikon kütüphanesi (Lucide tabanlı, stroke) -->
+  <svg width="0" height="0" class="absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 22V12h6v10"/></symbol>
+      <symbol id="i-gamepad" viewBox="0 0 24 24"><path d="M6 12h4M8 10v4"/><path d="M15.5 13h.01M18 10.5h.01"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 15h4.344a2 2 0 0 1 1.414.586L17 17c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5Z"/></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+      <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3"/><circle cx="12" cy="4" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="14" cy="20" r="2"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+      <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+      <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></symbol>
+      <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z"/></symbol>
+      <symbol id="i-boltlogo" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" fill="currentColor" stroke="none"/></symbol>
+
+      <!-- ══════════ OYUN SANATLARI (48×48 rozetler — statik, animasyonsuz) ══════════ -->
+      <symbol id="art-cs2" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <circle cx="24" cy="24" r="16.5"/>
+          <circle cx="24" cy="24" r="8.5" stroke-width="1.6"/>
+          <path d="M24 2.5v13M24 32.5v13M2.5 24h13M32.5 24h13"/>
+          <path d="m11.5 11.5-3-3M36.5 36.5l3 3" stroke-width="2.6"/>
+        </g>
+        <circle cx="24" cy="24" r="2.6" fill="currentColor"/>
+      </symbol>
+
+      <symbol id="art-lol" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round">
+          <path d="M24 4 40 14v20L24 44 8 34V14Z"/>
+          <path d="M24 4v40M8 14l32 20M40 14 8 34" stroke-width="1.5" opacity=".7"/>
+        </g>
+        <circle cx="24" cy="24" r="2.8" fill="currentColor"/>
+      </symbol>
+
+      <symbol id="art-valorant" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round">
+          <path d="M24 3.5 44.5 24 24 44.5 3.5 24Z"/>
+          <path d="m14.5 16.5 9.5 12.5 9.5-12.5" stroke-width="3.4" stroke-linecap="round"/>
+        </g>
+      </symbol>
+
+      <symbol id="art-tarkov" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round">
+          <path d="M24 4.5 40 14.5v19L24 43.5 8 33.5v-19Z"/>
+          <path d="M16.5 21.5h15" stroke-width="3.4" stroke-linecap="round"/>
+          <path d="M24 4.5v39" opacity=".35"/>
+        </g>
+        <circle cx="24" cy="11.5" r="1.7" fill="currentColor"/>
+        <circle cx="12.5" cy="19" r="1.7" fill="currentColor"/>
+        <circle cx="35.5" cy="19" r="1.7" fill="currentColor"/>
+      </symbol>
+
+      <symbol id="art-fortnite" viewBox="0 0 48 48">
+        <path d="M6 14.5C10 7 38 7 42 14.5 30 20 18 20 6 14.5Z" fill="currentColor" opacity=".85"/>
+        <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M24 11.5v23M11 15.5l9.5 20M37 15.5 27.5 35.5" opacity=".8"/>
+          <path d="M24 34.5 14 42M24 34.5l10 7.5" opacity=".55"/>
+        </g>
+      </symbol>
+
+      <symbol id="art-pubg" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+          <circle cx="19.5" cy="19.5" r="13.5"/>
+          <circle cx="19.5" cy="19.5" r="7" stroke-width="1.6" opacity=".6"/>
+          <path d="M30 30.5 40.5 41" stroke-width="4.4"/>
+          <circle cx="31.5" cy="32" r="1.6" fill="currentColor" stroke="none" opacity=".8"/>
+        </g>
+      </symbol>
+
+      <symbol id="art-warzone" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M24 6.5c7.7 0 13.5 6 13.5 13.7 0 4-1.8 6.8-3.6 9.3-1.6 2.2-2.4 4.6-2.4 7V41h-15v-4.5c0-2.4-.8-4.8-2.4-7-1.8-2.5-3.6-5.3-3.6-9.3C10.5 12.5 16.3 6.5 24 6.5Z"/>
+        </g>
+        <circle cx="18.4" cy="22" r="3.2" fill="currentColor"/>
+        <circle cx="29.6" cy="22" r="3.2" fill="currentColor"/>
+        <path d="m24 26.5 2.6 3.2h-5.2Z" fill="currentColor"/>
+        <path d="M16 33.5h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".85"/>
+      </symbol>
+
+      <symbol id="art-dota2" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round">
+          <path d="M24 4.5 41 12.5V26c0 9.5-7 15-17 18.5C14 41 7 35.5 7 26V12.5Z"/>
+        </g>
+        <path d="M24 14.5 35 20v5.5c0 5-4.6 8.3-11 10.8-5.4-2.5-11-5.8-11-10.8V20Z" fill="currentColor" opacity=".5"/>
+      </symbol>
+
+      <symbol id="art-apex" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round">
+          <path d="M24 5 42 41H30.5L24 25 17.5 41H6Z"/>
+          <path d="M24 25l5.5 9.5h-11Z" fill="currentColor"/>
+          <path d="M8 44h32" stroke-width="1.6" opacity=".55"/>
+        </g>
+      </symbol>
+
+      <symbol id="art-r6" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <circle cx="24" cy="24" r="17.5"/>
+          <circle cx="24" cy="24" r="9.5" stroke-width="1.5" opacity=".7"/>
+          <path d="m12.5 15 11 19" opacity=".95"/>
+          <path d="m19 10.5 11 19" opacity=".55"/>
+          <path d="M25.5 6l11 19" opacity=".3"/>
+        </g>
+      </symbol>
+
+      <symbol id="art-rl" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.2">
+          <circle cx="27" cy="24" r="13.5"/>
+          <path d="M27 10.5v27" stroke-width="1.6" opacity=".7"/>
+        </g>
+        <path d="M9 19c-4.5 2-4.5 8 0 10-2.5-2.5-2.5-7.5 0-10Z" fill="currentColor" opacity=".9"/>
+        <path d="M5 23c-2.5 1.2-2.5 4.8 0 6-1.4-1.4-1.4-4.6 0-6Z" fill="currentColor" opacity=".5"/>
+      </symbol>
+
+      <symbol id="art-ow2" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+          <circle cx="24" cy="24" r="16"/>
+          <path d="M10 34.5 38 13.5" stroke-width="3.4"/>
+        </g>
+      </symbol>
+
+      <symbol id="art-rust" viewBox="0 0 48 48">
+        <circle cx="24" cy="24" r="19" fill="none" stroke="currentColor" stroke-width="2.2"/>
+        <g fill="currentColor" opacity=".9">
+          <circle cx="24" cy="15.5" r="6"/>
+          <circle cx="16.7" cy="26" r="6"/>
+          <circle cx="31.3" cy="26" r="6"/>
+        </g>
+        <circle cx="24" cy="24" r="3.4" fill="currentColor"/>
+      </symbol>
+
+      <symbol id="art-gta5" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 11.5 24 24 38 11.5"/>
+        </g>
+        <path d="M24 27.5 25.9 32l4.6.4-3.5 3 .9 4.6L24 37.2l-3.9 2.8.9-4.6-3.5-3 4.6-.4Z" fill="currentColor"/>
+      </symbol>
+
+      <symbol id="art-minecraft" viewBox="0 0 48 48">
+        <rect x="9.5" y="8" width="29" height="32" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.4"/>
+        <g fill="currentColor">
+          <rect x="14" y="14" width="6.5" height="6.5"/>
+          <rect x="27.5" y="14" width="6.5" height="6.5"/>
+          <rect x="20.75" y="22" width="6.5" height="6.5"/>
+          <rect x="14" y="30.5" width="4.5" height="4.5"/>
+          <rect x="29.5" y="30.5" width="4.5" height="4.5"/>
+          <rect x="20.75" y="30.5" width="6.5" height="6.5"/>
+        </g>
+      </symbol>
+
+      <symbol id="art-other" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 15.5h20l3.5 5.5h3.5a3.5 3.5 0 0 1 0 7h-4.5L33 22.5H15l-3.5 5.5H7a3.5 3.5 0 0 1 0-7h3.5Z"/>
+          <path d="M17.5 20.5v3M16 22h3"/>
+        </g>
+        <circle cx="32.5" cy="21" r="1.7" fill="currentColor"/>
+        <circle cx="36.5" cy="24" r="1.7" fill="currentColor"/>
+        <path d="M36 8.5 37 11l2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1Z" fill="currentColor"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="relative flex h-full">
+
+    <!-- ════════════════════════════════════════════════════════════════════
+         SOL MENÜ
+         ════════════════════════════════════════════════════════════════════ -->
+    <aside class="hidden w-60 shrink-0 flex-col border-r md:flex" style="border-color: var(--line); background: rgba(11,18,32,.72);">
+
+      <!-- Logo -->
+      <div class="flex items-center gap-3 px-5 pt-6 pb-5">
+        <div class="relative flex h-10 w-10 items-center justify-center rounded-xl"
+             style="background: linear-gradient(140deg, rgba(34,211,238,.9), rgba(139,92,246,.9)); box-shadow: 0 0 22px rgba(139,92,246,.35);">
+          <svg class="h-5 w-5 text-white" aria-hidden="true"><use href="#i-boltlogo"/></svg>
+        </div>
+        <div class="leading-tight">
+          <div class="text-[15px] font-800 font-bold tracking-[.08em] text-white">AO <span style="background: linear-gradient(90deg, var(--cyan), var(--violet)); -webkit-background-clip: text; background-clip: text; color: transparent;">GPN</span></div>
+          <div class="whitespace-nowrap text-[10px] font-medium tracking-[.18em] text-slate-500">GAME BOOST NETWORK</div>
+        </div>
+      </div>
+
+      <div class="mx-5 h-px" style="background: var(--line);"></div>
+
+      <!-- Sekmeler -->
+      <nav class="mt-5 flex flex-col gap-1 px-3" id="nav">
+        <button class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13.5px] font-medium text-slate-400 t-btn" data-view="dashboard" aria-current="page">
+          <svg class="h-[18px] w-[18px]" aria-hidden="true"><use href="#i-home"/></svg>
+          Ana Sayfa
+          <span class="nav-dot ml-auto h-1.5 w-1.5 rounded-full" style="background: var(--cyan); box-shadow: 0 0 8px var(--cyan);"></span>
+        </button>
+        <button class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13.5px] font-medium text-slate-400 t-btn" data-view="games">
+          <svg class="h-[18px] w-[18px]" aria-hidden="true"><use href="#i-gamepad"/></svg>
+          Oyunlar
+          <span class="ml-auto rounded-full px-2 py-0.5 text-[9.5px] font-bold tracking-wider" style="background: rgba(34,211,238,.12); color: var(--cyan);">BOOST</span>
+        </button>
+        <button class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13.5px] font-medium text-slate-400 t-btn" data-view="nodes">
+          <svg class="h-[18px] w-[18px]" aria-hidden="true"><use href="#i-server"/></svg>
+          Sunucular
+        </button>
+        <button class="nav-item flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13.5px] font-medium text-slate-400 t-btn" data-view="settings">
+          <svg class="h-[18px] w-[18px]" aria-hidden="true"><use href="#i-sliders"/></svg>
+          Ayarlar
+        </button>
+      </nav>
+
+      <div class="flex-1"></div>
+
+      <!-- Alt: mini bağlantı durumu -->
+      <div class="mx-4 mb-5 rounded-xl border p-3.5" style="border-color: var(--line); background: rgba(255,255,255,.03);">
+        <div class="flex items-center gap-2.5">
+          <span class="fx-pulse h-2 w-2 rounded-full" id="sideStateDot" style="background: var(--cyan); box-shadow: 0 0 8px var(--cyan);"></span>
+          <div class="leading-tight">
+            <div class="text-[12px] font-semibold text-slate-200" id="sideStateText">Bağlı değil</div>
+            <div class="text-[10px] text-slate-500">mihomo çekirdeği · v2.0.0</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ════════════════════════════════════════════════════════════════════
+         ANA İÇERİK
+         ════════════════════════════════════════════════════════════════════ -->
+    <main class="relative flex-1 overflow-hidden">
+
+      <!-- ──────────────── ANA SAYFA ──────────────── -->
+      <section class="view active overflow-y-auto" data-view="dashboard">
+        <div class="flex h-full min-h-[560px] flex-col p-6 lg:p-8">
+
+          <!-- Üst şerit: Mod seçimi + durum -->
+          <div class="flex flex-wrap items-center justify-between gap-4">
+            <div class="inline-flex items-center rounded-full border p-1" style="border-color: var(--line); background: rgba(11,18,32,.8);" role="group" aria-label="Mod seçimi">
+              <button id="modeGpn" class="mode-pill flex items-center gap-2 rounded-full px-4 py-2 text-[12.5px] font-bold tracking-wide t-btn" aria-pressed="true">
+                <svg class="h-4 w-4" aria-hidden="true"><use href="#i-gamepad"/></svg>
+                Game Boost <span class="hidden text-[10px] font-semibold opacity-70 sm:inline">· GPN</span>
+              </button>
+              <button id="modeVpn" class="mode-pill flex items-center gap-2 rounded-full px-4 py-2 text-[12.5px] font-bold tracking-wide t-btn" aria-pressed="false">
+                <svg class="h-4 w-4" aria-hidden="true"><use href="#i-globe"/></svg>
+                Global VPN
+              </button>
+            </div>
+
+            <div class="flex items-center gap-2 rounded-full border px-3.5 py-1.5" style="border-color: var(--line); background: rgba(11,18,32,.8);">
+              <span class="fx-pulse h-1.5 w-1.5 rounded-full" id="topStateDot" style="background: var(--cyan); box-shadow: 0 0 6px var(--cyan);"></span>
+              <span class="text-[11px] font-semibold tracking-wide text-slate-400" id="topStateText">HAZIR</span>
+            </div>
+          </div>
+
+          <!-- Orta alan: kartlar + BOOST butonu -->
+          <div class="grid flex-1 grid-cols-1 items-center gap-5 py-5 md:grid-cols-[1fr_auto_1fr] md:py-4">
+
+            <!-- SOL: Seçili Oyun / Global VPN kartı -->
+            <div class="order-2 md:order-1">
+              <div id="gameCard" class="t-card rounded-2xl border p-5" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+                <div class="flex items-center justify-between">
+                  <span class="text-[10px] font-bold tracking-[.2em] text-slate-500">SEÇİLİ OYUN</span>
+                  <svg class="h-4 w-4" style="color: var(--cyan);" aria-hidden="true"><use href="#i-gamepad"/></svg>
+                </div>
+                <div class="mt-4 flex items-center gap-4">
+                  <div id="gameCover" class="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl text-white"
+                       style="background: linear-gradient(135deg, #F97316, #7C2D12); box-shadow: 0 8px 24px rgba(0,0,0,.35);">
+                    <div class="absolute inset-0" style="background: radial-gradient(60% 55% at 30% 20%, rgba(255,255,255,.18), transparent 62%);"></div>
+                  </div>
+                  <div class="min-w-0">
+                    <div id="gameName" class="truncate text-[15px] font-bold text-white">Counter-Strike 2</div>
+                    <div id="gameGenre" class="mt-0.5 text-[11.5px] text-slate-500">Taktiksel FPS · Steam</div>
+                  </div>
+                </div>
+                <button id="btnChangeGame" class="t-btn mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border py-2 text-[11.5px] font-bold tracking-wide"
+                        style="border-color: var(--line); color: var(--cyan);">
+                  <svg class="h-3.5 w-3.5" aria-hidden="true"><use href="#i-chevron"/></svg>
+                  DEĞİŞTİR
+                </button>
+              </div>
+
+              <!-- Global VPN modunda sol kart bununla değişir -->
+              <div id="vpnCard" class="t-card hidden rounded-2xl border p-5" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+                <div class="flex items-center justify-between">
+                  <span class="text-[10px] font-bold tracking-[.2em] text-slate-500">GLOBAL VPN</span>
+                  <svg class="h-4 w-4" style="color: var(--violet);" aria-hidden="true"><use href="#i-shield"/></svg>
+                </div>
+                <div class="mt-4 flex items-center gap-4">
+                  <div class="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl"
+                       style="background: linear-gradient(140deg, rgba(139,92,246,.25), rgba(34,211,238,.18)); border: 1px solid rgba(139,92,246,.4); box-shadow: 0 0 22px rgba(139,92,246,.25);">
+                    <svg class="h-8 w-8" style="color: var(--violet);" aria-hidden="true"><use href="#i-globe"/></svg>
+                  </div>
+                  <div class="min-w-0">
+                    <div class="text-[15px] font-bold text-white">Tüm Trafik Korunuyor</div>
+                    <div class="mt-0.5 text-[11.5px] text-slate-500">Şifreli tünel · otomatik rota</div>
+                  </div>
+                </div>
+                <div class="mt-4 rounded-lg py-2 text-center text-[11.5px] font-semibold" style="background: rgba(139,92,246,.1); color: #C4B5FD;">Aktif koruma her zaman açık ✓</div>
+              </div>
+            </div>
+
+            <!-- ORTA: BOOST butonu -->
+            <div class="order-1 flex justify-center md:order-2">
+              <div id="boostWrap" class="boost-idle relative flex h-[212px] w-[212px] items-center justify-center">
+
+                <!-- Nefes alan dış parlama -->
+                <div class="fx-glow fx-breathe absolute inset-[-22px] rounded-full"
+                     style="background: radial-gradient(circle, var(--glow, rgba(34,211,238,.22)), transparent 62%);"></div>
+
+                <!-- Ters dönen nokta halkası (radar dokusu) -->
+                <div class="fx-glow boost-dots fx-spin-rev absolute rounded-full" aria-hidden="true"></div>
+
+                <!-- Konik gradient halka (maskeli) -->
+                <div class="fx-glow boost-ring fx-spin absolute rounded-full" aria-hidden="true"></div>
+
+                <!-- Merkez disk -->
+                <button id="boostBtn" class="t-btn relative flex h-[156px] w-[156px] flex-col items-center justify-center gap-1.5 rounded-full border-2 outline-none"
+                        style="border-color: rgba(148,163,184,.22); background: radial-gradient(circle at 32% 28%, rgba(139,92,246,.16), transparent 55%), radial-gradient(circle at 68% 72%, rgba(34,211,238,.1), transparent 55%), #0B1220; box-shadow: 0 18px 48px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);"
+                        aria-label="Bağlan" onclick="toggleBoost()">
+                  <!-- Gezinen ışık şeridi -->
+                  <span class="pointer-events-none absolute inset-0 overflow-hidden rounded-full" aria-hidden="true">
+                    <span class="fx-sheen absolute left-0 top-1/2 h-[140%] w-16 -translate-y-1/2"
+                          style="background: linear-gradient(90deg, transparent, rgba(255,255,255,.14), transparent);"></span>
+                  </span>
+                  <svg id="boostIcon" class="h-7 w-7" style="color: var(--cyan);" aria-hidden="true"><use href="#i-zap"/></svg>
+                  <span id="boostLabel" class="text-[19px] font-extrabold tracking-[.14em] text-white">BOOST</span>
+                  <span id="boostSub" class="max-w-[130px] text-center text-[10px] font-semibold leading-tight tracking-wide" style="color: var(--dim);">Başlamak için hazır</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- SAĞ: Seçili Sunucu kartı -->
+            <div class="order-3 md:order-3">
+              <div class="t-card rounded-2xl border p-5" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+                <div class="flex items-center justify-between">
+                  <span class="text-[10px] font-bold tracking-[.2em] text-slate-500">SEÇİLİ SUNUCU</span>
+                  <svg class="h-4 w-4" style="color: var(--violet);" aria-hidden="true"><use href="#i-server"/></svg>
+                </div>
+                <div class="mt-4 flex items-center gap-4">
+                  <div class="flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-xl border"
+                       style="border-color: var(--line); background: rgba(255,255,255,.04);">
+                    <svg class="h-6 w-6" style="color: var(--violet);" aria-hidden="true"><use href="#i-pin"/></svg>
+                    <span id="serverCode" class="mt-0.5 text-[9px] font-bold tracking-widest" style="color: var(--dim);">EU-DE</span>
+                  </div>
+                  <div class="min-w-0">
+                    <div id="serverCity" class="truncate text-[15px] font-bold text-white">Frankfurt</div>
+                    <div class="mt-0.5 flex items-center gap-1.5">
+                      <span class="nums text-[12px] font-bold" id="serverPing" style="color: var(--emerald);">42 ms</span>
+                      <span class="text-[11px] text-slate-500">· düşük yük</span>
+                    </div>
+                  </div>
+                </div>
+                <button id="btnChangeServer" class="t-btn mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border py-2 text-[11.5px] font-bold tracking-wide"
+                        style="border-color: var(--line); color: var(--cyan);">
+                  <svg class="h-3.5 w-3.5" aria-hidden="true"><use href="#i-chevron"/></svg>
+                  BÖLGE DEĞİŞTİR
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Alt: canlı metrikler (yalnızca ping, kayıp, süre) -->
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div class="flex items-center justify-between rounded-2xl border px-5 py-4" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+              <div>
+                <div class="text-[10px] font-bold tracking-[.2em]" style="color: var(--dim);">PING</div>
+                <div class="mt-1.5 flex items-baseline gap-2">
+                  <span class="nums text-[26px] font-bold leading-none" id="mPing" style="color: var(--cyan);">42</span>
+                  <span class="text-[12px] font-semibold" style="color: var(--dim);">ms</span>
+                </div>
+                <div class="mt-1.5 text-[10.5px] text-slate-500" id="mPingSub">ham 42 ms</div>
+              </div>
+              <canvas id="spark" width="120" height="36" class="h-9 w-[120px]" aria-hidden="true"></canvas>
+            </div>
+
+            <div class="flex items-center justify-between rounded-2xl border px-5 py-4" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+              <div>
+                <div class="text-[10px] font-bold tracking-[.2em]" style="color: var(--dim);">PAKET KAYBI</div>
+                <div class="mt-1.5 flex items-baseline gap-2">
+                  <span class="nums text-[26px] font-bold leading-none" id="mLoss" style="color: var(--emerald);">0</span>
+                  <span class="text-[12px] font-semibold" style="color: var(--dim);">%</span>
+                </div>
+                <div class="mt-1.5 text-[10.5px] text-slate-500">son 60 sn ortalaması</div>
+              </div>
+              <svg class="h-6 w-6" style="color: var(--emerald);" aria-hidden="true"><use href="#i-pulse"/></svg>
+            </div>
+
+            <div class="flex items-center justify-between rounded-2xl border px-5 py-4" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+              <div>
+                <div class="text-[10px] font-bold tracking-[.2em]" style="color: var(--dim);">BAĞLANTI SÜRESİ</div>
+                <div class="mt-1.5 flex items-baseline gap-2">
+                  <span class="nums text-[26px] font-bold leading-none" id="mSession" style="color: var(--text);">00:00:00</span>
+                </div>
+                <div class="mt-1.5 text-[10.5px] text-slate-500">oturum süresi</div>
+              </div>
+              <svg class="h-6 w-6" style="color: var(--violet);" aria-hidden="true"><use href="#i-clock"/></svg>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ──────────────── OYUN KÜTÜPHANESİ ──────────────── -->
+      <section class="view" data-view="games">
+        <div class="flex h-full flex-col p-6 lg:p-8">
+          <div class="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h1 class="text-[22px] font-extrabold tracking-tight text-white">Oyun Kütüphanesi</h1>
+              <p class="mt-1 text-[12.5px]" style="color: var(--dim);">Oyununu seç — rota otomatik ayarlansın.</p>
+            </div>
+            <label class="flex items-center gap-2.5 rounded-xl border px-4 py-2.5" style="border-color: var(--line); background: rgba(11,18,32,.8);">
+              <svg class="h-4 w-4" style="color: var(--dim);" aria-hidden="true"><use href="#i-search"/></svg>
+              <input id="gameSearch" type="text" placeholder="Oyun ara… (CS2, Valorant)"
+                     class="w-52 bg-transparent text-[13px] text-white placeholder-slate-500 outline-none" />
+            </label>
+          </div>
+
+          <div id="gamesGrid" class="mt-6 grid flex-1 auto-rows-min grid-cols-2 gap-3 overflow-y-auto pr-1 pb-4 sm:grid-cols-3 xl:grid-cols-4"></div>
+        </div>
+      </section>
+
+      <!-- ──────────────── SUNUCULAR ──────────────── -->
+      <section class="view" data-view="nodes">
+        <div class="flex h-full flex-col p-6 lg:p-8">
+          <div class="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h1 class="text-[22px] font-extrabold tracking-tight text-white">Sunucular</h1>
+              <p class="mt-1 text-[12.5px]" style="color: var(--dim);">En düşük gecikme için sana en yakın bölge.</p>
+            </div>
+            <label class="flex items-center gap-2.5 rounded-xl border px-4 py-2.5" style="border-color: var(--line); background: rgba(11,18,32,.8);">
+              <svg class="h-4 w-4" style="color: var(--dim);" aria-hidden="true"><use href="#i-search"/></svg>
+              <input id="nodeSearch" type="text" placeholder="Şehir veya bölge ara…"
+                     class="w-52 bg-transparent text-[13px] text-white placeholder-slate-500 outline-none" />
+            </label>
+          </div>
+
+          <div id="nodesList" class="mt-6 flex flex-col gap-2.5 overflow-y-auto pr-1 pb-4"></div>
+        </div>
+      </section>
+
+      <!-- ──────────────── AYARLAR ──────────────── -->
+      <section class="view" data-view="settings">
+        <div class="h-full overflow-y-auto p-6 lg:p-8">
+          <h1 class="text-[22px] font-extrabold tracking-tight text-white">Ayarlar</h1>
+          <p class="mt-1 text-[12.5px]" style="color: var(--dim);">Tüm ağ ayarları otomatiktir — burada sadece senin tercihlerin var.</p>
+
+          <div class="mt-6 flex max-w-2xl flex-col gap-3">
+
+            <!-- Windows ile Başlat -->
+            <div class="flex items-center justify-between gap-4 rounded-2xl border p-5" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+              <div class="flex items-center gap-4">
+                <span class="flex h-10 w-10 items-center justify-center rounded-xl" style="background: rgba(34,211,238,.1); color: var(--cyan);">
+                  <svg class="h-5 w-5" aria-hidden="true"><use href="#i-zap"/></svg>
+                </span>
+                <div>
+                  <div class="text-[13.5px] font-semibold text-white">Windows ile Başlat</div>
+                  <div class="mt-0.5 text-[11.5px]" style="color: var(--dim);">Oturum açtığında arka planda hazır olsun</div>
+                </div>
+              </div>
+              <button id="swStartup" class="switch h-6 w-11 shrink-0 rounded-full p-0.5" role="switch" aria-checked="true" style="background: var(--cyan);" onclick="toggleSetting('startup', this)">
+                <span class="block h-5 w-5 rounded-full bg-white shadow transition-transform duration-150" style="transform: translateX(20px);"></span>
+              </button>
+            </div>
+
+            <!-- Tepsiye Küçült -->
+            <div class="flex items-center justify-between gap-4 rounded-2xl border p-5" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+              <div class="flex items-center gap-4">
+                <span class="flex h-10 w-10 items-center justify-center rounded-xl" style="background: rgba(139,92,246,.1); color: var(--violet);">
+                  <svg class="h-5 w-5" aria-hidden="true"><use href="#i-power"/></svg>
+                </span>
+                <div>
+                  <div class="text-[13.5px] font-semibold text-white">Tepsiye Küçült</div>
+                  <div class="mt-0.5 text-[11.5px]" style="color: var(--dim);">Kapat düğmesi uygulamayı tepsiye taşısın</div>
+                </div>
+              </div>
+              <button id="swTray" class="switch h-6 w-11 shrink-0 rounded-full p-0.5" role="switch" aria-checked="true" style="background: var(--cyan);" onclick="toggleSetting('tray', this)">
+                <span class="block h-5 w-5 rounded-full bg-white shadow transition-transform duration-150" style="transform: translateX(20px);"></span>
+              </button>
+            </div>
+
+            <!-- Dil -->
+            <div class="flex items-center justify-between gap-4 rounded-2xl border p-5" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+              <div class="flex items-center gap-4">
+                <span class="flex h-10 w-10 items-center justify-center rounded-xl" style="background: rgba(16,185,129,.1); color: var(--emerald);">
+                  <svg class="h-5 w-5" aria-hidden="true"><use href="#i-globe"/></svg>
+                </span>
+                <div>
+                  <div class="text-[13.5px] font-semibold text-white">Dil</div>
+                  <div class="mt-0.5 text-[11.5px]" style="color: var(--dim);">Arayüz dili</div>
+                </div>
+              </div>
+              <div class="inline-flex rounded-full border p-1" style="border-color: var(--line);" role="group" aria-label="Dil">
+                <button class="lang-pill rounded-full px-3.5 py-1.5 text-[12px] font-bold t-btn" data-lang="tr" aria-pressed="true">Türkçe</button>
+                <button class="lang-pill rounded-full px-3.5 py-1.5 text-[12px] font-bold t-btn" data-lang="en" aria-pressed="false">English</button>
+              </div>
+            </div>
+
+            <!-- Görsel Efekt Seviyesi -->
+            <div class="flex items-center justify-between gap-4 rounded-2xl border p-5" style="border-color: var(--line); background: rgba(11,18,32,.78);">
+              <div class="flex items-center gap-4">
+                <span class="flex h-10 w-10 items-center justify-center rounded-xl" style="background: rgba(245,158,11,.12); color: var(--amber);">
+                  <svg class="h-5 w-5" aria-hidden="true"><use href="#i-sparkle"/></svg>
+                </span>
+                <div>
+                  <div class="text-[13.5px] font-semibold text-white">Görsel Efekt Seviyesi</div>
+                  <div class="mt-0.5 text-[11.5px]" style="color: var(--dim);">Azaltılmış = maksimum pil ömrü ve sessiz GPU</div>
+                </div>
+              </div>
+              <div class="inline-flex rounded-full border p-1" style="border-color: var(--line);" role="group" aria-label="Görsel efekt">
+                <button class="fx-pill rounded-full px-3 py-1.5 text-[11px] font-bold t-btn" data-fx="reduced">Azaltılmış</button>
+                <button class="fx-pill rounded-full px-3 py-1.5 text-[11px] font-bold t-btn" data-fx="balanced">Dengeli</button>
+                <button class="fx-pill rounded-full px-3 py-1.5 text-[11px] font-bold t-btn" data-fx="full" aria-pressed="true">Tam</button>
+              </div>
+            </div>
+
+            <p class="mt-2 text-[11px]" style="color: var(--dim);">
+              💡 Teknik ağ ayarları (MTU, TUN, protokol…) mihomo tarafından otomatik yönetilir — görmene gerek yok.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Bildirim -->
+  <div id="toast" class="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full border px-5 py-2.5 text-[12.5px] font-semibold opacity-0 transition-opacity duration-200"
+       style="border-color: var(--line); background: rgba(11,18,32,.95); box-shadow: 0 12px 40px rgba(0,0,0,.5);"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   AO GPN v2 — Vanilla JS
+   Kurallar: requestAnimationFrame YOK · sadece setInterval/setTimeout
+   ═══════════════════════════════════════════════════════════════════════════ */
+'use strict';
+
+/* ---------- Yardımcılar ---------- */
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+function save(key, value) {
+  try { localStorage.setItem('aogpn-v2.' + key, JSON.stringify(value)); } catch (_) { /* file:// güvenliği */ }
+}
+function load(key, fallback) {
+  try {
+    const raw = localStorage.getItem('aogpn-v2.' + key);
+    return raw === null ? fallback : JSON.parse(raw);
+  } catch (_) { return fallback; }
+}
+
+let toastTimer = null;
+function toast(message) {
+  const el = $('#toast');
+  el.textContent = message;
+  el.style.opacity = '1';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 2200);
+}
+
+/* ---------- Veri (prototip yer tutucuları) ---------- */
+const GAMES = [
+  { id: 'cs2',     name: 'Counter-Strike 2',     genre: 'Taktiksel FPS',  art: 'art-cs2',     mono: 'CS',  c1: '#F97316', c2: '#7C2D12' },
+  { id: 'lol',     name: 'League of Legends',    genre: 'MOBA',           art: 'art-lol',     mono: 'LoL', c1: '#0E7490', c2: '#1E3A8A' },
+  { id: 'valo',    name: 'Valorant',             genre: 'Taktiksel FPS',  art: 'art-valorant', mono: 'VA', c1: '#DC2626', c2: '#7F1D1D' },
+  { id: 'tarkov',  name: 'Escape from Tarkov',   genre: 'Hayatta Kalma',  art: 'art-tarkov',  mono: 'EFT', c1: '#3F3F46', c2: '#18181B' },
+  { id: 'fort',    name: 'Fortnite',             genre: 'Battle Royale',  art: 'art-fortnite', mono: 'FN', c1: '#0284C7', c2: '#6D28D9' },
+  { id: 'pubg',    name: 'PUBG: Battlegrounds',  genre: 'Battle Royale',  art: 'art-pubg',    mono: 'P',  c1: '#B45309', c2: '#111827' },
+  { id: 'warzone', name: 'Call of Duty: Warzone', genre: 'Battle Royale', art: 'art-warzone', mono: 'WZ', c1: '#15803D', c2: '#0F172A' },
+  { id: 'dota2',   name: 'Dota 2',               genre: 'MOBA',           art: 'art-dota2',   mono: 'D',  c1: '#BE123C', c2: '#1C1917' },
+  { id: 'apex',    name: 'Apex Legends',         genre: 'Battle Royale',  art: 'art-apex',    mono: 'AP', c1: '#C2410C', c2: '#3F3F46' },
+  { id: 'r6',      name: 'Rainbow Six Siege',    genre: 'Taktiksel FPS',  art: 'art-r6',      mono: 'R6', c1: '#334155', c2: '#0F172A' },
+  { id: 'rl',      name: 'Rocket League',        genre: 'Spor',           art: 'art-rl',      mono: 'RL', c1: '#0891B2', c2: '#164E63' },
+  { id: 'ow2',     name: 'Overwatch 2',          genre: 'Hero Shooter',   art: 'art-ow2',     mono: 'OW', c1: '#C2410C', c2: '#F97316' },
+  { id: 'rust',    name: 'Rust',                 genre: 'Hayatta Kalma',  art: 'art-rust',    mono: 'RS', c1: '#9A3412', c2: '#450A0A' },
+  { id: 'gta5',    name: 'Grand Theft Auto V',   genre: 'Açık Dünya',     art: 'art-gta5',    mono: 'GTA', c1: '#059669', c2: '#064E3B' },
+  { id: 'mine',    name: 'Minecraft',            genre: 'Sandbox',        art: 'art-minecraft', mono: 'MC', c1: '#15803D', c2: '#3F6212' },
+  { id: 'other',   name: 'Diğer Oyunlar',        genre: 'Herhangi bir oyun', art: 'art-other', mono: '★', c1: '#334155', c2: '#0B1220' },
+];
+
+const SERVERS = [
+  { id: 'istanbul',  city: 'İstanbul',  code: 'TR-IST', ping: 28, load: 42 },
+  { id: 'frankfurt', city: 'Frankfurt', code: 'EU-DE',  ping: 42, load: 38 },
+  { id: 'london',    city: 'Londra',    code: 'EU-UK',  ping: 54, load: 51 },
+  { id: 'amsterdam', city: 'Amsterdam', code: 'EU-NL',  ping: 49, load: 44 },
+  { id: 'paris',     city: 'Paris',     code: 'EU-FR',  ping: 58, load: 47 },
+  { id: 'warsaw',    city: 'Varşova',   code: 'EU-PL',  ping: 61, load: 33 },
+  { id: 'stockholm', city: 'Stokholm',  code: 'EU-SE',  ping: 66, load: 29 },
+  { id: 'madrid',    city: 'Madrid',    code: 'EU-ES',  ping: 72, load: 36 },
+  { id: 'dubai',     city: 'Dubai',     code: 'AE-DXB', ping: 118, load: 25 },
+  { id: 'newyork',   city: 'New York',  code: 'US-NY',  ping: 128, load: 41 },
+];
+
+/* ---------- Durum ---------- */
+const state = {
+  view: 'dashboard',
+  mode: load('mode', 'gpn'),                       // 'gpn' | 'vpn'
+  conn: 'idle',                                    // 'idle' | 'connecting' | 'connected'
+  game: GAMES.find(g => g.id === load('game', 'cs2')) || GAMES[0],
+  server: SERVERS.find(s => s.id === load('server', 'frankfurt')) || SERVERS[1],
+  ping: 42,
+  loss: 0,
+  session: 0,
+  spark: [],
+  ticker: null,
+  connectTimer: null,
+};
+
+/* ---------- Sekme geçişleri (SPA) ---------- */
+function switchView(name) {
+  state.view = name;
+  $$('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
+  $$('.nav-item').forEach(item => {
+    const active = item.dataset.view === name;
+    item.setAttribute('aria-current', active ? 'page' : 'false');
+    item.classList.toggle('nav-on', active);
+    const dot = item.querySelector('.nav-dot');
+    if (dot) dot.style.opacity = active ? '1' : '0';
+  });
+  if (name === 'dashboard') { renderMode(); renderBoost(); renderMetrics(); }
+}
+
+/* Nav aktif stili (JS ile class veriliyor — Tailwind Play CDN DOM'u izler) */
+document.addEventListener('DOMContentLoaded', () => {
+  const style = document.createElement('style');
+  style.textContent = `
+    .nav-item.nav-on { background: rgba(255,255,255,.06); color: #fff !important; }
+    .nav-item.nav-on svg { color: var(--cyan); }
+    .mode-pill[aria-pressed="true"], .lang-pill[aria-pressed="true"], .fx-pill[aria-pressed="true"] {
+      background: linear-gradient(120deg, rgba(34,211,238,.9), rgba(139,92,246,.9));
+      color: #fff !important;
+      box-shadow: 0 4px 18px rgba(139,92,246,.3);
+    }
+    .mode-pill:not([aria-pressed="true"]):hover, .lang-pill:not([aria-pressed="true"]):hover, .fx-pill:not([aria-pressed="true"]):hover { color: #E2E8F0; }
+  `;
+  document.head.appendChild(style);
+});
+
+$$('.nav-item').forEach(item => item.addEventListener('click', () => switchView(item.dataset.view)));
+$('#btnChangeGame').addEventListener('click', () => switchView('games'));
+$('#btnChangeServer').addEventListener('click', () => switchView('nodes'));
+
+/* ---------- Mod seçimi (Game Boost / Global VPN) ---------- */
+function setMode(mode) {
+  state.mode = mode;
+  save('mode', mode);
+  renderMode();
+}
+
+function renderMode() {
+  $('#modeGpn').setAttribute('aria-pressed', String(state.mode === 'gpn'));
+  $('#modeVpn').setAttribute('aria-pressed', String(state.mode === 'vpn'));
+  document.body.dataset.mode = state.mode;
+  $('#gameCard').classList.toggle('hidden', state.mode !== 'gpn');
+  $('#vpnCard').classList.toggle('hidden', state.mode !== 'vpn');
+  if (state.conn === 'idle') {
+    $('#boostSub').textContent = state.mode === 'gpn'
+      ? 'Başlamak için hazır'
+      : 'Tüm trafiğin için hazır';
+  }
+  renderBoost();
+}
+$('#modeGpn').addEventListener('click', () => setMode('gpn'));
+$('#modeVpn').addEventListener('click', () => setMode('vpn'));
+
+/* ---------- BOOST butonu (durum makinesi) ---------- */
+function toggleBoost() {
+  if (state.conn === 'connecting') return;
+  if (state.conn === 'connected') { disconnect(); return; }
+  connect();
+}
+
+function connect() {
+  state.conn = 'connecting';
+  renderBoost();
+  toast('En iyi rota seçiliyor…');
+  state.connectTimer = setTimeout(() => {
+    state.conn = 'connected';
+    state.session = 0;
+    state.spark = [];
+    startTicker();
+    renderBoost();
+    renderMetrics();
+    toast('Bağlantı kuruldu — ' + routeLabel());
+  }, 2400);
+}
+
+function disconnect() {
+  clearTimeout(state.connectTimer);
+  stopTicker();
+  state.conn = 'idle';
+  state.spark = [];
+  state.session = 0;
+  renderBoost();
+  renderMetrics();
+  toast('Bağlantı kapatıldı');
+}
+
+function routeLabel() {
+  return state.mode === 'gpn'
+    ? (state.game.name + ' → ' + state.server.city)
+    : ('Global VPN → ' + state.server.city);
+}
+
+function renderBoost() {
+  const wrap = $('#boostWrap');
+  wrap.classList.toggle('boost-idle', state.conn === 'idle');
+  wrap.classList.toggle('boost-connecting', state.conn === 'connecting');
+  wrap.classList.toggle('boost-connected', state.conn === 'connected');
+
+  const isGpn = state.mode === 'gpn';
+  // Duruma göre renk paleti (statik, animasyonsuz renk değişimi)
+  const palette = state.conn === 'connected'
+    ? { a: 'rgba(52,211,153,.95)', b: 'rgba(16,185,129,.85)', glow: 'rgba(52,211,153,.22)' }
+    : state.conn === 'connecting'
+      ? { a: 'rgba(251,191,36,.95)', b: 'rgba(245,158,11,.85)', glow: 'rgba(251,191,36,.22)' }
+      : isGpn
+        ? { a: 'rgba(34,211,238,.95)', b: 'rgba(139,92,246,.9)', glow: 'rgba(34,211,238,.22)' }
+        : { a: 'rgba(139,92,246,.95)', b: 'rgba(217,70,239,.85)', glow: 'rgba(139,92,246,.24)' };
+  wrap.style.setProperty('--ring-a', palette.a);
+  wrap.style.setProperty('--ring-b', palette.b);
+  wrap.style.setProperty('--glow', palette.glow);
+
+  const icon = $('#boostIcon');
+  const label = $('#boostLabel');
+  const sub = $('#boostSub');
+  const dot = $('#sideStateDot');
+  const dotText = $('#sideStateText');
+  const topDot = $('#topStateDot');
+  const topText = $('#topStateText');
+
+  if (state.conn === 'idle') {
+    icon.innerHTML = '<use href="#i-zap"/>';
+    icon.style.color = isGpn ? 'var(--cyan)' : 'var(--violet)';
+    label.textContent = isGpn ? 'BOOST' : 'CONNECT';
+    sub.textContent = isGpn ? 'Başlamak için hazır' : 'Tüm trafiğin için hazır';
+    dot.style.background = 'var(--cyan)';
+    dot.style.boxShadow = '0 0 8px var(--cyan)';
+    dotText.textContent = 'Bağlı değil';
+    topDot.style.background = 'var(--cyan)';
+    topText.textContent = 'HAZIR';
+  } else if (state.conn === 'connecting') {
+    icon.innerHTML = '<use href="#i-power"/>';
+    icon.style.color = 'var(--amber)';
+    label.textContent = 'BAĞLANIYOR…';
+    sub.textContent = 'En iyi rota seçiliyor';
+    dot.style.background = 'var(--amber)';
+    dot.style.boxShadow = '0 0 8px var(--amber)';
+    dotText.textContent = 'Bağlanıyor…';
+    topDot.style.background = 'var(--amber)';
+    topText.textContent = 'BAĞLANIYOR';
+  } else {
+    icon.innerHTML = '<use href="#i-power"/>';
+    icon.style.color = 'var(--emerald)';
+    label.textContent = 'BAĞLANTIYI KES';
+    sub.textContent = routeLabel() + (state.mode === 'gpn' ? ' · boost aktif' : ' · koruma aktif');
+    dot.style.background = 'var(--emerald)';
+    dot.style.boxShadow = '0 0 8px var(--emerald)';
+    dotText.textContent = 'Bağlı · ' + state.server.city;
+    topDot.style.background = 'var(--emerald)';
+    topText.textContent = 'BAĞLI';
+  }
+}
+
+/* ---------- Canlı metrikler (setInterval — rAF YOK) ---------- */
+function startTicker() {
+  stopTicker();
+  state.ticker = setInterval(tick, 1000);
+}
+function stopTicker() {
+  if (state.ticker) { clearInterval(state.ticker); state.ticker = null; }
+}
+
+function tick() {
+  if (state.conn === 'connected') state.session++;
+
+  // Ping: her 3 saniyede bir hafif dalgalanma (bağlıyken optimize edilmiş değer)
+  if (state.tickCount === undefined || ++state.tickCount % 3 === 0) {
+    const base = state.conn === 'connected'
+      ? Math.round(state.server.ping * 0.62)          // tünel iyileştirmesi
+      : state.server.ping;
+    const spike = (state.conn === 'connected' && Math.random() < 0.07) ? 12 : 0;
+    state.ping = Math.max(8, base + Math.round((Math.random() * 10) - 4) + spike);
+    state.loss = state.conn === 'connected' && Math.random() < 0.08 ? 1 : 0;
+    state.spark.push(state.ping);
+    if (state.spark.length > 30) state.spark.shift();
+    drawSpark();
+  }
+
+  if (state.conn !== 'idle' || state.tickCount % 3 === 0) renderMetrics();
+}
+
+function renderMetrics() {
+  const isOptimized = state.conn === 'connected';
+  $('#mPing').textContent = state.ping;
+  $('#mPing').style.color = state.ping <= 60 ? 'var(--cyan)' : state.ping <= 120 ? 'var(--amber)' : '#F87171';
+  $('#mPingSub').textContent = isOptimized ? 'ham ' + state.server.ping + ' ms' : 'ham ' + state.server.ping + ' ms';
+  $('#mLoss').textContent = state.loss;
+  $('#mLoss').style.color = state.loss === 0 ? 'var(--emerald)' : '#F87171';
+  $('#mSession').textContent = fmtSession(state.session);
+  $('#serverPing').textContent = (isOptimized ? Math.round(state.server.ping * 0.62) : state.server.ping) + ' ms';
+  $('#serverPing').style.color = state.server.ping <= 60 ? 'var(--emerald)' : 'var(--amber)';
+}
+
+function fmtSession(totalSeconds) {
+  const h = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+  const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+  const s = String(totalSeconds % 60).padStart(2, '0');
+  return h + ':' + m + ':' + s;
+}
+
+/* Küçük ping grafiği (canvas — saniyede bir çizim, döngü değil) */
+function drawSpark() {
+  const canvas = $('#spark');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  const data = state.spark;
+  if (data.length < 2) return;
+  const max = Math.max(...data, 1);
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = (i / 29) * (w - 6) + 3;
+    const y = h - 4 - (v / max) * (h - 10);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = state.conn === 'connected' ? '#34D399' : '#22D3EE';
+  ctx.lineWidth = 1.6;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+}
+
+/* ---------- Oyun Kütüphanesi ---------- */
+function renderGames(filter = '') {
+  const grid = $('#gamesGrid');
+  const q = filter.trim().toLowerCase();
+  grid.innerHTML = '';
+  GAMES.filter(g => !q || g.name.toLowerCase().includes(q) || g.mono.toLowerCase().includes(q))
+    .forEach(g => {
+      const selected = state.game.id === g.id;
+      const card = document.createElement('button');
+      card.className = 't-card group relative overflow-hidden rounded-2xl border p-3 text-left'
+        + (selected ? '' : ' opacity-95');
+      card.style.borderColor = selected ? 'rgba(52,211,153,.55)' : 'var(--line)';
+      card.style.background = 'rgba(11,18,32,.78)';
+      card.style.boxShadow = selected ? '0 0 0 1px rgba(52,211,153,.35), 0 10px 30px rgba(0,0,0,.3)' : 'none';
+      card.innerHTML = `
+        <div class="relative flex h-24 items-center justify-center overflow-hidden rounded-xl"
+             style="background: linear-gradient(135deg, ${g.c1}, ${g.c2});">
+          <div class="absolute inset-0" style="background: radial-gradient(55% 50% at 28% 18%, rgba(255,255,255,.16), transparent 62%);"></div>
+          <svg class="relative h-12 w-12 text-white" aria-hidden="true"><use href="#${g.art}"/></svg>
+          <svg class="absolute -right-2 -bottom-3 h-14 w-14 text-white/10" aria-hidden="true"><use href="#${g.art}"/></svg>
+        </div>
+        <div class="mt-2.5 flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <div class="truncate text-[12.5px] font-bold text-white">${g.name}</div>
+            <div class="mt-0.5 text-[10.5px]" style="color: var(--dim);">${g.genre}</div>
+          </div>
+          ${selected
+            ? '<span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full" style="background: var(--emerald);"><svg class="h-3 w-3 text-white"><use href="#i-check"/></svg></span>'
+            : '<svg class="h-4 w-4 shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100" style="color: var(--cyan);"><use href="#i-arrow"/></svg>'}
+        </div>`;
+      card.addEventListener('click', () => selectGame(g.id));
+      grid.appendChild(card);
+    });
+}
+
+function renderGameCover() {
+  const cover = $('#gameCover');
+  cover.style.background = `linear-gradient(135deg, ${state.game.c1}, ${state.game.c2})`;
+  cover.innerHTML = `<svg class="h-9 w-9 text-white" aria-hidden="true"><use href="#${state.game.art}"/></svg>`;
+  $('#gameName').textContent = state.game.name;
+  $('#gameGenre').textContent = state.game.genre;
+}
+
+function selectGame(id) {
+  const game = GAMES.find(g => g.id === id);
+  if (!game) return;
+  state.game = game;
+  save('game', id);
+  renderGameCover();
+  toast(game.name + ' seçildi — rota hazır');
+  switchView('dashboard');
+}
+$('#gameSearch').addEventListener('input', e => renderGames(e.target.value));
+
+/* ---------- Sunucular ---------- */
+function pingColor(ping) {
+  return ping <= 60 ? 'var(--emerald)' : ping <= 120 ? 'var(--amber)' : '#F87171';
+}
+
+function renderNodes(filter = '') {
+  const list = $('#nodesList');
+  const q = filter.trim().toLowerCase();
+  list.innerHTML = '';
+  SERVERS.filter(s => !q || s.city.toLowerCase().includes(q) || s.code.toLowerCase().includes(q) || s.id.includes(q))
+    .forEach(s => {
+      const selected = state.server.id === s.id;
+      const row = document.createElement('button');
+      row.className = 't-btn flex items-center gap-4 rounded-2xl border p-4 text-left';
+      row.style.borderColor = selected ? 'rgba(52,211,153,.55)' : 'var(--line)';
+      row.style.background = 'rgba(11,18,32,.78)';
+      row.style.boxShadow = selected ? '0 0 0 1px rgba(52,211,153,.3)' : 'none';
+      row.innerHTML = `
+        <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border" style="border-color: var(--line); background: rgba(255,255,255,.04);">
+          <svg class="h-5 w-5" style="color: ${selected ? 'var(--emerald)' : 'var(--violet)'};"><use href="#i-pin"/></svg>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class="truncate text-[13.5px] font-bold text-white">${s.city}</span>
+            <span class="rounded-full px-2 py-0.5 text-[9px] font-bold tracking-widest" style="background: rgba(255,255,255,.05); color: var(--dim); border: 1px solid var(--line);">${s.code}</span>
+          </div>
+          <div class="mt-1.5 flex items-center gap-2">
+            <div class="h-1 w-28 overflow-hidden rounded-full" style="background: rgba(255,255,255,.07);">
+              <div class="h-full rounded-full" style="width: ${s.load}%; background: ${s.load < 50 ? 'var(--emerald)' : 'var(--amber)'};"></div>
+            </div>
+            <span class="text-[10px]" style="color: var(--dim);">yük %${s.load}</span>
+          </div>
+        </div>
+        <span class="nums text-[15px] font-bold" style="color: ${pingColor(s.ping)};">${s.ping} ms</span>
+        ${selected
+          ? '<span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full" style="background: var(--emerald);"><svg class="h-3.5 w-3.5 text-white"><use href="#i-check"/></svg></span>'
+          : '<span class="hidden shrink-0 rounded-full px-3 py-1.5 text-[10px] font-bold tracking-wider sm:block" style="border: 1px solid var(--line); color: var(--cyan);">SEÇ</span>'}
+      `;
+      row.addEventListener('click', () => selectServer(s.id));
+      list.appendChild(row);
+    });
+}
+
+function selectServer(id) {
+  const server = SERVERS.find(s => s.id === id);
+  if (!server) return;
+  state.server = server;
+  save('server', id);
+  $('#serverCity').textContent = server.city;
+  $('#serverCode').textContent = server.code;
+  $('#serverPing').textContent = server.ping + ' ms';
+  $('#serverPing').style.color = pingColor(server.ping);
+  toast(server.city + ' seçildi (' + server.code + ')');
+  switchView('dashboard');
+}
+$('#nodeSearch').addEventListener('input', e => renderNodes(e.target.value));
+
+/* ---------- Ayarlar ---------- */
+const settings = {
+  startup: load('startup', true),
+  tray: load('tray', true),
+  language: load('language', 'tr'),
+  fx: load('fx', 'full'),
+};
+
+function toggleSetting(key, btn) {
+  settings[key] = !settings[key];
+  save(key, settings[key]);
+  const dot = btn.querySelector('span');
+  btn.style.background = settings[key] ? 'var(--cyan)' : 'rgba(148,163,184,.25)';
+  dot.style.transform = settings[key] ? 'translateX(20px)' : 'translateX(0)';
+  btn.setAttribute('aria-checked', String(settings[key]));
+  toast(settings[key] ? 'Açık' : 'Kapalı');
+}
+
+function applyFxTier(tier) {
+  settings.fx = tier;
+  save('fx', tier);
+  document.body.classList.remove('fx-full', 'fx-balanced', 'fx-reduced');
+  document.body.classList.add('fx-' + tier);
+  $$('.fx-pill').forEach(p => p.setAttribute('aria-pressed', String(p.dataset.fx === tier)));
+  toast(tier === 'full' ? 'Görsel efekt: Tam' : tier === 'balanced' ? 'Görsel efekt: Dengeli' : 'Görsel efekt: Azaltılmış');
+}
+
+$$('.fx-pill').forEach(p => p.addEventListener('click', () => applyFxTier(p.dataset.fx)));
+$$('.lang-pill').forEach(p => p.addEventListener('click', () => {
+  settings.language = p.dataset.lang;
+  save('language', p.dataset.lang);
+  $$('.lang-pill').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.lang === p.dataset.lang)));
+}));
+
+/* ---------- AKILLI BEKLEME: Alt-Tab / odak kaybı → animasyonlar donar ----------
+   Pencere arka plana alındığında body'ye 'app-paused' eklenir; CSS,
+   animation-play-state: paused ile TÜM animasyonları anında dondurur.        */
+window.addEventListener('blur', () => document.body.classList.add('app-paused'));
+window.addEventListener('focus', () => document.body.classList.remove('app-paused'));
+document.addEventListener('visibilitychange', () => {
+  document.body.classList.toggle('app-paused', document.visibilityState === 'hidden');
+});
+
+/* ---------- Başlangıç ---------- */
+(function init() {
+  renderMode();
+  renderBoost();
+  renderMetrics();
+  renderGameCover();
+  renderGames();
+  renderNodes();
+  applyFxTier(settings.fx);
+  // Kayıtlı switch durumları
+  [['startup', $('#swStartup')], ['tray', $('#swTray')]].forEach(([key, btn]) => {
+    const on = settings[key];
+    btn.style.background = on ? 'var(--cyan)' : 'rgba(148,163,184,.25)';
+    btn.querySelector('span').style.transform = on ? 'translateX(20px)' : 'translateX(0)';
+    btn.setAttribute('aria-checked', String(on));
+  });
+  $$('.lang-pill').forEach(p => p.setAttribute('aria-pressed', String(p.dataset.lang === settings.language)));
+  switchView('dashboard');
+})();
+</script>
+</body>
+</html>

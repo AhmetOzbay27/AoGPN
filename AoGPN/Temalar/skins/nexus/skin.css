@@ -498,3 +498,14 @@ body {
   .nx-policyWrap { flex-direction: column; }
   .nx-advCard.row { flex-direction: column; align-items: flex-start; }
 }
+
+/* ---- Real executable icons (host AppIconService -> skinBridge.appIcons) ---- */
+.nx-appIco { width: 30px; height: 30px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; overflow: hidden; font: 700 10px Orbitron, sans-serif; color: var(--nx-cyan);
+  background: linear-gradient(135deg, #161e2c, #0a0e15); border: 1px solid var(--nx-line); }
+.nx-appIco img { width: 100%; height: 100%; object-fit: contain; }
+.nx-pickerIco { width: 26px; height: 26px; border-radius: 7px; font-size: 9px; }
+.nx-progCell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.nx-progTxt { min-width: 0; }
+.nx-gameIcon img { width: 100%; height: 100%; object-fit: contain; padding: 3px; border-radius: 6px; }
+.nx-boostIcon img { width: 100%; height: 100%; object-fit: contain; padding: 3px; border-radius: 8px; }

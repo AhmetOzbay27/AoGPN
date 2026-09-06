@@ -1017,4 +1017,17 @@ public class GpnMihomoConfigServiceTests
         yaml.Should().NotContain("DOMAIN-SUFFIX,escapefromtarkov.com,");
         yaml.Should().NotContain("name: GPN-LAUNCHER");
     }
+
+    [Fact]
+    public void Config_EmitsProfileStoreSelectedAndStoreFakeIp()
+    {
+        // Oturum sürekliliği (Faz 1): seçili düğüm + fake-ip eşlemesi çekirdek
+        // yeniden başlatıldığında korunmalı — kurtarma sonrası oyun istemcisinin
+        // tuttuğu IP'ler aynı gerçek hedeflere eşlenir, DNS yeniden çözülmez.
+        var yaml = Generate(Italya, []);
+
+        yaml.Should().Contain("profile:");
+        yaml.Should().Contain("store-selected: true");
+        yaml.Should().Contain("store-fake-ip: true");
+    }
 }

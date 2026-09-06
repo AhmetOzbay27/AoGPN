@@ -53,6 +53,44 @@ public class GpnServerSelectionServiceTests
         GpnDecision.DecideMode(probe, options).Should().Be(ConnectionMode.V2rayTCP);
     }
 
+    // ── ToConf — resmi istemci için ASCII güvenli tünel adı ──────────────
+
+    [Fact]
+    public void ToConf_NonAsciiDisplayName_EmitsAsciiTunnelName()
+    {
+        // Resmi WireGuard istemcisi tünel adlarını ^[a-zA-Z0-9_=+.-]{1,32}$ ile
+        // sınırlar (upstream conf/name.go); "İtalya" (noktalı İ, U+0130) bu kurala
+        // uymaz — içe aktarılamaz ve bu adla kalmış bozuk yapılandırma "The system
+        // cannot find the file specified" üretir. .conf dışa aktarımı ASCII güvenli
+        // ad taşımalıdır (İ→I).
+        var it = Server("it", "İtalya");
+
+        var conf = it.ToConf();
+
+        conf.Should().Contain("# Name = Italya");
+        conf.Should().NotContain("İtalya", "Windows istemcisi Unicode tünel adını reddeder");
+        it.ConfTunnelName.Should().Be("Italya");
+        it.ConfTunnelName.Should().MatchRegex("^[a-zA-Z0-9_=+.-]{1,32}$");
+    }
+
+    [Fact]
+    public void ToConf_AsciiName_Unchanged()
+    {
+        var de = Server("de", "Almanya");
+
+        de.ToConf().Should().Contain("# Name = Almanya");
+        de.ConfTunnelName.Should().Be("Almanya");
+    }
+
+    [Fact]
+    public void ToConf_EmptyName_FallsBackToTunnel()
+    {
+        var anonymous = Server("it", string.Empty);
+
+        anonymous.ConfTunnelName.Should().Be("tunnel");
+        anonymous.ToConf().Should().Contain("# Name = tunnel");
+    }
+
     // ── DecideMode — HandshakeNoResponse (canlı testte gözlenen senaryo) ──
 
     [Fact]

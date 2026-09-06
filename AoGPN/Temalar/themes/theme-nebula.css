@@ -2,15 +2,52 @@
    AoGPN dashboard — theme: nebula
    Part of the split stylesheet (see Temalar/dashboard.css for the load order).
    ========================================================================== */
+body[data-theme="nebula"] {
+  --bg: #080C18;
+  --violet: #7C3AED;
+  --cyan: #0891B2;
+  --emerald: #059669;
+  --glass: rgba(124, 58, 237, 0.035);
+  --glass-border: rgba(124, 58, 237, 0.10);
+  --violet-rgb: 124,58,237;
+  --cyan-rgb: 8,145,178;
+  --emerald-rgb: 5,150,105;
 
+  /* Theme scaffold — shared rules in components.css consume these variables.
+     Required set: every theme declares them so none inherits another's accents. */
+  --theme-glass-border: rgba(124, 58, 237, 0.10);
+  --theme-glass-shadow: 0 1px 16px rgba(124, 58, 237, 0.06);
+  --theme-glass-hover-border: rgba(124, 58, 237, 0.28);
+  --theme-glass-hover-shadow: 0 4px 26px rgba(124, 58, 237, 0.13);
+  --theme-font-shadow: 0 0 12px rgba(124, 58, 237, 0.25), 0 0 22px rgba(8,145,178,.14);
+  --theme-ring-glow: drop-shadow(0 0 9px #7C3AED) drop-shadow(0 0 5px #0891B2);
+  --theme-spinner-top: #7C3AED;
+  --theme-spinner-right: #0891B2;
+  --theme-spinner-bottom: rgba(124, 58, 237, 0.2);
+  --theme-spinner-duration: .64s;
+  --theme-tooltip-border: rgba(124, 58, 237, 0.32);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 16px rgba(124, 58, 237, 0.15);
+  --theme-toast-border: rgba(124, 58, 237, 0.30);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(124, 58, 237, 0.11);
+  --theme-badge-border: rgba(124, 58, 237, 0.30);
+  --theme-badge-color: #C4B5FD;
+}
 
+/* Signature — deep-space nebula drift, opacity/transform only. */
+body[data-theme="nebula"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(640px 460px at 30% 25%, rgba(124,58,237,.08), transparent 55%),
+    radial-gradient(560px 420px at 75% 70%, rgba(8,145,178,.07), transparent 55%);
+  animation: nebula-drift 14s ease-in-out infinite alternate;
+  opacity: .5;
+  will-change: transform, opacity;
+}
+@keyframes nebula-drift {
+  from { opacity: .35; transform: translate3d(-10px, -6px, 0) scale(1); }
+  to   { opacity: .85; transform: translate3d(10px, 6px, 0) scale(1.06); }
+}
+body[data-theme="nebula"]::before {
+  animation-duration: 40s !important;
+}
 
-  /* ---------- Gaming theme palettes (refined) ---------- */
-  body[data-theme="nebula"] {
-    --bg: #080C18;
-    --violet: #7C3AED;
-    --cyan: #0891B2;
-    --emerald: #059669;
-    --glass: rgba(124, 58, 237, 0.035);
-    --glass-border: rgba(124, 58, 237, 0.10);
-  }

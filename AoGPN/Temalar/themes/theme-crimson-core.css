@@ -1,0 +1,52 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: crimson-core
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="crimson-core"] {
+  --bg: #0A0207;
+  --violet: #FF294F;
+  --cyan: #A800FF;
+  --emerald: #61FF9A;
+  --glass: rgba(255, 41, 79, 0.04);
+  --glass-border: rgba(168, 0, 255, 0.16);
+  --violet-rgb: 255,41,79;
+  --cyan-rgb: 168,0,255;
+  --emerald-rgb: 97,255,154;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(255,41,79,.16);
+  --theme-glass-shadow: 0 1px 18px rgba(168,0,255,.06), inset 0 0 18px rgba(255,41,79,.02);
+  --theme-glass-hover-border: rgba(255,41,79,.38);
+  --theme-glass-hover-shadow: 0 4px 28px rgba(255,41,79,.14), inset 0 0 22px rgba(168,0,255,.04);
+  --theme-font-shadow: 0 0 12px rgba(255,41,79,.3), 0 0 22px rgba(168,0,255,.18);
+  --theme-ring-glow: drop-shadow(0 0 10px #FF294F) drop-shadow(0 0 5px #A800FF);
+  --theme-spinner-top: #FF294F;
+  --theme-spinner-right: #A800FF;
+  --theme-spinner-bottom: rgba(255,41,79,.2);
+  --theme-spinner-duration: .55s;
+  --theme-tooltip-border: rgba(255,41,79,.36);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(255,41,79,.17), 0 0 24px rgba(168,0,255,.08);
+  --theme-toast-border: rgba(255,41,79,.34);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 24px rgba(255,41,79,.14), 0 0 30px rgba(168,0,255,.06);
+  --theme-badge-border: rgba(255,41,79,.3);
+  --theme-badge-color: #FFA0B4;
+}
+
+/* Signature — reactor core throb, opacity/transform only. */
+body[data-theme="crimson-core"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(620px 620px at 50% 50%, rgba(255,41,79,.1), transparent 58%),
+    radial-gradient(500px 500px at 75% 20%, rgba(168,0,255,.09), transparent 55%);
+  animation: crimson-core-throb 6s ease-in-out infinite;
+  opacity: .45;
+  will-change: opacity, transform;
+}
+@keyframes crimson-core-throb {
+  0%, 100% { opacity: .32; transform: scale(1); }
+  50%      { opacity: .8;  transform: scale(1.14); }
+}
+body[data-theme="crimson-core"]::before {
+  animation-duration: 40s !important;
+}
+

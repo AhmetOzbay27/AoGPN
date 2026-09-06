@@ -5,7 +5,16 @@ namespace ServiceLib.Services.CoreConfig.Mihomo;
 /// hangi düğüme/yola işaret ettiğini taşıyan salt veri kaydı. Girişler (uygulama /
 /// domain / IP) sıralıdır — kural satırları ve grup adları bu sıraya göre üretilir.
 /// </summary>
-public sealed record GpnSoftRoutingEntry(string EntryType, string Value, string Port, string Action);
+/// <summary>
+/// Bir uygulama rotası (manuel liste satırı) için üretilen "ao-&lt;i&gt;" seçim grubunun
+/// hangi düğüme/yola işaret ettiğini taşıyan salt veri kaydı. Girişler (uygulama /
+/// domain / IP) sıralıdır — kural satırları ve grup adları bu sıraya göre üretilir.
+/// <see cref="WarpNodeId"/>: bu satırın "warp" rotasının egress düğümü
+/// (ProfileItem.IndexId). Boş → varsayılan WARP egress (aktif düğümün zinciri /
+/// küresel bypass). Dolu → üretici o düğüm için ayrı outbound üretir ve satırın
+/// seçim grubu üyesi olarak ona işaret eder.
+/// </summary>
+public sealed record GpnSoftRoutingEntry(string EntryType, string Value, string Port, string Action, string? WarpNodeId = null);
 
 /// <summary>
 /// GPN mihomo "soft" (kesintisiz) rotalama politikası: rota modu + yön + sıralı giriş
@@ -118,7 +127,7 @@ public static class GpnSoftRouting
     /// warp-socks. Çağıranlar politikadaki <see cref="GpnSoftRoutingPolicy.WarpEgressProxy"/>
     /// değerini iletir; null/boş ise legacy davranış korunur.
     /// </summary>
-    public static string MapActionToMember(string? action, bool invertManual, string? warpEgressProxy = null)
+    public static string MapActionToMember(string? action, bool invertManual, string? warpEgressProxy = null, string? warpNodeId = null)
     {
         // Eylem + yön kararı tek otoritede (GpnRoutingRuleService.ResolveDestination —
         // kara liste çevirisi dahil); burada yalnızca Clash üye adına çevrilir.
@@ -127,12 +136,23 @@ public static class GpnSoftRouting
         {
             GpnRoutingDestination.Direct => ClashDirect,
             GpnRoutingDestination.Block => ClashReject,
-            // Çift Bağlantıda "warp" (temiz/auth egress) vless-launcher'a gider;
-            // bypass yoksa legacy WARP SOCKS zinciri (warp-socks) kullanılır.
-            GpnRoutingDestination.WarpEgress => !string.IsNullOrEmpty(warpEgressProxy) ? warpEgressProxy! : GpnMihomoConfigService.WarpProxyName,
+            // "warp" (temiz/auth egress): satır kendi düğümünü seçtiyse (per-app
+            // warp düğümü — eski Ayarlar → GPN bypass düğümünün yerine geçen yeni
+            // akış) o düğümün egress outbound'una gider; yoksa Çift Bağlantıda
+            // vless-launcher, legacy'de WARP SOCKS zinciri (warp-socks).
+            GpnRoutingDestination.WarpEgress => !string.IsNullOrEmpty(warpNodeId)
+                ? WarpNodeProxyName(warpNodeId!)
+                : (!string.IsNullOrEmpty(warpEgressProxy) ? warpEgressProxy! : GpnMihomoConfigService.WarpProxyName),
             _ => GpnMihomoConfigService.NodesGroupName, // Tunnel → düğüm grubu
         };
     }
+
+    /// <summary>
+    /// Per-app warp düğümünün mihomo egress outbound adı (seçim grubu üyesi).
+    /// Üretici bu ada sahip outbound'u yalnızca düğüm çözülebildiğinde yazar;
+    /// çözülemeyen/boş düğümler varsayılan WARP egress'e düşer.
+    /// </summary>
+    public static string WarpNodeProxyName(string indexId) => $"warp-{indexId}";
 
     /// <summary>
     /// Launcher egress grubunun istenen seçimi: degrade (WARP faulted) →
@@ -187,7 +207,7 @@ public static class GpnSoftRouting
         {
             if (policy.Mode == GameTriggerModes.Manual)
             {
-                appTargets.Add(MapActionToMember(entry.Action, policy.InvertManualRouting, policy.WarpEgressProxy));
+                appTargets.Add(MapActionToMember(entry.Action, policy.InvertManualRouting, policy.WarpEgressProxy, entry.WarpNodeId));
             }
             else
             {
@@ -198,9 +218,16 @@ public static class GpnSoftRouting
         return (modeTarget, appTargets);
     }
 
-    /// <summary>Bir girişin yapısal kimlik anahtarı (parmak izi / grup eşleştirme).</summary>
+    /// <summary>
+    /// Bir girişin yapısal kimlik anahtarı (parmak izi / grup eşleştirme). WARP
+    /// düğümü seçimi de kimliğe dahildir: düğüm değişimi yapısal bir değişikliktir
+    /// (config yeniden üretilir), böylece canlı oturumda olmayan bir üyeye PUT
+    /// denemesi yapılmaz.
+    /// </summary>
     public static string EntryKey(GpnSoftRoutingEntry entry)
-        => $"{entry.EntryType}|{entry.Value}|{entry.Port}";
+        => entry.WarpNodeId.IsNotEmpty()
+            ? $"{entry.EntryType}|{entry.Value}|{entry.Port}|{entry.WarpNodeId}"
+            : $"{entry.EntryType}|{entry.Value}|{entry.Port}";
 
     /// <summary>
     /// Canlı superset oturumu varken giriş listesi YAPISAL olarak değişti mi?
@@ -229,7 +256,7 @@ public static class GpnSoftRouting
         // Girişlerin normalize edilmesi tek otoritededir (boş değer atlama + port/eylem
         // varsayılanları) — uygulama listesi aşırı yüklemesiyle aynı kod yolu.
         var entries = GpnRoutingRuleService.NormalizeEntries((ci?.ManualRoutes ?? []).Select(GpnRouteEntry.From))
-            .Select(e => new GpnSoftRoutingEntry(e.EntryType, e.Value, e.Port, e.Action))
+            .Select(e => new GpnSoftRoutingEntry(e.EntryType, e.Value, e.Port, e.Action, e.WarpNodeId))
             .ToList();
         return new GpnSoftRoutingPolicy(mode, invert, entries, ResolveWarpEgressProxy(config),
             ResolveIpCheckExtraDomains(config?.SpeedTestItem?.IPAPIUrl));
@@ -247,7 +274,7 @@ public static class GpnSoftRouting
         Config? config = null)
     {
         var entries = GpnRoutingRuleService.NormalizeEntries(apps.Select(GpnRouteEntry.From))
-            .Select(e => new GpnSoftRoutingEntry(e.EntryType, e.Value, e.Port, e.Action))
+            .Select(e => new GpnSoftRoutingEntry(e.EntryType, e.Value, e.Port, e.Action, e.WarpNodeId))
             .ToList();
         return new GpnSoftRoutingPolicy(mode, invertManualRouting, entries, ResolveWarpEgressProxy(config),
             ResolveIpCheckExtraDomains(config?.SpeedTestItem?.IPAPIUrl));

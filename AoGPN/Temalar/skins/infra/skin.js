@@ -239,6 +239,21 @@
     setAppRoute(processName, isTunneled(cur) ? 'direct' : 'vpn');
   }
 
+  // Gerçek exe ikonu (host AppIconService -> skinBridge.appIcons); ikon yoksa
+  // iki harfli yer tutucu kutu basılır.
+  function ifAppIcon(app) {
+    let uri = '';
+    if (app && app.exePath && B) {
+      try {
+        const icons = B.appIcons;
+        if (icons) uri = icons[String(app.exePath).trim().toLowerCase()] || '';
+      } catch (e) { /* read-only bridge */ }
+    }
+    const label = String(app.displayName || app.processName || 'APP').slice(0, 2).toUpperCase() || '?';
+    if (uri) return '<i class="if-appIco"><img src="' + uri + '" alt="" draggable="false"></i>';
+    return '<i class="if-appIco">' + esc(label) + '</i>';
+  }
+
   function renderApps() {
     const list = $('ifApps');
     if (!list) return;
@@ -249,6 +264,7 @@
       const pname = app.processName || app.value || app.name || '';
       const on = isTunneled(actionFor(app));
       return '<div class="if-row' + (live ? ' live' : '') + '" data-app="' + esc(pname) + '" data-if-pname="' + esc(pname) + '">' +
+        ifAppIcon(app) +
         '<span>' + esc(app.displayName || app.processName) + '</span>' +
         '<i><em style="width:' + (live ? 100 : 0) + '%"></em></i>' +
         '<b>' + esc(label) + '</b>' +

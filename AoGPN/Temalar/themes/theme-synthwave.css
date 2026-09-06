@@ -2,24 +2,48 @@
    AoGPN dashboard — theme: synthwave
    Part of the split stylesheet (see Temalar/dashboard.css for the load order).
    ========================================================================== */
+body[data-theme="synthwave"] {
+  --bg: #110814;
+  --violet: #C026D3;
+  --cyan: #DB2777;
+  --emerald: #0D9488;
+  --glass: rgba(192, 38, 211, 0.035);
+  --glass-border: rgba(192, 38, 211, 0.11);
+  --violet-rgb: 192,38,211;
+  --cyan-rgb: 219,39,119;
+  --emerald-rgb: 13,148,136;
 
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(192, 38, 211, 0.14);
+  --theme-glass-shadow: 0 1px 16px rgba(219, 39, 119, 0.06);
+  --theme-glass-hover-border: rgba(244, 114, 182, 0.34);
+  --theme-glass-hover-shadow: 0 4px 26px rgba(192, 38, 211, 0.13);
+  --theme-font-shadow: 0 0 12px rgba(192, 38, 211, 0.28), 0 0 22px rgba(219,39,119,.18);
+  --theme-ring-glow: drop-shadow(0 0 9px #C026D3) drop-shadow(0 0 5px #DB2777);
+  --theme-spinner-top: #C026D3;
+  --theme-spinner-right: #DB2777;
+  --theme-spinner-bottom: rgba(192, 38, 211, 0.2);
+  --theme-spinner-duration: .63s;
+  --theme-tooltip-border: rgba(244, 114, 182, 0.36);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(192, 38, 211, 0.16);
+  --theme-toast-border: rgba(244, 114, 182, 0.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(192, 38, 211, 0.12);
+  --theme-badge-border: rgba(244, 114, 182, 0.32);
+  --theme-badge-color: #F9A8D4;
+}
 
-  body[data-theme="synthwave"] {
-    --bg: #110814;
-    --violet: #C026D3;
-    --cyan: #DB2777;
-    --emerald: #0D9488;
-    --glass: rgba(192, 38, 211, 0.035);
-    --glass-border: rgba(192, 38, 211, 0.11);
-  }
-  body[data-theme="synthwave"]::after {
-    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background:
-      linear-gradient(180deg, transparent 0 76%, rgba(244,114,182,.14) 100%),
-      repeating-linear-gradient(90deg, rgba(217,70,239,.05) 0 2px, transparent 2px 130px);
-    /* synth-breathe animates opacity only — a compositor-driven property, so
-       this full-screen layer is never re-rasterized per frame and needs no
-       steps() quantization or blur removal. */
-    animation: synth-breathe 5.5s ease-in-out infinite alternate;
-  }
-  @keyframes synth-breathe { from { opacity: .5; } to { opacity: 1; } }
+/* Signature — retro sun + scanline breathe. */
+body[data-theme="synthwave"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    linear-gradient(180deg, transparent 0 76%, rgba(244,114,182,.14) 100%),
+    repeating-linear-gradient(90deg, rgba(217,70,239,.05) 0 2px, transparent 2px 130px);
+  /* synth-breathe animates opacity only — a compositor-driven property, so
+     this full-screen layer is never re-rasterized per frame and needs no
+     steps() quantization or blur removal. */
+  animation: synth-breathe 5.5s ease-in-out infinite alternate;
+}
+@keyframes synth-breathe { from { opacity: .5; } to { opacity: 1; } }
+body[data-theme="synthwave"]::before {
+  animation-duration: 40s !important;
+}

@@ -57,6 +57,27 @@ public class HttpClientHelper
         await httpClient.PutAsync(url, content);
     }
 
+    /// <summary>
+    /// JSON body'li PUT — HTTP durumunu ve yanıt gövdesini döndürür. Çekirdek
+    /// API'sine (ör. mihomo <c>PUT /configs</c>) durum doğrulamalı çağrılar için.
+    /// </summary>
+    public async Task<(bool Success, string? Body)> TryPutAsync(string url, Dictionary<string, string> headers)
+    {
+        try
+        {
+            var jsonContent = JsonUtils.Serialize(headers);
+            var content = new StringContent(jsonContent, Encoding.UTF8, MediaTypeNames.Application.Json);
+
+            var response = await httpClient.PutAsync(url, content);
+            var body = await response.Content.ReadAsStringAsync();
+            return (response.IsSuccessStatusCode, body);
+        }
+        catch
+        {
+            return (false, null);
+        }
+    }
+
     public async Task PatchAsync(string url, Dictionary<string, string> headers)
     {
         var myContent = JsonUtils.Serialize(headers);

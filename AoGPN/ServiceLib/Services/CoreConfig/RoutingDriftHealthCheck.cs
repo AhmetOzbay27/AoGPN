@@ -2,6 +2,8 @@ namespace ServiceLib.Services.CoreConfig;
 
 using ServiceLib.Handler;
 using ServiceLib.Handler.Builder;
+using ServiceLib.Services.CoreConfig.Mihomo;
+using ServiceLib.Services.Gpn;
 
 public enum RuleDriftState
 {
@@ -116,7 +118,40 @@ public sealed class RoutingDriftHealthCheck
                     error: $"Rule-drift check is mihomo only (current core: {builderResult.Context.RunCoreType}).");
             }
 
-            var generated = await CoreConfigHandler.GenerateClientConfig(builderResult.Context, null);
+            // Çalışan superset oturumu (GpnSoftPolicy + adaylar + vless bypass) canlı
+            // config'i üreten bağlamla BİREBİR yeniden üretilir — GpnCoreLauncher'ın
+            // GPN WireGuard bağlantısında yaptığı zenginleştirmenin aynısı. Bu
+            // yapılmazsa beklenen taraf legacy biçimde üretilir ve canlı superset
+            // config'le asla eşleşmez: GPN/Global oturumları boyunca her 30 sn'de bir
+            // yanlış "DRIFT detected" (ör. expected=57 live=62) basar. Superset
+            // oturum yoksa eski davranış korunur (legacy ↔ legacy karşılaştırması).
+            var context = builderResult.Context;
+            if (GpnSoftSession.IsActive)
+            {
+                var softContext = context with
+                {
+                    GpnSoftPolicy = GpnSoftRouting.BuildPolicy(_config),
+                };
+                // Aday listesi: yalnızca etkin WG sunucuları (launcher ile aynı kapı).
+                var enabledServers = await WireGuardServerCatalog.LoadAsync();
+                var candidates = enabledServers?.Where(s => s.IsEnabled).ToList();
+                if (candidates is { Count: > 1 })
+                {
+                    softContext = softContext with { GpnCandidates = candidates };
+                }
+                var bypassJson = _config.GuiItem.VlessBypassNodeJson;
+                if (bypassJson.IsNotEmpty())
+                {
+                    var bypass = JsonUtils.Deserialize<VlessProfileItem>(bypassJson);
+                    if (bypass is not null)
+                    {
+                        softContext = softContext with { GpnVlessBypass = bypass };
+                    }
+                }
+                context = softContext;
+            }
+
+            var generated = await CoreConfigHandler.GenerateClientConfig(context, null);
             if (!generated.Success || generated.Data is null)
             {
                 return Report(RuleDriftState.Unknown, error: "Cannot generate the mihomo config: " + generated.Msg);

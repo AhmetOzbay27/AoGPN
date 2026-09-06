@@ -56,6 +56,15 @@ public record CoreConfigContext
     public VlessProfileItem? GpnVlessBypass { get; init; }
 
     /// <summary>
+    /// Per-app WARP egress düğümleri: indexId → çözülmüş düğüm profili. GpnCoreLauncher
+    /// politika girişlerinin WarpNodeId değerlerini bağlantı anında doldurur; üretici
+    /// (GpnMihomoConfigService) bu düğümler için ayrı egress outbound'ları üretir ve
+    /// ilgili uygulama satırlarının "warp" seçim grubu üyelerini onlara işaret eder.
+    /// Eksik/boş → satırlar varsayılan WARP egress'e düşer.
+    /// </summary>
+    public IReadOnlyDictionary<string, WarpNodeProfile>? GpnWarpNodes { get; init; }
+
+    /// <summary>
     /// True: bu bağlam HARİCİ bir çekirdek süreci yerine uygulama-içi YEREL GPN
     /// motorunu (WinDivert yakalama + WireGuard veri düzlemi + Wintun adaptörü —
     /// ServiceLib/Services/Gpn) ister. CoreStartStrategyFactory.For(context) bu

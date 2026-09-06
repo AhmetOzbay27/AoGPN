@@ -23,11 +23,11 @@ etiketidir:
 
 ```xml
 <PropertyGroup>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
 </PropertyGroup>
 ```
 
-Bu değer derlenince assembly sürümü olur (`1.1.0.0`). Aşağıdaki her yer aynı
+Bu değer derlenince assembly sürümü olur (`1.1.1.0`). Aşağıdaki her yer aynı
 kaynaktan beslenir, ayrıca elle güncellenmesi **gerekmez**:
 
 | Nerede görünür | Kaynak |
@@ -44,9 +44,9 @@ kaynaktan beslenir, ayrıca elle güncellenmesi **gerekmez**:
 ## 2. Numaralandırma şeması
 
 - **Assembly / güncelleme-kontrol sürümü:** AoGPN-yerli **`1.x.x`** şeması
-  kullanılır (`Directory.Build.props`). Örn. şu anki sürüm: **1.1.0**.
-- **CHANGELOG:** Beslenen değer aynı sürüm numarasıyla `[1.1.0]` başlığı olarak
-  yazılır. Yayınlanmamış iç geliştirme işleri, `1.1.0` altında
+  kullanılır (`Directory.Build.props`). Örn. şu anki sürüm: **1.1.1**.
+- **CHANGELOG:** Beslenen değer aynı sürüm numarasıyla `[1.1.1]` başlığı olarak
+  yazılır. Yayınlanmamış iç geliştirme işleri, `1.1.1` altında
   **"Development milestones folded into this release"** bölümünde `####`
   alt başlıkları olarak toplanır (`7.26.x` gibi miras alınan numaralar tek tek
   sürüm **değildir** — bunlar tek bir yayını oluşturan adımlardır).
@@ -58,20 +58,20 @@ kaynaktan beslenir, ayrıca elle güncellenmesi **gerekmez**:
 ## 3. Yeni sürüm çıkarma: adım adım
 
 1. **Assembly sürümünü artır** — `AoGPN/Directory.Build.props`
-   `<Version>` değerini güncelle (ör. `1.1.0` → `1.2.0`).
+   `<Version>` değerini güncelle (ör. `1.1.1` → `1.2.0`).
 2. **CHANGELOG'a giriş ekle** — en üste yeni `## [x.y.z]` başlığını yaz ve
    değişiklikleri `### Added` / `### Changed` / `### Fixed` / `### Technical`
    bölümlerine ayır. (Yapı detayı: [4. CHANGELOG yapısı](#4-changelog-yapısı).)
 3. **Release etiketini sürümle eşle** — GitHub üzerinden yayın etiketi (tag),
-   assembly sürümüyle **birebir** uyumlu olmalıdır (ör. `1.1.0`).
+   assembly sürümüyle **birebir** uyumlu olmalıdır (ör. `1.1.1`).
    Güncelleme kontrolü (`UpdateService`) assembly sürümünü, GitHub release
    etiketinden çözülen `SemanticVersion` ile karşılaştırır:
    - Etiket sürümden küçükse → program yanlışlıkla sürekli "güncelleme var"
      der.
    - Etiket sürümden büyükse → yeni yayını hiç görmez.
-   Yani: **etiket = assembly sürümü** olmalı (örn. `1.1.0`). Mevcut etiket
+   Yani: **etiket = assembly sürümü** olmalı (örn. `1.1.1`). Mevcut etiket
    biçimi `v` öneksizdir (tek mevcut etiket: `7.24.4`), bu yüzden aynı şekilde
-   `1.1.0` kullan.
+   `1.1.1` kullan.
 4. **Yeni i18n anahtarı eklendiyse** → [5. Dil dosyaları](#5-dil-dosyalarını-güncelleme).
 5. **Dashboard değiştiyse** → [6. Dashboard'ı güncelleme](#6-dashboardı-güncelleme).
 6. **Doğrulamayı çalıştır** → [7. Doğrulama](#7-doğrulama--smoke-testler).
@@ -83,7 +83,7 @@ kaynaktan beslenir, ayrıca elle güncellenmesi **gerekmez**:
 İstenen düzen (yeni en üstte):
 
 ```
-## [1.1.0] — Kısa başlık
+## [1.1.1] — Kısa başlık
 
 Giriş paragrafı (birkaç cümle; sürüm numarası, öne çıkanlar).
 
@@ -205,7 +205,7 @@ cd AoGPN && dotnet test ServiceLib.Tests/ServiceLib.Tests.csproj \
 **Smoke (uygulama açıkken):**
 
 - Kenar çubuğundan **About & Help** → Program Info sekmesinde sürümün
-  `V1.1.0` olduğunu gör (canlı push ile assembly'den gelir).
+  `V1.1.1` olduğunu gör (canlı push ile assembly'den gelir).
 - Dil değiştirince About sayfası ve yeni eklenen görünümün Türkçe dahil 9 dilde
   doğru çevrildiğini doğrula.
 

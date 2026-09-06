@@ -60,6 +60,23 @@ public sealed class WireGuardHandshakeProbe : IWireGuardHandshakeProbe
     private const string Tag = "WgHandshake";
     private readonly UdpProbeSocketFactory _socketFactory;
 
+    // Hata logu rate-limit: dashboard'ın canlı küme kartı her ~15-30 sn'de tüm
+    // sunucuları probe'lar; sunucu yanıtsızken her döngü özdeş "el sıkışma
+    // yanıtsız" satırı basar (günde on binlerce). İlk oluşum + her 50.'si loglanır;
+    // teşhis korunur, günlük şişmez. Karar mantığı etkilenmez — yalnızca loglama.
+    private readonly ConcurrentDictionary<string, int> _failureCounters = new();
+
+    private bool LogFailureRateLimited(string serverId, string message)
+    {
+        var n = _failureCounters.AddOrUpdate(serverId, 1, (_, c) => c + 1);
+        if (n == 1 || n % 50 == 0)
+        {
+            Logging.SaveLog(message);
+            return true;
+        }
+        return false;
+    }
+
     /// <summary>Üretim kurucusu — gerçek UdpClient tabanlı soket kullanır.</summary>
     public WireGuardHandshakeProbe()
         => _socketFactory = static family => new UdpClientProbeSocket(family);
@@ -138,14 +155,16 @@ public sealed class WireGuardHandshakeProbe : IWireGuardHandshakeProbe
             // Geçerli el sıkışma yanıtsız — junk-probe'daki "beklenen sessizlik"
             // DEĞİL; sağlıklı sunucu yanıt verirdi. ICMP kanıtı yok → Blocked'tan
             // ayrı durum (HandshakeNoResponse); karar GpnServerSelectionService'te.
-            Logging.SaveLog($"[{Tag}] {serverId} ({host}:{port}) el sıkışma yanıtsız ({options.MaxAttempts} gönderim).");
+            LogFailureRateLimited(serverId,
+                $"[{Tag}] {serverId} ({host}:{port}) el sıkışma yanıtsız ({options.MaxAttempts} gönderim).");
             return new UdpProbeResult(serverId, UdpProbeStatus.HandshakeNoResponse, -1, false,
                 $"timeout after {options.MaxAttempts} attempts ({options.WaitTimeoutMs}ms) — geçerli el sıkışma yanıtsız");
         }
         catch (SocketException ex) when (IsIcmpUnreachable(ex.SocketErrorCode))
         {
             sw.Stop();
-            Logging.SaveLog($"[{Tag}] {serverId} ({host}:{port}) UDP bloklu: {ex.SocketErrorCode}");
+            LogFailureRateLimited(serverId,
+                $"[{Tag}] {serverId} ({host}:{port}) UDP bloklu: {ex.SocketErrorCode}");
             return new UdpProbeResult(serverId, UdpProbeStatus.Blocked, (int)sw.ElapsedMilliseconds, false, ex.SocketErrorCode.ToString());
         }
         catch (OperationCanceledException)
@@ -156,7 +175,8 @@ public sealed class WireGuardHandshakeProbe : IWireGuardHandshakeProbe
         catch (Exception ex)
         {
             sw.Stop();
-            Logging.SaveLog($"[{Tag}] {serverId} ({host}:{port}) probe hatası: {ex.Message}");
+            LogFailureRateLimited(serverId,
+                $"[{Tag}] {serverId} ({host}:{port}) probe hatası: {ex.Message}");
             return new UdpProbeResult(serverId, UdpProbeStatus.NoResponse, -1, false, ex.Message);
         }
     }

@@ -237,6 +237,8 @@
   "route.vpn": "VPN",
   "route.warp": "WARP",
   "warp.fallbackNotice": "WARP-маршрут требует WireGuard-узла — активное соединение не WireGuard, поэтому WARP-приложения идут через VPN.",
+  "warp.nodeDefault": "По умолчанию (активный узел)",
+  "warp.nodePickerHint": "WARP-трафик этого приложения выходит через выбранный узел — выберите любой узел из вашего списка (Италия, Германия, ЮАР…).",
   "settings.language": "Язык",
   "settings.save": "Сохранить",
   "settings.stack": "Стек",

@@ -28,9 +28,18 @@ public class SplitTunnelAppItem : ReactiveObject
     [Reactive]
     public string ExePath { get; set; }
 
-    /// <summary>vpn | proxy | vpn+proxy | direct | block.</summary>
+    /// <summary>vpn | proxy | vpn+proxy | direct | block | warp.</summary>
     [Reactive]
     public string Action { get; set; } = "proxy";
+
+    /// <summary>
+    /// WARP egress düğümü (ProfileItem.IndexId) — bu satırın "warp" rotası bu
+    /// düğüm üzerinden çıkar. Boş → varsayılan WARP egress. Dashboard'a
+    /// snapshot'ta iletilir; ad (WarpNodeName) renderer tarafında düğüm listesinden
+    /// çözülür.
+    /// </summary>
+    [Reactive]
+    public string WarpNodeIndexId { get; set; } = "";
 
     /// <summary>Effective route (proxy / direct / block) this entry currently follows.</summary>
     [Reactive]

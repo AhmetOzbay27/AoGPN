@@ -62,6 +62,7 @@ internal sealed class DashboardPushService
     private readonly GpnTelemetryService _gpnTelemetry = new();
     private readonly GpnResilienceLog _gpnResilienceLog = new();
     private readonly ProcessCatalogService _processCatalogService = new();
+    private readonly AppIconService _appIconService = new();
 
     /// <summary>GpnCaptureLoop'un son yayınladığı telemetri anlık görüntüsü (dashboard'a yeniden basmak için).</summary>
     private GpnCaptureStatsSnapshot? _lastCaptureStats;
@@ -74,6 +75,12 @@ internal sealed class DashboardPushService
     // The periodic health check only republishes when the verdict changes, so the
     // banner never flickers on every 30 s tick.
     private string _lastRuleDriftVerdict = "";
+
+    /// <summary>Yakalama oturumu başladıktan sonra sürüklenme yargısı için beklenen ısınma süresi (ilk port haritası + ilk telemetri tik'i).</summary>
+    private static readonly TimeSpan CaptureDriftWarmup = TimeSpan.FromSeconds(5);
+
+    /// <summary>Sürüklenme yargısında kabul edilen en bayat anlık görüntü yaşı (köprü her saniye yayınlar — bayat görüntü köprünün ölü/kapalı olduğunu gösterir).</summary>
+    private static readonly TimeSpan CaptureDriftStaleAfter = TimeSpan.FromSeconds(10);
 
     public DashboardPushService(
         Func<string, Task> executeScript,
@@ -444,6 +451,36 @@ internal sealed class DashboardPushService
         }
     }
 
+    /// <summary>
+    /// Resolves the shell icons of the executables the renderer displays (Game
+    /// Boost / Connection Monitor rows, the running-apps picker) and pushes them
+    /// back as window.setAppIcons({ icons: { path: dataUri } }). The service caches
+    /// per path, so repeated 2 s ticks cost nothing after the first extraction.
+    /// </summary>
+    public async Task PushAppIconsAsync(IReadOnlyList<string> paths)
+    {
+        if (!WebViewReady || paths is null || paths.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var icons = await Task.Run(() => _appIconService.GetIconDataUris(paths));
+            if (icons.Count == 0)
+            {
+                return;
+            }
+
+            var json = JsonSerializer.Serialize(new { icons }, RouteTestJsonOptions);
+            await ExecuteScriptSafelyAsync($"window.setAppIcons?.({json});");
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("AoGPN app-icon push failed", ex);
+        }
+    }
+
     public async Task PushProcessCatalogAsync()
     {
         if (!WebViewReady)
@@ -533,9 +570,11 @@ internal sealed class DashboardPushService
             {
                 processName = item.ProcessName,
                 displayName = item.DisplayName,
+                exePath = item.ExePath,
                 entryType = item.EntryType,
                 value = item.Value,
                 action = item.Action,
+                warpNodeIndexId = item.WarpNodeIndexId,
                 routeTag = item.RouteTag,
                 routeText = item.RouteText,
                 isRunning = item.IsRunning,
@@ -603,30 +642,37 @@ internal sealed class DashboardPushService
         }
 
         // Yakalama sürüklenmesi (A2): GPN modunda tünellenmesi gereken bir
-        // uygulamanın canlı bağlantısı var ama köprü onun PID'lerinden hiç paket
-        // saymadıysa trafik doğrudan gidiyordur — ping düşmez, hiçbir hata
-        // görünmez. Yalnızca köprünün beklendiği modda (tun + manual = "gpn")
-        // denetle: global/proxy modunda yakalama zaten hedef değildir, sürüklenme
-        // kavramı yoktur. Boş PID kümesi (kimliksiz sahip) yargılanmaz.
+        // uygulamanın canlı UDP bağlantısı var ama köprü onun PID'lerinden hiç
+        // paket saymadıysa o trafik (varsa) tünele girmiyordur — ping düşmez,
+        // hiçbir hata görünmez. Yalnızca köprünün beklendiği modda (tun + manual
+        // = "gpn") denetle: global/proxy modunda yakalama zaten hedef değildir,
+        // sürüklenme kavramı yoktur.
+        //
+        // Üç yanlış-pozitif kapısı:
+        //  1. Adaylar YALNIZCA UDP canlı bağlantılarından kurulur (BuildCandidates)
+        //     — WinDivert filtresi NETWORK katmanında yalnızca outbound UDP
+        //     yakalar; TCP bağlantıları tasarım gereği doğrudan gider ve onlar
+        //     için yakalanan paket beklentisi yoktur (aksi hâlde Discord /
+        //     LeagueClient gibi TCP ağırlıklı uygulamalar her oturumda kalıcı
+        //     yanlış uyarı üretirdi).
+        //  2. Isınma süresi: yakalama oturumu başladıktan sonraki ilk saniyelerde
+        //     (ilk port haritası + ilk telemetri tik'i düşene dek) yargı verilmez
+        //     — bağlanma anında banner yanıp sönmez.
+        //  3. Tazelik: anlık görüntü yalnızca CANLI köprüden geliyorsa kullanılır
+        //     (döngü her saniye yayınlar; bayat görüntü = köprü ölü/kapalı veya
+        //     kapanış/failover arası — yargılanmaz). Boş PID kümesi (kimliksiz
+        //     sahip) zaten aday üretmez.
         object[] captureDrift = [];
-        if (routingMode == "gpn")
+        if (routingMode == "gpn"
+            && _lastCaptureStats is { } captureStats
+            && DateTimeOffset.UtcNow - captureStats.StartedAt >= CaptureDriftWarmup
+            && DateTimeOffset.UtcNow - captureStats.LastActivityAt <= CaptureDriftStaleAfter)
         {
-            var livePidsByProcess = monitor.Connections
-                .Where(c => c.Pid > 0 && c.ProcessName.IsNotEmpty())
-                .GroupBy(c => c.ProcessName, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(
-                    g => g.Key,
-                    g => (IReadOnlyCollection<int>)g.Select(c => c.Pid).Distinct().ToArray(),
-                    StringComparer.OrdinalIgnoreCase);
-            var candidates = connectionViewModel.Apps
-                .Where(a => a.EntryType == "app"
-                    && string.Equals(a.Action, connectionViewModel.InvertManualRouting ? "direct" : "vpn", StringComparison.OrdinalIgnoreCase)
-                    && a.LiveConnectionCount > 0)
-                .Select(a => new CaptureDriftCandidate(
-                    a.Value,
-                    a.LiveConnectionCount,
-                    livePidsByProcess.TryGetValue(a.Value, out var pids) ? pids : []));
-            captureDrift = GpnCaptureDriftChecker.FindDrifted(_lastCaptureStats?.ByPid, candidates)
+            var candidates = GpnCaptureDriftChecker.BuildCandidates(
+                connectionViewModel.Apps,
+                monitor.Connections,
+                connectionViewModel.InvertManualRouting);
+            captureDrift = GpnCaptureDriftChecker.FindDrifted(captureStats.ByPid, candidates)
                 .Select(d => new { processName = d.ProcessName, liveConnections = d.LiveConnections })
                 .ToArray();
         }

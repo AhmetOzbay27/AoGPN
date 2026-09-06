@@ -63,6 +63,15 @@ internal static class ProbeEgressNic
         lock (Sync)
         {
             _cached = null;
+            // IP_UNICAST_IF yeteneği de sıfırlanır: tek bir bozuk/geçersiz NIC
+            // anlık görüntüsü (ör. yarı kurulu Wi-Fi adaptörü — "Adaptör okunamadı"
+            // sonrası bayat indeks) yüzünden ilk pin denemesi WSAEADDRNOTAVAIL ile
+            // düşüp yetenek "desteklenmiyor" işaretlenirse, oturum boyunca TÜM
+            // probe'lar egress pinsiz kalır ve TUN içine yakalanır (canlı gözlenen:
+            // tek hata sonrası sürekli "IP_UNICAST_IF desteklenmiyor" → el sıkışma
+            // probe'ları hedefe asla ulaşmaz). Ağ durumu değişince yetenek yeniden
+            // yoklanır — doğru fiziksel NIC'le pin başarılı olur.
+            Volatile.Write(ref _unicastIfCapability, 0);
         }
     }
 

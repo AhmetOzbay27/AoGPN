@@ -12,6 +12,31 @@ public class CoreHealthTests
         Assert.Null(snapshot.CoreType);
         Assert.Null(snapshot.Port);
         Assert.Null(snapshot.Error);
+        Assert.False(snapshot.Recovering);
+        Assert.Null(snapshot.ExitCode);
+        Assert.Null(snapshot.OutputTail);
+    }
+
+    [Fact]
+    public void AutoRecoverySnapshotCarriesRecoveringFlagAndCrashDetails()
+    {
+        // CoreManager otomatik kurtarma başlarken Degraded + recovering=true yayınlar;
+        // terminal Failed ise çıkış kodunu ve stdout/stderr kuyruğunu taşır — UI bu
+        // alanlardan "yeniden bağlanıyor" durumunu ve hata kartı ayrıntısını besler.
+        var degraded = new CoreHealthSnapshot(
+            CoreHealthRole.Main, CoreHealthState.Degraded, ECoreType.mihomo, 1080,
+            "Core exited unexpectedly; restarting.", recovering: true);
+
+        Assert.True(degraded.Recovering);
+        Assert.False(degraded.IsReady);
+
+        var failed = new CoreHealthSnapshot(
+            CoreHealthRole.Main, CoreHealthState.Failed, ECoreType.mihomo, 1080,
+            "recovery exhausted", exitCode: 5, outputTail: "fatal error line 1\nfatal error line 2");
+
+        Assert.False(failed.Recovering);
+        Assert.Equal(5, failed.ExitCode);
+        Assert.Contains("fatal error line 2", failed.OutputTail);
     }
 
     [Fact]

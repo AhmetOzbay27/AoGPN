@@ -39,7 +39,16 @@
 @import url("themes/theme-candy.css");
 @import url("themes/theme-obsidian.css");
 @import url("themes/theme-sandstorm.css");
-@import url("themes/theme-nexus-palettes.css");
+@import url("themes/theme-neon-cyber.css");
+@import url("themes/theme-titanium-orange.css");
+@import url("themes/theme-matrix-green.css");
+@import url("themes/theme-ocean-blue.css");
+@import url("themes/theme-red-phantom.css");
+@import url("themes/theme-violet-nova.css");
+@import url("themes/theme-arctic-ice.css");
+@import url("themes/theme-gold-elite.css");
+@import url("themes/theme-stealth-camo.css");
+@import url("themes/theme-crimson-core.css");
 
 /* Loaded LAST so the reduce-effects kill switch always wins the cascade. */
 @import url("effects.css");

@@ -8,9 +8,39 @@
     --bg: #020A03;
     --violet: #16A34A;
     --cyan: #15803D;
-    --emerald: #16A34A;
+    --emerald: #00FF41;  /* phosphor green — distinct from the idle #16A34A so the connected state is visible */
     --glass: rgba(22, 163, 74, 0.03);
     --glass-border: rgba(22, 163, 74, 0.10);
+
+    /* Theme scaffold — shared rules in components.css consume these variables.
+       Spinner is a full custom build; tooltip/toast/badge go terminal-style. */
+    --theme-glass-border: rgba(22, 163, 74, 0.08);
+    --theme-glass-shadow: 0 1px 12px rgba(22, 163, 74, 0.03);
+    --theme-glass-hover-border: rgba(0, 255, 65, 0.3);
+    --theme-glass-hover-shadow: 0 3px 22px rgba(22, 163, 74, 0.12);
+    --theme-font-shadow: 0 0 4px rgba(22, 163, 74, 0.15);
+    --theme-ring-glow: drop-shadow(0 0 8px #00FF41);
+    --theme-spinner-top: rgba(22, 163, 74, 0.2);
+    --theme-spinner-right: rgba(22, 163, 74, 0.2);
+    --theme-spinner-bottom: rgba(22, 163, 74, 0.2);
+    --theme-spinner-duration: 1.2s;
+    --theme-spinner-border: none;
+    --theme-spinner-bg: repeating-linear-gradient(0deg, #00FF41 0 3px, transparent 3px 7px);
+    --theme-spinner-radius: 2px;
+    --theme-spinner-animation: matrix-bar 1.2s linear infinite;
+    --theme-tooltip-bg: rgba(0,0,0,.92);
+    --theme-tooltip-border: rgba(0,255,65,.35);
+    --theme-tooltip-color: #00FF41;
+    --theme-tooltip-font: 'Courier New', monospace;
+    --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 12px rgba(0,255,65,.15);
+    --theme-toast-bg: rgba(0,0,0,.95);
+    --theme-toast-border: rgba(0,255,65,.3);
+    --theme-toast-color: #00FF41;
+    --theme-toast-font: 'Courier New', monospace;
+    --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 15px rgba(0,255,65,.1);
+    --theme-badge-border: rgba(0,255,65,.3);
+    --theme-badge-color: #00FF41;
+    --theme-badge-font: 'Courier New', monospace;
   }
 
   /* --- Matrix: scanning grid overlay --- */  body[data-theme="matrix"]::after {
@@ -36,42 +66,8 @@
        per-frame GPU cost in the dashboard; the shared gradient is soft already */
   }
 
-  /* --- Matrix accent: subtle green terminal tint --- */
-  body[data-theme="matrix"] .glass {
-    border-color: rgba(22, 163, 74, 0.08);
-    box-shadow: 0 1px 12px rgba(22, 163, 74, 0.03);
-  }
-  body[data-theme="matrix"] .font-display {
-    text-shadow: 0 0 4px rgba(22, 163, 74, 0.15);
-  }
-  body[data-theme="matrix"]    .ring-wrap .ring-svg { filter: drop-shadow(0 0 8px #00FF41); }
-
   /* Matrix: falling bar spinner */
-  body[data-theme="matrix"] .theme-spinner {
-    border: none;
-    background: repeating-linear-gradient(0deg, #00FF41 0 3px, transparent 3px 7px);
-    border-radius: 2px;
-    animation: matrix-bar 1.2s linear infinite;
-  }
   @keyframes matrix-bar {
     0% { background-position: 0 0; }
     100% { background-position: 0 28px; }
   }
-  /* Matrix: green terminal tooltip */
-  body[data-theme="matrix"] [title]:hover::after {
-    background: rgba(0,0,0,.92);
-    border-color: rgba(0,255,65,.35);
-    color: #00FF41;
-    font-family: 'Courier New', monospace;
-    box-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 12px rgba(0,255,65,.15);
-  }
-  /* Matrix: green terminal toast */
-  body[data-theme="matrix"] #nodeToast {
-    background: rgba(0,0,0,.95);
-    border-color: rgba(0,255,65,.3);
-    color: #00FF41;
-    font-family: 'Courier New', monospace;
-    box-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 15px rgba(0,255,65,.1);
-  }
-  body[data-theme="matrix"] .status-badge { border-color: rgba(0,255,65,.3); color: #00FF41; font-family: 'Courier New', monospace; }
-  body[data-theme="matrix"] #matrixCursor { display: block; }

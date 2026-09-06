@@ -53,6 +53,22 @@ const decl = (sheet, selector, prop) => {
   return r ? r.style.getPropertyValue(prop) : null;
 };
 
+// Like ruleFor, but matches selectors inside comma-separated rule lists
+// (e.g. '.cs-option:focus-visible, #dashboardLangPopover [data-lang]:focus-visible').
+const ruleForContains = (sheet, selector) => {
+  const walk = (rules) => {
+    for (const r of rules || []) {
+      if (r.selectorText && String(r.selectorText).split(',').map(x => x.trim()).includes(selector)) return r;
+      if (r.cssRules) {
+        const hit = walk(r.cssRules);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  return walk(sheet.cssRules);
+};
+
 const sheetOf = (skin) => parseSheet(fs.readFileSync(path.join(SKINS, skin, 'skin.css'), 'utf8'));
 
 function dashboardCss() {
@@ -89,7 +105,8 @@ test('cssom: NEXUS switches have a visible focus style', () => {
 test('cssom: dashboard custom selects have visible focus styles', () => {
   const sheet = parseSheet(dashboardCss());
   assert.ok(decl(sheet, '.cs-trigger:focus-visible', 'border-color'), 'custom select trigger highlights on keyboard focus');
-  assert.ok(decl(sheet, '.cs-option:focus-visible', 'background'), 'custom select options highlight on keyboard focus');
+  const optRule = ruleForContains(sheet, '.cs-option:focus-visible');
+  assert.ok(optRule && optRule.style.getPropertyValue('background'), 'custom select options highlight on keyboard focus');
 });
 
 // ---------------------------------------------------------------------------

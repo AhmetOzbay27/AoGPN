@@ -25,6 +25,10 @@ public sealed class DashboardMessageDispatcher
 {
     private readonly IDashboardBridge _bridge;
 
+    // Boot diagnostic: set when the first renderer message of the session is
+    // logged, so a dead renderer→host channel is visible in the diag log.
+    private bool _firstRendererMessageLogged;
+
     // The bridge accepts only small, strict JSON objects from the WebView2 renderer.
     private static readonly JsonDocumentOptions WebMessageJsonOptions = new()
     {
@@ -77,6 +81,15 @@ public sealed class DashboardMessageDispatcher
             using var rootDocument = JsonDocument.Parse(rawMessage, WebMessageJsonOptions);
             var root = rootDocument.RootElement;
             var action = dashboardMessage.Action;
+
+            // Boot diagnostic: log the first renderer message of the session so a
+            // dead renderer→host channel is visible in the diag log instead of
+            // silently disabling every dashboard action.
+            if (!_firstRendererMessageLogged)
+            {
+                _firstRendererMessageLogged = true;
+                DiagLog.Write($"WEBVIEW_MSG first-message action={action}");
+            }
 
             switch (action)
             {
@@ -468,6 +481,17 @@ public sealed class DashboardMessageDispatcher
                     await PushProcessCatalogAsync();
                     break;
 
+                case "get_app_icons":
+                    // Renderer asks for the shell icons of the executables its tables
+                    // display (Game Boost / Connection Monitor / running-apps picker).
+                    // Paths are capped to bound extraction work; the host answers
+                    // with window.setAppIcons({ icons: { path: dataUri } }).
+                    if (TryGetPathArrayProperty(root, "paths", out var iconPaths))
+                    {
+                        await PushAppIconsAsync(iconPaths);
+                    }
+                    break;
+
                 case "refresh_monitor":
                     if (ViewModel?.ConnectionViewModel is { } monitorViewModel)
                     {
@@ -485,9 +509,15 @@ public sealed class DashboardMessageDispatcher
                     }
 
                     TryGetStringProperty(root, "displayName", out var routeDisplayName);
+                    // Per-app WARP egress düğümü (Ayarlar → GPN bypass'ın yerine):
+                    // "warp" rotasında isteğe bağlı warpNodeIndexId iletilir — satır
+                    // o düğümün egress'inden çıkar. Yalnızca warp rotasında saklanır.
+                    TryGetStringProperty(root, "warpNodeIndexId", out var routeWarpNode);
+                    TryGetStringProperty(root, "warpNodeName", out var routeWarpNodeName);
                     if (ViewModel?.ConnectionViewModel is { } routeViewModel)
                     {
-                        var applied = await routeViewModel.SetDashboardAppRouteAsync(routeProcess, routeDisplayName, routeAction);
+                        var applied = await routeViewModel.SetDashboardAppRouteAsync(
+                            routeProcess, routeDisplayName, routeAction, routeWarpNode, routeWarpNodeName);
                         await PushMonitorSnapshotAsync(force: true);
                         await NotifyNodesOpAsync(applied ? "Application route saved" : "Application route was rejected");
                     }
@@ -714,8 +744,20 @@ public sealed class DashboardMessageDispatcher
                     break;
 
                 case "set_theme":
-                    if (TryGetStringProperty(root, "theme", out var webTheme)
-                        && TryMapWebThemeToWpf(webTheme, out var wpfTheme)
+                    // Persist the raw dashboard theme id (all 25, not just the 11
+                    // with a WPF palette) so the startup push restores whatever the
+                    // user picked from the Appearance deck — including aurora/candy/
+                    // obsidian/sandstorm and the nexus palettes, which have no native
+                    // ETheme equivalent. Mapped themes additionally update the native
+                    // side through the sidebar ViewModel.
+                    if (!TryGetStringProperty(root, "theme", out var webTheme)
+                        || !MainWindow.IsKnownDashboardTheme(webTheme))
+                    {
+                        break;
+                    }
+
+                    AppManager.Instance.Config.UiItem.DashboardTheme = webTheme;
+                    if (TryMapWebThemeToWpf(webTheme, out var wpfTheme)
                         && AppManager.Instance.Config.UiItem.CurrentTheme != wpfTheme)
                     {
                         // Reuse the native ViewModel so Material Design resources,
@@ -726,9 +768,9 @@ public sealed class DashboardMessageDispatcher
                         if (!_bridge.TryApplySidebarTheme(wpfTheme))
                         {
                             AppManager.Instance.Config.UiItem.CurrentTheme = wpfTheme;
-                            ConfigSaveQueue.RequestSave(AppManager.Instance.Config);
                         }
                     }
+                    ConfigSaveQueue.RequestSave(AppManager.Instance.Config);
                     break;
 
                 case "set_system_proxy_mode":
@@ -928,6 +970,48 @@ public sealed class DashboardMessageDispatcher
 
         value = candidate;
         return true;
+    }
+
+    /// <summary>
+    /// Reads the renderer's app-icon request: an array of executable paths.
+    /// Paths may exceed the 64-char short-string limit, so this decoder is
+    /// separate from TryGetStringArrayProperty; the count is capped at 48 per
+    /// request so a pathological renderer cannot trigger unbounded icon work.
+    /// </summary>
+    internal static bool TryGetPathArrayProperty(
+        JsonElement objectElement,
+        string propertyName,
+        out string[] paths)
+    {
+        paths = [];
+        if (!objectElement.TryGetProperty(propertyName, out var property)
+            || property.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var result = new List<string>();
+        foreach (var item in property.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var candidate = item.GetString();
+            if (!string.IsNullOrWhiteSpace(candidate) && candidate.Length <= 320)
+            {
+                result.Add(candidate.Trim());
+            }
+
+            if (result.Count >= 48)
+            {
+                break;
+            }
+        }
+
+        paths = result.ToArray();
+        return paths.Length > 0;
     }
 
     internal static bool TryGetStringArrayProperty(
@@ -1244,6 +1328,9 @@ public sealed class DashboardMessageDispatcher
 
     private Task PushProcessCatalogAsync()
         => _bridge.PushProcessCatalogAsync();
+
+    private Task PushAppIconsAsync(string[] paths)
+        => _bridge.PushAppIconsAsync(paths);
 
     private Task PushNodePoolAsync()
         => _bridge.PushNodePoolAsync();

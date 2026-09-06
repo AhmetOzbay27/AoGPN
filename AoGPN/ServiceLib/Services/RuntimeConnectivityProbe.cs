@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using ServiceLib.UdpTest;
 
 namespace ServiceLib.Services;
@@ -336,15 +337,32 @@ public static class RuntimeConnectivityProbe
         }
     }
 
-    public static async Task<RuntimeConnectivityResult> ProbeDnsAsync(string host, TimeSpan timeout, CancellationToken cancellationToken = default)
+    public static async Task<RuntimeConnectivityResult> ProbeDnsAsync(
+        string host,
+        TimeSpan timeout,
+        IPEndPoint? dnsServer = null,
+        CancellationToken cancellationToken = default)
     {
         var timer = Stopwatch.StartNew();
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(timeout);
-            await Dns.GetHostAddressesAsync(host, timeoutCts.Token);
-            return RuntimeConnectivityResult.Passed(RuntimeProbeKind.Dns, host, timer.Elapsed);
+
+            if (dnsServer is null)
+            {
+                await Dns.GetHostAddressesAsync(host, timeoutCts.Token);
+                return RuntimeConnectivityResult.Passed(RuntimeProbeKind.Dns, host, timer.Elapsed);
+            }
+
+            var answerCount = await QueryDnsServerAsync(host, dnsServer, timeoutCts.Token);
+            if (answerCount is > 0)
+            {
+                return RuntimeConnectivityResult.Passed(RuntimeProbeKind.Dns, host, timer.Elapsed);
+            }
+            return RuntimeConnectivityResult.Failed(
+                RuntimeProbeKind.Dns, host, RuntimeProbeErrorCode.DnsFailed,
+                "resolver returned no records (NXDOMAIN/SERVFAIL)", timer.Elapsed);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -358,5 +376,51 @@ public static class RuntimeConnectivityProbe
         {
             return RuntimeConnectivityResult.Failed(RuntimeProbeKind.Dns, host, RuntimeProbeErrorCode.Unknown, ex.Message, timer.Elapsed);
         }
+    }
+
+    /// <summary>
+    /// Belirtilen sunucuya tek sorguluk ham UDP DNS sorgusu gönderir ve yanıttaki
+    /// kayıt sayısını döndürür; yanıt yoksa ya da ID uyuşmazsa null. Sistem
+    /// çözümleyicisini kullanmaz — böylece ISP DNS yönlendirmesinden etkilenmez
+    /// (testlerde belirlenmiş bir sunucuya sondaj yapmak için kullanılır).
+    /// </summary>
+    private static async Task<int?> QueryDnsServerAsync(string host, IPEndPoint dnsServer, CancellationToken cancellationToken)
+    {
+        using var udp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var queryId = (ushort)Random.Shared.Next(1, ushort.MaxValue + 1);
+        await udp.SendAsync(BuildDnsQuery(host, queryId), dnsServer, cancellationToken);
+        var response = await udp.ReceiveAsync(cancellationToken);
+        return ParseDnsAnswerCount(response.Buffer, queryId);
+    }
+
+    private static byte[] BuildDnsQuery(string host, ushort id)
+    {
+        using var stream = new MemoryStream();
+        Span<byte> header = stackalloc byte[12];
+        BinaryPrimitives.WriteUInt16BigEndian(header[..2], id);
+        BinaryPrimitives.WriteUInt16BigEndian(header[2..4], 0x0100); // RD
+        BinaryPrimitives.WriteUInt16BigEndian(header[4..6], 1);      // QDCOUNT = 1
+        stream.Write(header);
+        foreach (var label in host.Split('.'))
+        {
+            stream.WriteByte((byte)label.Length);
+            stream.Write(Encoding.ASCII.GetBytes(label));
+        }
+        stream.WriteByte(0); // kök etiketi
+        Span<byte> tail = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt16BigEndian(tail[..2], 1); // QTYPE = A
+        BinaryPrimitives.WriteUInt16BigEndian(tail[2..], 1); // QCLASS = IN
+        stream.Write(tail);
+        return stream.ToArray();
+    }
+
+    private static int? ParseDnsAnswerCount(byte[] response, ushort expectedId)
+    {
+        if (response.Length < 12
+            || BinaryPrimitives.ReadUInt16BigEndian(response) != expectedId)
+        {
+            return null;
+        }
+        return BinaryPrimitives.ReadUInt16BigEndian(response.AsSpan(6, 2)); // ANCOUNT
     }
 }

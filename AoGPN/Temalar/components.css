@@ -55,10 +55,12 @@
     position: relative;
     display: flex; align-items: center; justify-content: center;
   }
-  /* SVG ring — rotates, contains the cyan arc. The rotation runs ONLY while a
-     connection is being established (body.connecting below); a permanent spin
-     forces the compositor to re-render a filtered layer every vsync, which
-     keeps the WebView2 GPU process pegged even when the dashboard is idle. */
+  /* SVG ring — rotates, contains the cyan arc. While a connection is being
+     established the arc sweeps fast (body.connecting below); once connected it
+     settles into a slow radar sweep (connected rules below). A fast permanent
+     spin of the filtered layer at idle would force the compositor to re-render
+     every vsync and peg the WebView2 GPU process — the connected sweep runs at
+     a sedate transform-only speed instead. */
   .ring-wrap .ring-svg {
     position: absolute; inset: 0;
     width: 100%; height: 100%;
@@ -91,7 +93,6 @@
 
   @keyframes ring-spin { to { transform: rotate(360deg); } }
 
-  body.connected .ring-wrap .ring-svg { filter: drop-shadow(0 0 8px var(--emerald)); }
   body.connected .ring-core {
     border-color: rgba(var(--emerald-rgb),.20);
     box-shadow: 0 0 28px rgba(var(--emerald-rgb),.22), inset 0 0 20px rgba(var(--emerald-rgb),.06);
@@ -115,14 +116,26 @@
   .ring-orbit.r2 i { width: 5px; height: 5px; margin-left: -2.5px; top: -1.5px; background: var(--violet); box-shadow: 0 0 8px var(--violet); opacity: .85; }
   @keyframes ring-breathe { 0%,100% { opacity: .5; transform: scale(.97); } 50% { opacity: 1; transform: scale(1.03); } }
 
-  /* Halo + orbiting dots join the spin only while connecting (see .ring-svg). */
+  /* Halo + orbiting dots join the fast spin only while connecting (see .ring-svg). */
   body.connecting .ring-halo { animation: ring-breathe 3.6s ease-in-out infinite; }
   body.connecting .ring-orbit { animation: ring-spin 7s linear infinite; }
   body.connecting .ring-orbit.r2 { animation: ring-spin 11s linear infinite reverse; }
 
-  body.connected .ring-halo { background: radial-gradient(circle, color-mix(in srgb, var(--emerald) 20%, transparent), transparent 62%); }
+  body.connected .ring-halo {
+    background: radial-gradient(circle, color-mix(in srgb, var(--emerald) 20%, transparent), transparent 62%);
+    animation: ring-breathe 4s ease-in-out infinite;
+  }
   body.connected .ring-orbit i { background: var(--emerald); box-shadow: 0 0 10px var(--emerald), 0 0 22px color-mix(in srgb, var(--emerald) 55%, transparent); }
   body.connected .ring-orbit.r2 i { background: #A7F3D0; box-shadow: 0 0 8px #A7F3D0; }
+
+  /* Connected state: the ring stays alive with a slow radar sweep — arc
+     rotation, breathing halo and orbiting dots. All three animate transform/
+     opacity only at sedate speeds, so the compositor can go idle between
+     frames; the fast spin/breathe above still signal an in-progress connect.
+     prefers-reduced-motion and .effects-balanced still freeze everything. */
+  body.connected .ring-wrap .ring-svg { animation: ring-spin 12s linear infinite; }
+  body.connected .ring-orbit { animation: ring-spin 9s linear infinite; }
+  body.connected .ring-orbit.r2 { animation: ring-spin 14s linear infinite reverse; }
 
   /* ---------- Connection mode selector under the CONNECT button ---------- */
   .ring-mode { display: flex; flex-direction: column; align-items: center; gap: .35rem; }
@@ -312,6 +325,19 @@
   .route-badge.block { color: #FCA5A5; background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.24); }
   .route-badge.warp { color: #DDD6FE; background: color-mix(in srgb, var(--violet) 12%, transparent); border-color: color-mix(in srgb, var(--violet) 26%, transparent); }
   .route-badge.unknown { color: #CBD5E1; background: rgba(148,163,184,.1); border-color: rgba(148,163,184,.2); }
+  /* Real shell icon of a displayed executable (or its letter-tile placeholder
+     while the host resolves it). Used by the Game Boost / Connection Monitor
+     tables and the Windows-style boost tiles; the tile is also the fallback
+     so rows keep their layout before the icon data URI arrives. */
+  .app-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0; overflow: hidden;
+    border-radius: 6px;
+    background: rgba(255,255,255,.05);
+    color: #8A94A6; font-weight: 700; font-size: 10px;
+    letter-spacing: .02em;
+  }
+  .app-icon img { width: 100%; height: 100%; object-fit: contain; }
   .proxy-toggle {
     transition: all .2s ease;
   }
@@ -371,7 +397,6 @@
   ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--violet) 25%, transparent); border-radius: 99px; }
   ::-webkit-scrollbar-track { background: transparent; }
 
-  .boost-on { box-shadow: 0 0 14px color-mix(in srgb, var(--violet) 35%, transparent); }
   .num-tabular { font-variant-numeric: tabular-nums; }
 
   /* ---------- Window frame ----------
@@ -533,10 +558,7 @@
   }
   .cs-option:hover { background: rgba(255, 255, 255, .06); color: #E2E8F0; }
   .cs-option.active { background: rgba(255, 255, 255, .09); color: #fff; }
-  .cs-option:focus-visible { background: rgba(255, 255, 255, .14); color: #fff; outline: 1px solid color-mix(in srgb, var(--cyan) 55%, transparent); outline-offset: -1px; }
-  #dashboardLangPopover [data-lang]:focus-visible { background: rgba(255, 255, 255, .14); color: #fff; outline: 1px solid color-mix(in srgb, var(--cyan) 55%, transparent); outline-offset: -1px; }
-  .settings-select option { background: #12182B; color: #E2E8F0; }
-  .settings-select:focus { border-color: color-mix(in srgb, var(--violet) 65%, transparent); }
+  .cs-option:focus-visible, #dashboardLangPopover [data-lang]:focus-visible { background: rgba(255, 255, 255, .14); color: #fff; outline: 1px solid color-mix(in srgb, var(--cyan) 55%, transparent); outline-offset: -1px; }
   .quick-switch { width: 32px; height: 18px; margin-top: 0; transform: scale(.82); transform-origin: right center; }
   .quick-switch .slider::before { width: 12px; height: 12px; }
   .quick-switch input:checked + .slider::before { transform: translateX(14px); }
@@ -590,16 +612,9 @@
   .mode-panel-wrapper{position:relative}
   .latency-ms{font-variant-numeric:tabular-nums}
 
-  /* ---------- Cursor effects ---------- */
+  /* ---------- Canvas effects ---------- */
   #cursorCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 9999; }
   #matrixRainCanvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 9998; opacity: 0.12; }
-  .cursor-fx { position: fixed; pointer-events: none; z-index: 10000; display: none; }
-  #cyberCursor { width: 28px; height: 28px; border: 2px solid rgba(234,179,8,.7); border-radius: 50%; box-shadow: 0 0 12px rgba(234,179,8,.35), inset 0 0 6px rgba(234,179,8,.15); transform: translate(-50%,-50%); }
-  #cyberCursor::after { content: ''; position: absolute; inset: 6px; border: 1px solid rgba(234,179,8,.3); border-radius: 50%; }
-  #matrixCursor { width: 16px; height: 16px; background: radial-gradient(circle, rgba(34,197,94,.9), rgba(22,163,74,.4) 50%, transparent 70%); border-radius: 50%; box-shadow: 0 0 18px rgba(34,197,94,.5); transform: translate(-50%,-50%); }
-  #plasmaCursor { width: 22px; height: 22px; background: radial-gradient(circle, rgba(165,180,252,.9) 0%, rgba(124,58,237,.6) 40%, transparent 70%); border-radius: 50%; box-shadow: 0 0 22px rgba(124,58,237,.5), 0 0 40px rgba(124,58,237,.2); transform: translate(-50%,-50%); }
-  #phantomCursor { width: 20px; height: 20px; border: 1.5px solid rgba(165,180,252,.5); border-radius: 50%; box-shadow: 0 0 15px rgba(165,180,252,.3); transform: translate(-50%,-50%); animation: phantomPulse 1.8s ease-in-out infinite; }
-  @keyframes phantomPulse { 0%,100% { opacity: .5; transform: translate(-50%,-50%) scale(1); } 50% { opacity: .9; transform: translate(-50%,-50%) scale(1.3); } }
   #cyberOverlay { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 9990; }
   .cyber-grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(234,179,8,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(234,179,8,.04) 1px, transparent 1px); background-size: 40px 40px; }
   .cyber-scanlines { position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(234,179,8,.02) 2px, rgba(234,179,8,.02) 4px); }
@@ -609,7 +624,7 @@
   .cyber-tr { top: 8px; right: 8px; border-width: 1px 1px 0 0; }
   .cyber-bl { bottom: 8px; left: 8px; border-width: 0 0 1px 1px; }
   .cyber-br { bottom: 8px; right: 8px; border-width: 0 1px 1px 0; }
-  .cyber-readout { position: absolute; bottom: 16px; right: 24px; font-family: monospace; font-size: 11px; color: rgba(234,179,8,.25); letter-spacing: .12em; }
+
 
   /* ---------- Custom tooltips (replaces native title bubbles) ---------- */
   .custom-tooltip {
@@ -661,4 +676,76 @@
     visibility: visible;
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+
+  /* ==========================================================================
+     Theme scaffold — ONE shared set of accent rules, per-theme values via --theme-*
+     --------------------------------------------------------------------------
+     Every theme used to restate the same ~10 accent rules (.glass, .font-display,
+     disconnected ring glow, .theme-spinner, tooltip, toast, .status-badge) with
+     its own literals — 25 copies of one skeleton that every new theme had to
+     copy again. The rules now live here ONCE, driven by --theme-* custom
+     properties declared in each themes/theme-*.css palette block.
+
+     Contract (enforced by dashboard-style.test.js):
+       - the 16 required --theme-* variables MUST be declared by every theme
+         (no theme may inherit another theme's accents);
+       - the optional variables exist for themes that break the default look:
+         custom spinners, terminal fonts, solid tooltip/toast backgrounds.
+         IMPORTANT: every var() here carries a fallback. A fallback-less var()
+         with an undefined variable is invalid at computed-value time and the
+         property computes to its INITIAL/inherited value, silently shadowing
+         the base rule (e.g. `animation: var(--x)` becomes animation: none).
+         The fallbacks mirror the base styles, so a theme that declares nothing
+         renders exactly like the base look.
+       - required fallbacks derive from the base palette (--violet/--cyan/--bg),
+         so they resolve per-theme and a minimal future theme stays minimal.
+     ========================================================================== */
+
+  body[data-theme] .glass {
+    border-color: var(--theme-glass-border, color-mix(in srgb, var(--violet) 10%, transparent));
+    box-shadow: var(--theme-glass-shadow, none);
+  }
+  body[data-theme] .glass:hover {
+    border-color: var(--theme-glass-hover-border, color-mix(in srgb, var(--violet) 28%, transparent));
+    box-shadow: var(--theme-glass-hover-shadow, none);
+  }
+  body[data-theme] .font-display {
+    font-family: var(--theme-font-family, 'Rajdhani', 'Inter', sans-serif);
+    text-shadow: var(--theme-font-shadow, none);
+  }
+  body:not(.connected)[data-theme] .ring-wrap .ring-svg {
+    filter: var(--theme-ring-glow, none);
+  }
+  body[data-theme] .theme-spinner {
+    border: var(--theme-spinner-border, 3px solid transparent);
+    border-top-color: var(--theme-spinner-top, var(--violet));
+    border-right-color: var(--theme-spinner-right, var(--cyan));
+    border-bottom-color: var(--theme-spinner-bottom, rgba(var(--violet-rgb), .2));
+    background: var(--theme-spinner-bg, none);
+    border-radius: var(--theme-spinner-radius, 50%);
+    clip-path: var(--theme-spinner-clip, none);
+    /* Shorthand first: the animation-duration line below re-applies the theme's
+       duration on top of whatever the shorthand (or its base) declared. */
+    animation: var(--theme-spinner-animation, theme-spin .8s linear infinite);
+    animation-duration: var(--theme-spinner-duration, .8s);
+  }
+  body[data-theme] [title]:hover::after {
+    background: var(--theme-tooltip-bg, color-mix(in srgb, var(--bg) 95%, var(--violet) 5%));
+    border-color: var(--theme-tooltip-border, color-mix(in srgb, var(--violet) 25%, transparent));
+    color: var(--theme-tooltip-color, #e2e8f0);
+    font-family: var(--theme-tooltip-font, inherit);
+    box-shadow: var(--theme-tooltip-shadow, 0 4px 20px rgba(0,0,0,.5), 0 0 12px color-mix(in srgb, var(--violet) 15%, transparent));
+  }
+  body[data-theme] #nodeToast {
+    background: var(--theme-toast-bg, color-mix(in srgb, var(--bg) 95%, var(--violet) 5%));
+    border-color: var(--theme-toast-border, color-mix(in srgb, var(--violet) 30%, transparent));
+    color: var(--theme-toast-color, inherit);
+    font-family: var(--theme-toast-font, inherit);
+    box-shadow: var(--theme-toast-shadow, 0 14px 40px rgba(0,0,0,.55), 0 0 20px color-mix(in srgb, var(--violet) 12%, transparent));
+  }
+  body[data-theme] .status-badge {
+    border-color: var(--theme-badge-border, color-mix(in srgb, var(--violet) 25%, transparent));
+    color: var(--theme-badge-color, inherit);
+    font-family: var(--theme-badge-font, inherit);
   }

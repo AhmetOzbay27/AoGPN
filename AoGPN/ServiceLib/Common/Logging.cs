@@ -26,6 +26,15 @@ public class Logging
         config.AddTarget("file", fileTarget);
         fileTarget.Layout = "${longdate}-${level:uppercase=true} ${message}";
         fileTarget.FileName = Utils.GetLogPath("${shortdate}.txt");
+
+        // Sınırsız büyüme koruması: 2026-09-06'da tek bir günlük dosya 375 MB'a
+        // şişti (kilitli SQLite yazıcısı ~4,3M özdeş "write gate busy" satırı
+        // üretti). Rotasyon: 10 MB'ta arşivle, günlük en fazla 4 arşiv + 7 gün
+        // tut — disk asla dolmaz, teşhis için son arşivler kalır.
+        fileTarget.ArchiveAboveSize = 10 * 1024 * 1024;
+        fileTarget.MaxArchiveFiles = 4;
+        fileTarget.MaxArchiveDays = 7;
+        fileTarget.ArchiveEvery = FileArchivePeriod.Day;
         config.LoggingRules.Add(new LoggingRule("*", LogLevel.Debug, fileTarget));
         LogManager.Configuration = config;
     }

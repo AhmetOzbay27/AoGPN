@@ -1,0 +1,50 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: titanium-orange
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="titanium-orange"] {
+  --bg: #0B0603;
+  --violet: #FF8A00;
+  --cyan: #FFD166;
+  --emerald: #61FF9A;
+  --glass: rgba(255, 138, 0, 0.04);
+  --glass-border: rgba(255, 209, 102, 0.15);
+  --violet-rgb: 255,138,0;
+  --cyan-rgb: 255,209,102;
+  --emerald-rgb: 97,255,154;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(255,138,0,.16);
+  --theme-glass-shadow: 0 1px 16px rgba(255,138,0,.07);
+  --theme-glass-hover-border: rgba(255,209,102,.36);
+  --theme-glass-hover-shadow: 0 3px 26px rgba(255,138,0,.14);
+  --theme-font-shadow: 0 0 12px rgba(255,138,0,.28);
+  --theme-ring-glow: drop-shadow(0 0 10px #FF8A00) drop-shadow(0 0 4px #FFD166);
+  --theme-spinner-top: #FF8A00;
+  --theme-spinner-right: #FFD166;
+  --theme-spinner-bottom: rgba(255,138,0,.2);
+  --theme-spinner-duration: .65s;
+  --theme-tooltip-border: rgba(255,209,102,.35);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(255,138,0,.18);
+  --theme-toast-border: rgba(255,209,102,.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(255,138,0,.14);
+  --theme-badge-border: rgba(255,209,102,.3);
+  --theme-badge-color: #FFE3A8;
+}
+
+/* Signature — molten glow pulse, opacity/transform only. */
+body[data-theme="titanium-orange"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(760px 460px at 50% 120%, rgba(255,138,0,.16), transparent 64%);
+  animation: titanium-heat 7s ease-in-out infinite;
+  opacity: .5;
+  will-change: transform, opacity;
+}
+@keyframes titanium-heat {
+  0%, 100% { opacity: .35; transform: scale(1); }
+  50% { opacity: .75; transform: scale(1.12); }
+}
+body[data-theme="titanium-orange"]::before {
+  animation-duration: 40s !important;
+}
+

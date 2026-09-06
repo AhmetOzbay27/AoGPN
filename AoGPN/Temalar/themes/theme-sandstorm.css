@@ -1,6 +1,50 @@
-/* Sandstorm — charcoal sand, turquoise and ivory, not red/amber. */
-body[data-theme="sandstorm"] { --violet:#14B8A6; --cyan:#F4E4BA; --emerald:#84CC16; --violet-rgb:20,184,166; --cyan-rgb:244,228,186; --emerald-rgb:132,204,22; background:#211A12; color:#FFF8E7; }
-body[data-theme="sandstorm"]::before { content:""; position:fixed; inset:0; pointer-events:none; opacity:.35; background:repeating-linear-gradient(115deg,transparent 0 32px,rgba(244,228,186,.035) 33px 35px); }
-body[data-theme="sandstorm"] .glass { background:rgba(48,37,24,.72); border-color:rgba(244,228,186,.22); }
-body[data-theme="sandstorm"] .ring-wrap .ring-svg { filter:drop-shadow(0 0 10px #F4E4BA) drop-shadow(0 0 5px #14B8A6); }
-body[data-theme="sandstorm"] .theme-spinner { border-top-color:#F4E4BA; border-right-color:#14B8A6; }
+/* ==========================================================================
+   AoGPN dashboard — theme: sandstorm
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="sandstorm"] {
+  --bg: #211A12;
+  --violet: #14B8A6;
+  --cyan: #F4E4BA;
+  --emerald: #84CC16;
+  --glass: rgba(244, 228, 186, 0.05);
+  --glass-border: rgba(20, 184, 166, 0.2);
+  --violet-rgb: 20,184,166;
+  --cyan-rgb: 244,228,186;
+  --emerald-rgb: 132,204,22;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(244,228,186,.22);
+  --theme-glass-shadow: 0 1px 16px rgba(20,184,166,.07);
+  --theme-glass-hover-border: rgba(132,204,22,.3);
+  --theme-glass-hover-shadow: 0 4px 26px rgba(20,184,166,.14);
+  --theme-font-shadow: 0 0 10px rgba(244,228,186,.28);
+  --theme-ring-glow: drop-shadow(0 0 10px #F4E4BA) drop-shadow(0 0 5px #14B8A6);
+  --theme-spinner-top: #F4E4BA;
+  --theme-spinner-right: #14B8A6;
+  --theme-spinner-bottom: rgba(244,228,186,.2);
+  --theme-spinner-duration: .66s;
+  --theme-tooltip-border: rgba(244,228,186,.34);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 16px rgba(244,228,186,.14);
+  --theme-toast-border: rgba(244,228,186,.32);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px rgba(244,228,186,.1);
+  --theme-badge-border: rgba(244,228,186,.3);
+  --theme-badge-color: #F7EAD0;
+}
+
+/* Signature — desert dust drifting, opacity/transform only. */
+body[data-theme="sandstorm"]::after {
+  content: ''; position: fixed; inset: -400px 0 0 0; z-index: 0; pointer-events: none;
+  background: repeating-linear-gradient(115deg, transparent 0 34px, rgba(244,228,186,.035) 34px 37px);
+  animation: sand-drift 18s linear infinite;
+  opacity: .55;
+  will-change: transform;
+}
+@keyframes sand-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-37px, 400px, 0); }
+}
+body[data-theme="sandstorm"]::before {
+  animation-duration: 40s !important;
+}
+

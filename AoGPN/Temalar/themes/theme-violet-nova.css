@@ -1,0 +1,52 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: violet-nova
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="violet-nova"] {
+  --bg: #080312;
+  --violet: #B66CFF;
+  --cyan: #FF5EEA;
+  --emerald: #61FF9A;
+  --glass: rgba(182, 108, 255, 0.04);
+  --glass-border: rgba(255, 94, 234, 0.16);
+  --violet-rgb: 182,108,255;
+  --cyan-rgb: 255,94,234;
+  --emerald-rgb: 97,255,154;
+
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(182,108,255,.16);
+  --theme-glass-shadow: 0 1px 16px rgba(182,108,255,.07);
+  --theme-glass-hover-border: rgba(255,94,234,.36);
+  --theme-glass-hover-shadow: 0 3px 26px rgba(182,108,255,.13);
+  --theme-font-shadow: 0 0 12px rgba(182,108,255,.28), 0 0 22px rgba(255,94,234,.16);
+  --theme-ring-glow: drop-shadow(0 0 10px #B66CFF) drop-shadow(0 0 5px #FF5EEA);
+  --theme-spinner-top: #B66CFF;
+  --theme-spinner-right: #FF5EEA;
+  --theme-spinner-bottom: rgba(182,108,255,.2);
+  --theme-spinner-duration: .64s;
+  --theme-tooltip-border: rgba(182,108,255,.36);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(182,108,255,.16), 0 0 26px rgba(255,94,234,.08);
+  --theme-toast-border: rgba(182,108,255,.34);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 24px rgba(182,108,255,.13), 0 0 30px rgba(255,94,234,.06);
+  --theme-badge-border: rgba(182,108,255,.3);
+  --theme-badge-color: #E0C4FF;
+}
+
+/* Signature — expanding nova burst, opacity/transform only. */
+body[data-theme="violet-nova"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(640px 640px at 70% 30%, rgba(182,108,255,.11), transparent 60%),
+    radial-gradient(500px 500px at 20% 85%, rgba(255,94,234,.09), transparent 55%);
+  animation: violet-nova-pulse 11s ease-in-out infinite;
+  opacity: .5;
+  will-change: opacity, transform;
+}
+@keyframes violet-nova-pulse {
+  0%, 100% { opacity: .35; transform: scale(1); }
+  50%      { opacity: .9;  transform: scale(1.08); }
+}
+body[data-theme="violet-nova"]::before {
+  animation-duration: 40s !important;
+}
+

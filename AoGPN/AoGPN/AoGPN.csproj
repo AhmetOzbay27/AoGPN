@@ -53,6 +53,7 @@
 		<EmbeddedResource Include="Resources\AoGPN.ico">
 			<CopyToOutputDirectory>Never</CopyToOutputDirectory>
 		</EmbeddedResource>
+		<Resource Include="Resources\Splash.png" />
 		<Resource Include="Resources\NotifyIcon1.ico" />
 		<Resource Include="Resources\NotifyIcon2.ico" />
 		<Resource Include="Resources\NotifyIcon3.ico" />
@@ -65,7 +66,31 @@
 	</ItemGroup>
 
 	<!--
-	  Dev convenience: the core runtimes (sing-box, xray, wintun, geo files) are
+	  The dashboard ships as a single offline HTML whose <style
+	  id="embedded-dashboard-css"> block is a concatenated copy of the split
+	  stylesheet chain (Temalar/dashboard.css imports base.css, components.css,
+	  the theme files and effects.css, in that order). That embedded copy must never drift from
+	  the source files, so it is regenerated here from the manifest before every
+	  build — never edited by hand. The generator is idempotent (writes only
+	  when the concatenation actually differs) and supports a check mode that
+	  DashboardAssetTests uses to fail a stale copy. A machine without node does
+	  not break the build; it gets a warning and the test suite (which runs on CI
+	  with node) still enforces sync. Requires node on PATH. -->
+	<Target Name="RegenerateEmbeddedDashboardCss"
+	        BeforeTargets="BeforeBuild"
+	        Condition="!$(MSBuildProjectFile.EndsWith('_wpftmp.csproj'))">
+		<Exec Command="node &quot;$(MSBuildProjectDirectory)\..\Temalar\build-embedded-dashboard-css.js&quot;"
+		      WorkingDirectory="$(MSBuildProjectDirectory)\.."
+		      IgnoreExitCode="true">
+			<Output TaskParameter="ExitCode" PropertyName="_EmbeddedCssExitCode" />
+		</Exec>
+		<Warning Condition="'$(_EmbeddedCssExitCode)' != '0'"
+		         Text="Could not regenerate the embedded dashboard CSS (node missing or the script failed; exit $(_EmbeddedCssExitCode)). The offline copy may be stale — run &quot;node Temalar\build-embedded-dashboard-css.js&quot; manually. DashboardAssetTests verifies sync on CI." />
+	</Target>
+
+
+	<!--
+	  Dev convenience: the core runtimes (mihomo, xray, wintun, geo files) are
 	  downloaded/kept in the Release output's bin folder and never land in a fresh
 	  Debug output, so F5 debugging could not start any tunnel. Copy them from the
 	  Release output into the current output so every build leaves the cores ready.
@@ -87,11 +112,11 @@
 		      SkipUnchangedFiles="true"
 		      Condition="Exists('$(_CoreSourceDir)')" />
 		<Warning Condition="!Exists('$(_CoreSourceDir)')"
-		         Text="Core binaries not found at '$(_CoreSourceDir)'. Build once with -c Release (or run the app's update check) so the Debug build can copy the sing-box/xray cores." />
+		         Text="Core binaries not found at '$(_CoreSourceDir)'. Build once with -c Release (or run the app's update check) so the Debug build can copy the mihomo/xray cores." />
 	</Target>
 
 	<!--
-	  Fetches the sing-box/Xray cores into the Release output when they are missing.
+	  Fetches the mihomo/Xray cores into the Release output when they are missing.
 	  Runs the freshly built executable in headless "update cores" mode, which
 	  drives UpdateService's check/download pipeline and unpacks the archives next
 	  to the executable. A failed download (e.g. offline) does not fail the build;
@@ -106,14 +131,14 @@
 			<!-- TargetPath resolves to the assembly (AoGPN.dll); the apphost exe is
 			     the one that must be launched for headless core installation. -->
 			<_ReleaseExe>$(TargetDir)$(AssemblyName).exe</_ReleaseExe>
-			<_CoresMissing Condition="!Exists('$(_ReleaseBinDir)sing_box\sing-box.exe') Or !Exists('$(_ReleaseBinDir)xray\xray.exe') Or (!Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-arm64.exe'))">true</_CoresMissing>
+			<_CoresMissing Condition="!Exists('$(_ReleaseBinDir)xray\xray.exe') Or (!Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64-compatible.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-arm64.exe'))">true</_CoresMissing>
 		</PropertyGroup>
 		<Exec Condition="'$(_CoresMissing)' == 'true' And Exists('$(_ReleaseExe)')"
 		      Command="&quot;$(_ReleaseExe)&quot; --update-cores"
 		      WorkingDirectory="$(OutDir)"
 		      IgnoreExitCode="true" />
 		<!-- Re-check existence after the Exec so the warning only appears when the
-		     download really did not leave runnable cores behind. -->        <Warning Condition="'$(_CoresMissing)' == 'true' And (!Exists('$(_ReleaseBinDir)sing_box\sing-box.exe') Or !Exists('$(_ReleaseBinDir)xray\xray.exe') Or (!Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-arm64.exe')))"
+		     download really did not leave runnable cores behind. -->        <Warning Condition="'$(_CoresMissing)' == 'true' And (!Exists('$(_ReleaseBinDir)xray\xray.exe') Or (!Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64-compatible.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-amd64.exe') And !Exists('$(_ReleaseBinDir)mihomo\mihomo-windows-arm64.exe')))"
                  Text="Core binaries are missing from '$(_ReleaseBinDir)' and the download did not complete. The build continues; run &quot;AoGPN.exe --update-cores&quot; manually or build again when online." />
 	</Target>
 
@@ -122,7 +147,7 @@
 	  the cores from the Release output (CopyCoreBinariesFromReleaseOutput); on a
 	  machine with no prior -c Release build that copy finds nothing, so no core can
 	  ever start and the GPN bridge reports "wintun.dll bulunamadı". Mirror the
-	  Release target: when sing-box/xray are still missing AFTER the Release-output
+	  Release target: when mihomo/xray are still missing AFTER the Release-output
 	  copy, run the freshly built executable in headless "update cores" mode, which
 	  drives CoreInstaller's UpdateService download/unpack pipeline (and promotes or
 	  downloads wintun.dll next to the executable). A failed/offline download does
@@ -134,7 +159,7 @@
 		<PropertyGroup>
 			<_DebugBinDir>$(OutDir)bin\</_DebugBinDir>
 			<_DebugExe>$(TargetDir)$(AssemblyName).exe</_DebugExe>
-			<_DebugCoresMissing Condition="!Exists('$(_DebugBinDir)sing_box\sing-box.exe') Or !Exists('$(_DebugBinDir)xray\xray.exe') Or (!Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-arm64.exe'))">true</_DebugCoresMissing>
+			<_DebugCoresMissing Condition="!Exists('$(_DebugBinDir)xray\xray.exe') Or (!Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64-compatible.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-arm64.exe'))">true</_DebugCoresMissing>
 		</PropertyGroup>
 		<Exec Condition="'$(_DebugCoresMissing)' == 'true' And Exists('$(_DebugExe)')"
 		      Command="&quot;$(_DebugExe)&quot; --update-cores"
@@ -142,7 +167,7 @@
 		      IgnoreExitCode="true" />
 		<!-- Re-check existence after the Exec so the warning only appears when the
 		     download really did not leave runnable cores behind. -->
-		<Warning Condition="'$(_DebugCoresMissing)' == 'true' And (!Exists('$(_DebugBinDir)sing_box\sing-box.exe') Or !Exists('$(_DebugBinDir)xray\xray.exe') Or (!Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-arm64.exe')))"
+		<Warning Condition="'$(_DebugCoresMissing)' == 'true' And (!Exists('$(_DebugBinDir)xray\xray.exe') Or (!Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64-v1.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64-compatible.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-amd64.exe') And !Exists('$(_DebugBinDir)mihomo\mihomo-windows-arm64.exe')))"
 		         Text="Core binaries are missing from '$(_DebugBinDir)' and the download did not complete. The build continues; run &quot;AoGPN.exe --update-cores&quot; manually or build again when online." />
 	</Target>
 
@@ -151,16 +176,16 @@
 	  Ensures wintun.dll sits next to the executable. The GPN capture bridge
 	  (WintunNative P/Invoke) loads "wintun.dll" from the application directory
 	  using the default DLL search order, so a copy buried under bin\xray\ or
-	  bin\sing_box\ is never found and the bridge reports "wintun.dll bulunamadı".
+	  bin\mihomo\ is never found and the bridge reports "wintun.dll bulunamadı".
 	  The Xray release archive ships wintun.dll inside its own folder; promote it
-	  (or the sing-box copy) to $(OutDir) after the cores have been copied or
+	  (or the mihomo copy) to $(OutDir) after the cores have been copied or
 	  downloaded. If neither core provides one, the build still succeeds and
 	  CoreInstaller's update-cores mode (or the packaged release) fetches it from
 	  the official Wintun distribution instead.
 
 	  IMPORTANT: the app needs a wintun.dll that exports WintunGetAdapterLUID
 	  (added in wintun 0.14.1) — the GPN capture bridge calls it on every adapter
-	  open (WireGuardTunnelService). Older xray/sing-box bundles ship a wintun.dll
+	  open (WireGuardTunnelService). Older xray/mihomo bundles ship a wintun.dll
 	  WITHOUT that export; blindly promoting it makes the bridge fail with
 	  "Unable to find an entry point named 'WintunGetAdapterLUID' in DLL
 	  'wintun.dll'" and every GPN session silently runs capture-bridge=skipped.
@@ -176,7 +201,7 @@
 	        Condition="'$(OS)' == 'Windows_NT' And !$(MSBuildProjectFile.EndsWith('_wpftmp.csproj'))">
 		<PropertyGroup>
 			<_WintunSource Condition="Exists('$(OutDir)bin\xray\wintun.dll')">$(OutDir)bin\xray\wintun.dll</_WintunSource>
-			<_WintunSource Condition="'$(_WintunSource)' == '' And Exists('$(OutDir)bin\sing_box\wintun.dll')">$(OutDir)bin\sing_box\wintun.dll</_WintunSource>
+			<_WintunSource Condition="'$(_WintunSource)' == '' And Exists('$(OutDir)bin\mihomo\wintun.dll')">$(OutDir)bin\mihomo\wintun.dll</_WintunSource>
 			<_WintunCandidateExportsLuid>false</_WintunCandidateExportsLuid>
 		</PropertyGroup>
 		<!-- Pick a candidate that actually exports WintunGetAdapterLUID (exit 0 = found). -->
@@ -224,7 +249,7 @@
 	  Ensures WinDivert.dll (+ its kernel driver WinDivert64.sys) sits next to
 	  the executable. The GPN capture bridge (WinDivertNative P/Invoke) loads
 	  "WinDivert.dll" from the application directory; nothing in the core bundles
-	  (sing-box / xray / wintun) ships it, so a fresh output has always been dead:
+	  (mihomo / xray / wintun) ships it, so a fresh output has always been dead:
 	  "GPN_BRIDGE yakalama döngüsü fault: Unable to load DLL 'WinDivert.dll'".
 
 	  Per the WinDivert documentation the driver is installed silently and on

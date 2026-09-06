@@ -364,4 +364,100 @@ public class GpnMihomoDispatchTests
         yaml.Should().NotContain("dialer-proxy");
         yaml.Should().Contain("MATCH,DIRECT");
     }
+
+    /// <summary>
+    /// Per-app WARP egress düğümleri (Ayarlar → GPN'deki küresel VLESS bypass'ın
+    /// yerini alan yeni akış): politika girişlerinin WarpNodeId değerleri
+    /// context.GpnWarpNodes üzerinden çözülür. WG düğümü → ayrı wg-&lt;id&gt; tüneli,
+    /// VLESS düğümü → warp-&lt;id&gt; proxy outbound'u; ilgili satırların seçim
+    /// grupları bu üyelere işaret eder. Çözülemeyen düğüm varsayılan WARP
+    /// egress'e (warp-socks) düşer — kural geçersiz outbound'a gitmez.
+    /// </summary>
+    [Fact]
+    public async Task GenerateClientConfig_WithPerAppWarpNodes_EmitsDedicatedEgressOutbounds()
+    {
+        var config = CoreConfigTestFactory.CreateConfig();
+        CoreConfigTestFactory.BindAppManagerConfig(config);
+        config.TunModeItem.EnableTun = true;
+
+        SQLiteHelper.Instance.CreateTable<RoutingItem>();
+        await SQLiteHelper.Instance.ExecuteAsync("UPDATE RoutingItem SET IsActive = 0");
+
+        var server = new GpnServerProfile(
+            ServerId: "de", Name: "Almanya", EndpointHost: "130.61.223.36", EndpointPort: 51820,
+            ServerPublicKey: "xQZLxeDqYrCcM7oDYbFxDszWnCk4SzwYYXWsrib8S3A=",
+            ClientPrivateKey: "ICsMC9b6W0uzw7NXNlWMgSqQu1W8ZkNvOKt9vlIzyFw=",
+            ClientAddress: "10.66.66.2/24", Mtu: 1420, PersistentKeepalive: 25);
+        var warpWgNode = new GpnServerProfile(
+            ServerId: "gpn-za", Name: "Güney Afrika", EndpointHost: "196.2.4.9", EndpointPort: 51820,
+            ServerPublicKey: "iK25iMzwDmLjq2PzX7w6yYdLk9nTgQ4vRcF1sB8hUaA=",
+            ClientPrivateKey: "nL4xOq2WcVb9sRt7YhGf1pDk8uJm0zXeN6SaIcQ5wE=",
+            ClientAddress: "10.66.66.3/24", Mtu: 1420, PersistentKeepalive: 25);
+        var vlessProfile = new ProfileItem
+        {
+            IndexId = "vless-1",
+            Remarks = "VLESS Düğüm",
+            ConfigType = EConfigType.VLESS,
+            Password = "7b6a8e31-8f2a-4b3c-9d4e-5f60718293a4",
+            Address = "197.210.54.32",
+            Port = 443,
+            Network = nameof(ETransport.raw),
+            StreamSecurity = string.Empty,
+        };
+
+        var policy = new GpnSoftRoutingPolicy(
+            GameTriggerModes.Manual,
+            InvertManualRouting: false,
+            new[]
+            {
+                new GpnSoftRoutingEntry("app", "BsGLauncher.exe", "", "warp", "gpn-za"),
+                new GpnSoftRoutingEntry("app", "LauncherApi.exe", "", "warp", "vless-1"),
+                new GpnSoftRoutingEntry("app", "SilinenDugum.exe", "", "warp", "kayip-id"),
+                new GpnSoftRoutingEntry("app", "chrome.exe", "", "vpn"),
+            });
+
+        try
+        {
+            var node = GpnCoreLauncher.BuildWireGuardProfile(server);
+            var allResult = await CoreConfigContextBuilder.BuildAll(config, node);
+            allResult.Success.Should().BeTrue();
+
+            var context = allResult.MainResult.Context with
+            {
+                GpnSoftPolicy = policy,
+                GpnCandidates = new[] { server },
+                GpnWarpNodes = new Dictionary<string, WarpNodeProfile>
+                {
+                    ["gpn-za"] = new("gpn-za", "Güney Afrika", null, warpWgNode),
+                    ["vless-1"] = new("vless-1", "VLESS Düğüm", vlessProfile, null),
+                },
+            };
+            var result = await CoreConfigHandler.GenerateClientConfig(context, fileName: null);
+            result.Success.Should().BeTrue(result.Msg);
+            var yaml = result.Data?.ToString();
+            yaml.Should().NotBeNullOrEmpty();
+
+            // WG warp düğümü → ayrı wg-<id> tüneli (aday listesine üye değil).
+            yaml.Should().Contain("name: wg-gpn-za");
+            yaml.Should().Contain("server: 196.2.4.9");
+            // VLESS warp düğümü → kendi adında proxy outbound'u.
+            yaml.Should().Contain("name: warp-vless-1");
+            yaml.Should().Contain("type: vless");
+            // Çözülemeyen düğüm + varsayılan için WARP SOCKS zinciri hâlâ üretilir.
+            yaml.Should().Contain("name: warp-socks");
+            // Kural satırları kendi ao-<i> grubuna işaret eder.
+            yaml.Should().Contain("PROCESS-NAME,BsGLauncher.exe,ao-0");
+            yaml.Should().Contain("PROCESS-NAME,LauncherApi.exe,ao-1");
+            yaml.Should().Contain("PROCESS-NAME,SilinenDugum.exe,ao-2");
+            // Seçim grupları egress üyelerini taşır: warp düğümleri + warp-socks
+            // (çözülemeyen satırın ve varsayılan warp'ın hedefi).
+            yaml.Should().Contain("- wg-gpn-za");
+            yaml.Should().Contain("- warp-vless-1");
+            yaml.Should().Contain("- warp-socks");
+        }
+        finally
+        {
+            GpnSoftSession.ResetForTests();
+        }
+    }
 }

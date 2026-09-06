@@ -11,6 +11,24 @@
     --emerald: #F59E0B;
     --glass: rgba(244, 63, 94, 0.045);
     --glass-border: rgba(244, 63, 94, 0.16);
+
+    /* Theme scaffold — shared rules in components.css consume these variables. */
+    --theme-glass-border: rgba(244,63,94,.13);
+    --theme-glass-shadow: 0 1px 18px rgba(127,29,29,.08), inset 0 0 18px rgba(244,63,94,.018);
+    --theme-glass-hover-border: rgba(251,113,133,.3);
+    --theme-glass-hover-shadow: 0 4px 24px rgba(244,63,94,.11), inset 0 0 20px rgba(244,63,94,.03);
+    --theme-font-shadow: 0 0 12px rgba(244,63,94,.2);
+    --theme-ring-glow: drop-shadow(0 0 10px #F43F5E);
+    --theme-spinner-top: #F43F5E;
+    --theme-spinner-right: #FCA5A5;
+    --theme-spinner-bottom: #7F1D1D;
+    --theme-spinner-duration: .62s;
+    --theme-tooltip-border: rgba(244,63,94,.35);
+    --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(244,63,94,.16);
+    --theme-toast-border: rgba(244,63,94,.32);
+    --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 22px rgba(244,63,94,.13);
+    --theme-badge-border: rgba(244,63,94,.3);
+    --theme-badge-color: #FDA4AF;
   }
 
   /* --- Crimson: tactical red/black threat-map atmosphere --- */
@@ -37,21 +55,4 @@
     animation-duration: 48s !important;
     /* no filter: full-screen blur on the animated aurora layer is the biggest
        per-frame GPU cost in the dashboard; the shared gradient is soft already */
-  }
-  body[data-theme="crimson"] .glass {
-    border-color: rgba(244,63,94,.13);
-    box-shadow: 0 1px 18px rgba(127,29,29,.08), inset 0 0 18px rgba(244,63,94,.018);
-  }
-  body[data-theme="crimson"] .glass:hover {
-    border-color: rgba(251,113,133,.3);
-    box-shadow: 0 4px 24px rgba(244,63,94,.11), inset 0 0 20px rgba(244,63,94,.03);
-  }
-  body[data-theme="crimson"] .font-display { text-shadow: 0 0 12px rgba(244,63,94,.2); }
-  body[data-theme="crimson"]   .ring-wrap .ring-svg { filter: drop-shadow(0 0 10px #F43F5E); }
-
-  body[data-theme="crimson"] .theme-spinner {
-    border-top-color: #F43F5E;
-    border-right-color: #FCA5A5;
-    border-bottom-color: #7F1D1D;
-    animation-duration: .62s;
   }

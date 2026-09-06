@@ -11,6 +11,29 @@
     --emerald: #059669;
     --glass: rgba(234, 179, 8, 0.03);
     --glass-border: rgba(234, 179, 8, 0.12);
+
+    /* Theme scaffold — shared rules in components.css consume these variables.
+       Spinner is a full custom build (border:none + gradient + clip-path). */
+    --theme-glass-border: rgba(234, 179, 8, 0.08);
+    --theme-glass-shadow: 0 1px 12px rgba(234, 179, 8, 0.03);
+    --theme-glass-hover-border: rgba(234, 179, 8, 0.12);  /* old rule left the base border; keep it */
+    --theme-glass-hover-shadow: 0 2px 20px rgba(234, 179, 8, 0.06);
+    --theme-font-shadow: 2px 0 rgba(225,29,72,.3), -2px 0 rgba(34,211,238,.24), 0 0 12px rgba(234,179,8,.25);
+    --theme-ring-glow: drop-shadow(0 0 8px #FFE600);
+    --theme-spinner-top: rgba(234, 179, 8, 0.2);
+    --theme-spinner-right: rgba(225, 29, 72, 0.2);
+    --theme-spinner-bottom: rgba(234, 179, 8, 0.2);
+    --theme-spinner-duration: .4s;
+    --theme-spinner-border: none;
+    --theme-spinner-bg: linear-gradient(135deg, #FFE600, #FF2D7B);
+    --theme-spinner-clip: polygon(15% 0%, 100% 0%, 85% 100%, 0% 100%);
+    --theme-spinner-animation: cyber-box .4s steps(2) infinite;
+    --theme-tooltip-border: rgba(255,230,0,.4);
+    --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 15px rgba(255,230,0,.15), 2px 0 0 rgba(255,45,123,.3);
+    --theme-toast-border: rgba(255,230,0,.35);
+    --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px rgba(255,230,0,.12), inset 0 0 30px rgba(255,45,123,.04);
+    --theme-badge-border: rgba(255,230,0,.3);
+    --theme-badge-color: #FFE600;
   }
 
   /* --- Cyberpunk: neon haze plus a restrained tactical scan layer --- */
@@ -23,42 +46,11 @@
   }
   @keyframes cyber-breathe { from { opacity: .6; } to { opacity: 1; } }
 
-  /* --- Cyberpunk accent: subtle warm glow --- */
-  body[data-theme="cyberpunk"] .glass {
-    border-color: rgba(234, 179, 8, 0.08);
-    box-shadow: 0 1px 12px rgba(234, 179, 8, 0.03);
-  }
-  body[data-theme="cyberpunk"] .glass:hover {
-    box-shadow: 0 2px 20px rgba(234, 179, 8, 0.06);
-  }
-  body[data-theme="cyberpunk"] .font-display {
-    text-shadow: 2px 0 rgba(225,29,72,.3), -2px 0 rgba(34,211,238,.24), 0 0 12px rgba(234,179,8,.25);
-  }
-
-  body[data-theme="cyberpunk"] .ring-wrap .ring-svg { filter: drop-shadow(0 0 8px #FFE600); }
-
   /* Cyberpunk: glitchy box spinner */
-  body[data-theme="cyberpunk"] .theme-spinner {
-    border: none;
-    background: linear-gradient(135deg, #FFE600, #FF2D7B);
-    clip-path: polygon(15% 0%, 100% 0%, 85% 100%, 0% 100%);
-    animation: cyber-box .4s steps(2) infinite;
-  }
   @keyframes cyber-box {
     0% { transform: rotate(0deg) skewX(0deg); }
     50% { transform: rotate(180deg) skewX(5deg); }
     100% { transform: rotate(360deg) skewX(0deg); }
   }
-  /* Cyberpunk: glitch border tooltip */
-  body[data-theme="cyberpunk"] [title]:hover::after {
-    border-color: rgba(255,230,0,.4);
-    box-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 15px rgba(255,230,0,.15), 2px 0 0 rgba(255,45,123,.3);
-  }
-  /* Cyberpunk: neon yellow toast */
-  body[data-theme="cyberpunk"] #nodeToast {
-    border-color: rgba(255,230,0,.35);
-    box-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px rgba(255,230,0,.12), inset 0 0 30px rgba(255,45,123,.04);
-  }
-  body[data-theme="cyberpunk"] .status-badge { border-color: rgba(255,230,0,.3); color: #FFE600; }
-  body[data-theme="cyberpunk"] #cyberCursor { display: block; }
+
   body[data-theme="cyberpunk"] #cyberOverlay { display: block; }

@@ -1,0 +1,59 @@
+/* ==========================================================================
+   AoGPN dashboard — theme: matrix-green
+   Part of the split stylesheet (see Temalar/dashboard.css for the load order).
+   ========================================================================== */
+body[data-theme="matrix-green"] {
+  --bg: #03090A;
+  --violet: #58FF83;
+  --cyan: #12C978;
+  --emerald: #61FF9A;
+  --glass: rgba(88, 255, 131, 0.035);
+  --glass-border: rgba(18, 201, 120, 0.15);
+  --violet-rgb: 88,255,131;
+  --cyan-rgb: 18,201,120;
+  --emerald-rgb: 97,255,154;
+
+  /* Theme scaffold — shared rules in components.css consume these variables.
+     Terminal style: monospace font + phosphor-green tint on the text layers. */
+  --theme-glass-border: rgba(88,255,131,.13);
+  --theme-glass-shadow: 0 1px 14px rgba(18,201,120,.05);
+  --theme-glass-hover-border: rgba(88,255,131,.34);
+  --theme-glass-hover-shadow: 0 3px 24px rgba(18,201,120,.12);
+  --theme-font-family: 'Courier New', monospace;
+  --theme-font-shadow: 0 0 8px rgba(88,255,131,.22);
+  --theme-ring-glow: drop-shadow(0 0 9px #58FF83) drop-shadow(0 0 4px #12C978);
+  --theme-spinner-top: #58FF83;
+  --theme-spinner-right: #12C978;
+  --theme-spinner-bottom: rgba(88,255,131,.18);
+  --theme-spinner-duration: .6s;
+  --theme-tooltip-border: rgba(88,255,131,.32);
+  --theme-tooltip-color: #9BFFB8;
+  --theme-tooltip-font: 'Courier New', monospace;
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 14px rgba(88,255,131,.14);
+  --theme-toast-border: rgba(88,255,131,.3);
+  --theme-toast-color: #9BFFB8;
+  --theme-toast-font: 'Courier New', monospace;
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 18px rgba(88,255,131,.1);
+  --theme-badge-border: rgba(88,255,131,.3);
+  --theme-badge-color: #9BFFB8;
+  --theme-badge-font: 'Courier New', monospace;
+}
+
+/* Signature — phosphor glow breathing, opacity/transform only. */
+body[data-theme="matrix-green"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(600px 420px at 30% 15%, rgba(88,255,131,.09), transparent 55%),
+    radial-gradient(700px 460px at 80% 100%, rgba(18,201,120,.1), transparent 58%);
+  animation: matrix-green-breathe 9s ease-in-out infinite alternate;
+  opacity: .55;
+  will-change: opacity, transform;
+}
+@keyframes matrix-green-breathe {
+  from { opacity: .4; transform: scale(1); }
+  to   { opacity: .85; transform: scale(1.05); }
+}
+body[data-theme="matrix-green"]::before {
+  animation-duration: 40s !important;
+}
+

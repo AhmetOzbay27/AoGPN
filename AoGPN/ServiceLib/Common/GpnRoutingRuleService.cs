@@ -40,15 +40,15 @@ public enum GpnRoutingDestination
 /// mihomo politika kaydı (GpnSoftRoutingEntry) bu biçime izdüşürülür; normalize
 /// edilmiş liste <see cref="GpnRoutingRuleService.NormalizeEntries"/> üretir.
 /// </summary>
-public readonly record struct GpnRouteEntry(string EntryType, string Value, string Port, string Action)
+public readonly record struct GpnRouteEntry(string EntryType, string Value, string Port, string Action, string WarpNodeId = "")
 {
     /// <summary>Görünüm modelindeki uygulama listesi satırından izdüşüm.</summary>
     public static GpnRouteEntry From(SplitTunnelAppItem app)
-        => new(app.EntryType ?? string.Empty, app.Value ?? string.Empty, app.Port ?? string.Empty, app.Action ?? "vpn");
+        => new(app.EntryType ?? string.Empty, app.Value ?? string.Empty, app.Port ?? string.Empty, app.Action ?? "vpn", app.WarpNodeIndexId ?? string.Empty);
 
     /// <summary>Kayıtlı (config) manuel rota ayarından izdüşüm.</summary>
     public static GpnRouteEntry From(ManualRouteSetting route)
-        => new(route.EntryType ?? string.Empty, route.Value ?? string.Empty, route.Port ?? string.Empty, route.Action ?? "vpn");
+        => new(route.EntryType ?? string.Empty, route.Value ?? string.Empty, route.Port ?? string.Empty, route.Action ?? "vpn", route.WarpNodeIndexId ?? string.Empty);
 }
 
 /// <summary>Planın tek bir girişi: normalize edilmiş giriş + o moddaki varış yeri.</summary>

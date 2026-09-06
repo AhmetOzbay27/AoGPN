@@ -181,6 +181,7 @@ public sealed class DashboardMessagePolicyTests
     [Theory]
     [InlineData("toggle_connection")]
     [InlineData("list_running_processes")]
+    [InlineData("get_app_icons")]
     [InlineData("add_running_process")]
     [InlineData("save_settings")]
     [InlineData("test_route")]

@@ -762,7 +762,9 @@ public class SplitTunnelViewModel : MyReactiveObject
     /// table). The native routing generator remains the single source of truth, so
     /// the dashboard cannot create a second, conflicting rule format.
     /// </summary>
-    public async Task<bool> SetDashboardAppRouteAsync(string processName, string? displayName, string action)
+    public async Task<bool> SetDashboardAppRouteAsync(
+        string processName, string? displayName, string action,
+        string? warpNodeIndexId = null, string? warpNodeName = null)
     {
         var raw = processName?.Trim() ?? string.Empty;
         if (raw.IsNullOrEmpty() || !IsKnownAction(action))
@@ -771,6 +773,10 @@ public class SplitTunnelViewModel : MyReactiveObject
                 ("processName", raw), ("action", action), ("reason", "invalid_input"));
             return false;
         }
+
+        // Per-app WARP düğümü yalnızca "warp" rotasında anlamlıdır — başka bir
+        // rotaya geçişte eski düğüm seçimi temizlenir (bayat atıf kalmaz).
+        var warpNodeId = action == "warp" ? (warpNodeIndexId ?? string.Empty).Trim() : string.Empty;
 
         // Apps carry a .exe name; a non-exe value addresses a domain/IP row.
         string entryType;
@@ -808,20 +814,25 @@ public class SplitTunnelViewModel : MyReactiveObject
                 Value = value,
                 DisplayName = displayName.IsNotEmpty() ? displayName! : value,
                 Action = action,
+                WarpNodeIndexId = warpNodeId.IsNotEmpty() ? warpNodeId : null,
             });
             Logging.Verbose("GPN", "set_route_added",
-                ("processName", value), ("action", action), ("mode", Mode));
+                ("processName", value), ("action", action), ("mode", Mode),
+                ("warpNode", warpNodeId));
         }
         else
         {
             var oldAction = item.Action;
+            var oldWarpNode = item.WarpNodeIndexId ?? string.Empty;
             item.Action = action;
+            item.WarpNodeIndexId = warpNodeId.IsNotEmpty() ? warpNodeId : null;
             item.UpdateSuggested();
             item.RouteTag = GpnTelemetryMonitorService.MapActionToOutbound(item.Action);
             item.RouteText = GpnTelemetryMonitorService.RouteText(item.RouteTag);
             OnListChanged();
             Logging.Verbose("GPN", "set_route_changed",
-                ("processName", value), ("old", oldAction), ("new", action));
+                ("processName", value), ("old", oldAction), ("new", action),
+                ("warpNode", oldWarpNode), ("warpNodeNew", warpNodeId));
         }
 
         SelectedApp = item;
@@ -1401,6 +1412,7 @@ public class SplitTunnelViewModel : MyReactiveObject
             ExePath = isApp ? (setting.ExePath ?? "") : "",
             Action = NormalizeAction(setting.Action),
             SuggestedAction = setting.SuggestedAction ?? "",
+            WarpNodeIndexId = setting.WarpNodeIndexId ?? "",
         };
         item.UpdateSuggested();
         return item;

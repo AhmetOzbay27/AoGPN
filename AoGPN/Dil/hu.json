@@ -237,6 +237,8 @@
   "route.vpn": "VPN",
   "route.warp": "WARP",
   "warp.fallbackNotice": "A WARP-útvonal WireGuard-csomópontot igényel — az aktív kapcsolat nem WireGuard, így a WARP-alkalmazások VPN-en mennek.",
+  "warp.nodeDefault": "Alapértelmezett (aktív csomópont)",
+  "warp.nodePickerHint": "Az alkalmazás WARP-forgalma a kiválasztott csomóponton lép ki — válasszon bármely csomópontot a listából (Olaszország, Németország, Dél-Afrika…).",
   "settings.language": "Nyelv",
   "settings.save": "Beállítások mentése",
   "settings.stack": "Verem",

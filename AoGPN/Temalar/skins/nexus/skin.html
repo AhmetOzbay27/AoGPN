@@ -4,9 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>AO GPN</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Orbitron:wght@500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+<!-- Bundled fonts (Temalar/fonts/fonts.css) — identical look offline. -->
+<link rel="stylesheet" href="../../fonts/fonts.css" />
 <link rel="stylesheet" href="skin.css" />
 </head>
 <body class="skin-nexus" data-nx-skin="nexus-gpn">
@@ -180,5 +179,8 @@
   <div class="nx-toast" id="nxToast">GPN route updated.</div>
   <script src="../route-keys.js"></script>
   <script src="skin.js"></script>
+  <!-- Standalone Game Boost view module (Windows-style icon views + grouping);
+       wraps only the skinBridge API and injects its own toolbar/grid/styles. -->
+  <script src="boost-view.js"></script>
 </body>
 </html>

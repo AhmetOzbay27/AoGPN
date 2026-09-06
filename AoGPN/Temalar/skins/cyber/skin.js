@@ -299,6 +299,21 @@
         return null;
       };
 
+  // Gerçek exe ikonu (host AppIconService -> skinBridge.appIcons); ikon yoksa
+  // iki harfli yer tutucu kutu basılır.
+  function cyAppIcon(a) {
+    let uri = '';
+    if (a && a.exePath && B) {
+      try {
+        const icons = B.appIcons;
+        if (icons) uri = icons[String(a.exePath).trim().toLowerCase()] || '';
+      } catch (e) { /* read-only bridge */ }
+    }
+    const label = String(a.displayName || a.processName || 'APP').slice(0, 2).toUpperCase() || '?';
+    if (uri) return '<i class="cy-appIco"><img src="' + uri + '" alt="" draggable="false"></i>';
+    return '<i class="cy-appIco">' + esc(label) + '</i>';
+  }
+
   function sourceCard(a, i, S) {
     const name = a.displayName || a.processName || a.value || 'Target app';
     const action = actionFor(a);
@@ -310,6 +325,7 @@
     const on = isTunneled(action);
     const sub = (running ? '<span class="cy-live-tag">● ' + esc(cyT('running').toUpperCase()) + '</span> ' : '') + esc(String(route).toUpperCase()) + (lat ? ' <span class="cy-lat">' + esc(lat) + '</span>' : '');
     return '<div class="cy-target' + (sel ? ' active' : '') + (running ? ' live' : '') + '" data-cy-src="src' + i + '" data-cy-pname="' + esc(pname) + '">'
+      + cyAppIcon(a)
       + '<div><h4>' + esc(name) + '</h4><span>' + sub + '</span></div>'
       + '<div class="cy-switch' + (on ? ' on' : '') + '" role="switch" aria-checked="' + on + '" tabindex="0" title="' + esc(cyT('switchTitle')) + '"></div></div>';
   }

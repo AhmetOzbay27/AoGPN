@@ -1,3 +1,5 @@
+using ServiceLib.Models.Dto;
+
 namespace ServiceLib.Services;
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -36,6 +38,66 @@ public sealed record CaptureDriftEntry(
 /// </summary>
 public static class GpnCaptureDriftChecker
 {
+    /// <summary>
+    /// Sürüklenme adaylarını CANLI bağlantı tablosundan kurar. Yalnızca UDP
+    /// bağlantıları aday sayılır: yakalama köprüsünün WinDivert filtresi NETWORK
+    /// katmanında yalnızca outbound UDP yakalar (bkz. WinDivertFilterBuilder) —
+    /// TCP bağlantıları tasarım gereği doğrudan gider, onlar için yakalanan paket
+    /// beklentisi YOKTUR ve aday sayılmamaları gerekir (aksi hâlde LeagueClient /
+    /// Discord gibi TCP ağırlıklı uygulamalar her oturumda kalıcı olarak "trafik
+    /// doğrudan gidiyor" uyarısı üretirdi). PID kümesi ve canlı bağlantı sayısı da
+    /// UDP satırlarından türetilir — sayı "yakalanabilir" bağlantı sayısını yansıtır.
+    /// </summary>
+    public static IReadOnlyList<CaptureDriftCandidate> BuildCandidates(
+        IEnumerable<SplitTunnelAppItem> apps,
+        IEnumerable<ConnectionMonitorItem> connections,
+        bool invertRouting)
+    {
+        ArgumentNullException.ThrowIfNull(apps);
+        ArgumentNullException.ThrowIfNull(connections);
+
+        // Süreç başına UDP canlı bağlantı sayısı + benzersiz PID seti. Pid <= 0
+        // (kimliksiz sahip) ve boş süreç adı satırları yargılanamaz — atlanır.
+        var udpByProcess = new Dictionary<string, (int Count, List<int> Pids)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var connection in connections)
+        {
+            if (!string.Equals(connection.Protocol, "UDP", StringComparison.OrdinalIgnoreCase)
+                || connection.Pid <= 0
+                || string.IsNullOrEmpty(connection.ProcessName))
+            {
+                continue;
+            }
+
+            if (!udpByProcess.TryGetValue(connection.ProcessName, out var entry))
+            {
+                entry = (0, new List<int>());
+                udpByProcess[connection.ProcessName] = entry;
+            }
+            entry.Count++;
+            if (!entry.Pids.Contains(connection.Pid))
+            {
+                entry.Pids.Add(connection.Pid);
+            }
+            // Count bir değer alanıdır — sözlüğe geri yazılmazsa artış yerelde kaybolur.
+            udpByProcess[connection.ProcessName] = entry;
+        }
+
+        var tunneledAction = invertRouting ? "direct" : "vpn";
+        var candidates = new List<CaptureDriftCandidate>();
+        foreach (var app in apps)
+        {
+            if (app.EntryType != "app"
+                || !string.Equals(app.Action, tunneledAction, StringComparison.OrdinalIgnoreCase)
+                || !udpByProcess.TryGetValue(app.Value, out var live))
+            {
+                continue;
+            }
+
+            candidates.Add(new CaptureDriftCandidate(app.Value, live.Count, live.Pids));
+        }
+        return candidates;
+    }
+
     public static IReadOnlyList<CaptureDriftEntry> FindDrifted(
         IReadOnlyList<GpnPidStat>? capturedByPid,
         IEnumerable<CaptureDriftCandidate> candidates)

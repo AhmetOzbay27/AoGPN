@@ -10,13 +10,38 @@ All notable changes to AoGPN will be documented in this file.
 
 ---
 
-## [1.1.1-dev] — 2026-09-05 — WARP degrade-egress, capture-gap hardening, launcher bypass editor, shell declutter
+## [1.1.1] — 2026-09-08 — WARP degrade-egress, capture-gap hardening, launcher bypass editor, shell declutter, hidden-boot crash fix
 
-> Development notes for this session (9 commits: `d3cdeb5` … `19ba8c0`, plus the
-> uncommitted working tree). No version tag has been attached yet — the next
-> release tag must be `1.1.1`.
+> Development notes for this session (11 commits: `d3cdeb5` … `ad32ec3`, plus
+> the uncommitted working tree). Assembly/update-check version bumped to
+> `1.1.1` in `Directory.Build.props` — the release tag must be `1.1.1`.
 
 ### Added
+- **Per-app WARP node picker (Settings → GPN removed)** — the Settings → GPN tab
+  (VLESS bypass textarea + launcher-bypass domain editor) is gone. Each app's
+  WARP route now renders a node picker right next to it: pick any node from the
+  dashboard node list (İtalya, Almanya, Güney Afrika…) and that app's WARP
+  traffic exits through that node's egress — WireGuard nodes get their own
+  `wg-<id>` tunnel (or a `warp-<id>` proxy outbound for VLESS/VMess/SS/Trojan/
+  Hysteria2/TUIC/SOCKS/HTTP nodes), the route badge shows `WARP · <node>`, and
+  deleted/unresolvable nodes fall back to the default WARP egress automatically.
+  The choice is stored per entry (`ManualRouteSetting.WarpNodeIndexId`), flows
+  through the GPN soft-routing policy (structural change → safe reconnect), and
+  is covered by new JS integration tests + a new mihomo dispatch test.
+
+- **Theme independence & full-feature parity** — the 10 NEXUS palettes (neon-cyber,
+  titanium-orange, matrix-green, ocean-blue, red-phantom, violet-nova, arctic-ice,
+  gold-elite, stealth-camo, crimson-core) were split out of the shared
+  `theme-nexus-palettes.css` into one self-contained file per theme; the 4 mini
+  themes (aurora/candy/obsidian/sandstorm) were brought up to the same contract
+  as the original 11 (palette vars, signature animated layer, glass+hover,
+  font-display, ring glow, themed spinner, tooltip, toast, status badge, custom
+  cursor). `color-mix()` was removed from the theme hot paths in favour of fixed
+  rgba + rgb-var values, keeping exactly one animated full-screen layer per theme
+  (the shared aurora stays on `body::before`, the signature on `::after`). Every
+  theme now ships its own `_themeSounds` entry. New `cssom: every theme ships the
+  complete signature contract (parity)` test locks the feature set for all 25
+  themes; dashboard-style suite now 20 tests, skin suite 222/222 green.
 - **WARP degrade-egress** (`GpnBypassEgressController`): while the WARP egress is
   faulted, launcher requests automatically fall back to **DIRECT** (clean exit
   instead of hitting the WAF); when WARP health returns they switch back
@@ -36,21 +61,310 @@ All notable changes to AoGPN will be documented in this file.
   `VlessBypassNodeJson` (dual connection).
 
 ### Fixed
+- **Purple frame around the window (uncommitted working tree)**: the reveal
+  restored the saved "Normal" placement instead of maximizing whenever a
+  previous session had stored one — including the untouched 1200×800 default
+  size — so the window did not fill the work area and the desktop wallpaper
+  (dark, with a bright purple band near the screen bottom) showed around its
+  edges, reading as a purple frame glued to the app. Diagnosed from the user's
+  own screenshots (pixel analysis: the window left a purple band at its
+  bottom/left edges while the wallpaper itself carries the band — the
+  `TranscodedWallpaper` bottom strip is ~75% purple) and confirmed live with a
+  screen capture of the running app (window rect vs. taskbar zone).
+  `ApplyStartupPlacement` now ALWAYS reveals the dashboard maximized:
+  `ApplySavedPlacement` still runs first so the window lands on the monitor
+  the user last used, then `WindowState = Maximized` — the existing
+  `WM_GETMINMAXINFO` handler clamps the maximized bounds to that monitor's
+  work area, so the dashboard fills the screen edge to edge and the taskbar
+  stays fully visible below. The previous "maximize only on first run" logic
+  (which a stale saved placement defeated forever) is gone.
+- **Capture-drift banner false positives (uncommitted working tree)**: the
+  "live connections but 0 captured packets — traffic is going direct" rose
+  banner permanently flagged TCP-heavy apps (Discord, LeagueClient,
+  RiotClient, bun, a dev host, …) even while the tunnel was verified healthy.
+  The capture bridge's WinDivert filter only captures **outbound UDP** at the
+  NETWORK layer, but the drift check built its candidates from ALL live
+  connections (TCP + UDP) — so any app whose live connections were TCP-only
+  could never produce captured packets and was reported as drifted every
+  session. `GpnCaptureDriftChecker.BuildCandidates` now derives candidates
+  **from UDP live connections only** (count + PID set), matching what the
+  bridge can actually capture; TCP stays direct by design and is never judged.
+  Two more false-positive gates were added in `DashboardPushService`: a 5 s
+  warm-up after the capture session starts (first port map + first telemetry
+  tick) and a 10 s snapshot-freshness bound (only a live bridge's snapshot is
+  judged — a stale one means the loop stopped, which WinDivert health /
+  EngineFailed already surface). Real drift is still caught: a tunneled game
+  with live UDP connections and zero captured packets while the bridge is
+  otherwise active still raises the banner.
 - `SpeedtestService`: `OverflowException` on empty selection — early exit
   (`Count == 0 || pageSize <= 0`) now covers Tcping/Realping/UDP alike; an empty
   run reported "completed" instead of "stopped".
+- **Whole-screen black flash during boot (uncommitted working tree)**: the main
+  window was shown at `Opacity 0` while WebView2 booted the dashboard — WPF
+  window opacity below 1 requires a **layered window**, and layered windows
+  paint as a solid black rectangle on machines with broken compositing (the
+  same failure the splash's `SetWindowRgn` rewrite exists for). The maximized
+  window therefore blackened the ENTIRE screen behind the splash for the whole
+  boot (pixel analysis of a full-screen capture: pure `0,0,0` everywhere except
+  the splash content and the taskbar). The window is now **parked off-screen**
+  (`Left/Top = -32000`, `WindowStartupLocation = Manual`) instead — it still
+  loads and boots WebView2 normally, but never paints a single pixel — and
+  `RevealStartupWindow` moves it to the work-area maximized state (see the
+  new **Purple frame around the window** entry — the reveal always maximizes)
+  in the same tick the dashboard becomes visible. The reveal's 0→1
+  opacity fade was dropped too (it was itself a layered window → black flash);
+  `WindowBase` defers the saved-placement restore while the boot is pending
+  (`DeferPlacementUntilReveal` / `ApplySavedPlacement`, applied by
+  `MainWindow.ApplyStartupPlacement`) so the parked window can never jump on
+  screen mid-boot. AutoHideStartup / tray-minimized startup and all reveal
+  fallbacks (navigation failure, startup-script errors, 15 s safety timer)
+  are unchanged and still end at the same `RevealStartupWindow` path.
+- **Black block behind the splash text (uncommitted working tree)**: with the
+  screen no longer blacked out, the splash's own flaw surfaced — its window
+  region unioned SOLID full-width bands over the status/version rows, and
+  inside those bands the window's opaque black background filled every pixel
+  between the letters, so "Arayüz yükleniyor…" / "V1.1.0" sat on a black bar
+  (  a fresh 409×192 capture shows a `0,0,0` block around glyph pixels over a
+  `28,28,28` backdrop). The region is now cut to the glyph silhouette of the
+  status/version lines (no bands), and both text rows are pinned to grayscale
+  anti-aliasing (`TextOptions.TextRenderingMode`) so the on-screen glyph
+  coverage matches the snapshot the region is cut from exactly (ClearType
+  would smear a fraction of a pixel past the cut and clip glyph edges).
+- **Splash status line glitch on stage changes (uncommitted working tree)**: a
+  first attempt re-cut the window region to each new stage string on every
+  `SetStage`, but changing the shape mid-flight shows one composited frame of
+  the OLD letters clipped by the NEW glyph shape (region and content update in
+  separate system calls, so an intermediate frame always mismatches) — a
+  visible "bozulma" at every text change. The status line is now a FIXED
+  string for the splash's whole (short) life: it always reads
+  "Arayüz yükleniyor…" (the widest stage, so the region hugs it exactly) and
+  the window shape is built ONCE at show time and never re-cut; live progress
+  still reads from the bar, which glides inside a region that always covers
+  the full track, so no region change is ever needed. `SetStage` and its three
+  call sites were removed; `SetProgress` stages (10 → 30 → 45 → 60 → 80 →
+  100) are unchanged.
+- **Dashboard dead after the module split — "hiçbir şeye tıklanılmıyor"
+  (uncommitted working tree)**: the title-bar close button worked but nothing
+  else in the UI responded. Root cause: `core/theme.js` ran boot-time code
+  *before* registering itself — the splash reveal flow boots WebView2 with
+  `Visibility="Hidden"`, so `document.hidden` was `true` and
+  `setEffectsHidden(true)` reached `_applyEffectsHidden()`, which read
+  `window.aogpn.theme.onHiddenChange` while `window.aogpn.theme` was still
+  `undefined` → TypeError. `aogpn.theme` never registered, and every later
+  module (`selects`, `settings`, `connection`, `app.js`) crashed destructuring
+  it — only the earlier-loaded `window-controls.js` (title-bar buttons)
+  survived, so the dashboard rendered but nothing was clickable. Session logs
+  showed it: before the module split every boot posted `get_node_pool`; after
+  it, the only renderer message was `app_control`. Reproduced 1:1 in a real
+  WebView2 probe under the same hidden-boot condition. Fixed by guarding the
+  pre-registration access (`window.aogpn && window.aogpn.theme && …`); the
+  module generator (`split-modules.js`) was fixed too so regeneration cannot
+  reintroduce it. Verified: all 15 modules register under hidden boot, boot
+  posts fire, 0 page errors; dashboard suite 250/250 green.
+- **Purple window border on Windows 11 (uncommitted working tree)**: in
+  windowed mode the dashboard sat below an accent-colored frame band at the
+  top edge (plus a gray drag-handle pill at top-center) that stayed purple
+  under every theme/skin and vanished only when maximized. Root cause: with
+  "Show accent color on title bars and window borders" enabled
+  (ColorPrevalence=1), DWM paints the non-client frame of borderless
+  thick-frame windows in the user's accent color. Disabling DWM rendering
+  (`DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED`) removes the purple band
+  but falls back to the classic cream-colored frame, so the non-client area
+  is instead collapsed to zero in `MainWindow.WindowProc`
+  (`WM_NCCALCSIZE` → 0): neither the accent band nor the classic frame is
+  ever drawn and the WebView2 content fills the window edge-to-edge. Edge
+  resize is restored manually (`WM_NCHITTEST` resize zones, DPI-aware) and
+  the maximized bounds are clamped to the monitor work area in
+  `WM_GETMINMAXINFO` so the taskbar stays fully visible.
+- **Empty dark window between splash and dashboard (uncommitted working
+  tree)**: the WebView2 control started `Visibility=Hidden` during boot, so
+  Chromium treated the dashboard as a background page: the load stretched
+  from ~0.4 s to 2 s+ (session logs: `webview-init-done` → first renderer
+  message 2.1 s), AND when the reveal made the control visible the renderer
+  had to wake up and paint — the user stared at the dark window (and the
+  purple border above) until the first frame arrived. The control is now
+  Visible from the very first frame: the boot window is parked OFF-SCREEN
+  (see App.OnStartup), so nothing paints on the desktop, but the renderer is
+  never background-throttled and the dashboard composites its real frames
+  while parked. `RevealStartupWindow` therefore moves an ALREADY-PAINTED
+  window on screen — no empty dark frame, no renderer wake-up wait. (The
+  anti-throttling browser flags in `DashboardHost` remain as the second half
+  of that guarantee.)
+- **Render-blocking Google Fonts stylesheet (uncommitted working tree)**: the
+  remote `<head>` stylesheet blocked first paint and `DOMContentLoaded` — on
+  slow or offline networks boot sat on "Arayüz yükleniyor…" for seconds
+  (the "10–20 GB yükleme yapıyor" feel). The remote fetch is gone entirely:
+  the fonts the dashboard and skins use (Inter 400;500;600, Orbitron
+  500;600;700, Rajdhani 500;600;700, VT323 — every subset Google serves,
+  incl. latin-ext for Turkish and cyrillic for Russian) are now BUNDLED in
+  `Temalar/fonts/` (`fonts.css` + woff2, ~630 KB), and the dashboard plus the
+  NEXUS/CYBER skins reference the local copy; the CSP dropped the Google
+  origins (`font-src 'self'`). Typography is byte-identical to the remote
+  stylesheet (same @font-face declarations, `font-display: swap`) — offline
+  installs look the same and boot never depends on the network. The bundle
+  is regenerated by `Temalar/fetch-google-fonts.js` (content-deduplicated;
+  Orbitron is served as one variable file shared by all weights).
 
 ### Changed
-- **Splash-free boot (uncommitted working tree)**: the main window is shown
-  invisible at startup (`Opacity 0` in `App.OnStartup`) and revealed by
-  `MainWindow.RevealStartupWindow()` only once the WebView2 dashboard has loaded
-  and received its initial state (theme/settings/language/…), so launching never
-  flashes an empty black frame while WebView2 boots. The reveal is a short
-  (~120 ms) fade-in so the first composited frame — including a standalone skin
-  iframe that is still painting — can never appear as a raw dark frame. Reveal
-  also fires on navigation failure / startup-script errors, on restore from a
-  tray/minimized (AutoHideStartup) startup, and via a 15 s fallback timer — the
-  window can never stay invisible.
+- **Splash + handoff boot (uncommitted working tree)**: a backgroundless boot
+  splash (`SplashWindow`, `Resources/Splash.png` from the app icon) floats on
+  the desktop — just the transparent logo, a **real stage-driven loading bar**
+  (10% config → 30% components → 45% window → 60% WebView2 → 80% dashboard
+  loaded → 100% ready; the fill glides smoothly between stages), the status
+  line ("Başlatılıyor…" → "Arayüz yükleniyor…" → "Hazır") and the live version
+  string. The main window is parked OFF-SCREEN during boot (never "Opacity 0"
+  — WPF window opacity needs a layered window, which paints solid black on
+  machines with broken compositing) with the WebView2 control Visible, so the
+  dashboard loads at full speed and paints its frames while nothing is on
+  screen, and `MainWindow.RevealStartupWindow()` moves the already-painted
+  window to the work-area maximized state exactly when the dashboard has loaded **and**
+  received its initial state (theme/settings/language/…). The splash dissolves
+  out while the window appears over the same ~140 ms, so the handoff reads as
+  one continuous motion — no splash pop, no empty black frame, no "stuck on
+  colors" phase. Reveal also fires on navigation failure /
+  startup-script errors, on restore from a tray/minimized (AutoHideStartup)
+  startup, and via a 15 s fallback timer; the splash self-closes after 16 s at
+  the latest and is force-closed on startup errors/exit, so neither surface can
+  ever linger. Boot timing is now traceable in the logs (`WEBVIEW_SEEDED`,
+  first-renderer-message diagnostics). (A renderer-side "first paint"
+  handshake was prototyped and dropped: WebView2 suspends the hidden renderer
+  during boot, so page timers/fetches never run until the reveal unfreezes it
+  — the handoff must be host-driven.)
+- **Splash transparency hardened (uncommitted working tree)**: the splash no
+  longer uses a WPF `Window` with `AllowsTransparency` — those layered windows
+  render as a solid **black rectangle** behind the logo when the process runs
+  under software rendering (no GPU path, or the HWA crash-guard auto-fallback),
+  in RDP/remote sessions, or on drivers that cannot composite them. The splash
+  is now a raw `HwndSource` window (`Views/SplashWindow.cs`, replacing the
+  `.xaml`/`.xaml.cs`) presented via `UpdateLayeredWindow` (plain GDI) fed from a
+  `RenderTargetBitmap` (always rasterized in software), so per-pixel
+  transparency works identically under hardware, software, RDP and DWM-less
+  sessions — nothing but the logo ever appears on the desktop. Visuals,
+  stage-driven bar, fade-in/out and the handoff contract are unchanged; the
+  window is also click-through (`WS_EX_TRANSPARENT`) and never takes focus.
+  Related ordering fix: `HardwareAccelerationGuard.ApplyOnStartup()` now runs
+  before the splash is shown (its documented contract was "before any window is
+  shown", but the splash was created first, then the process could flip to
+  software rendering mid-flight).
+- **High-DPI splash verified (uncommitted working tree)**: the splash is
+  DPI-aware — physical pixel size = DIP layout × (`GetDpiForWindow` / 96) and
+  the `RenderTargetBitmap` rasterizes at the window's DPI, so the logo/text are
+  never bitmap-upscaled. Verified end-to-end on this machine's 175% display:
+  the runtime trace logs `dpi=168 scale=1.75 px=420x506` (240×289 DIP × 1.75,
+  screen-centered), and a dump of the exact presented buffer showed a 420×506
+  frame with fully transparent corners (alpha 0), ~45% opaque content (logo /
+  bar / text), and a crisp 218/255 logo-edge alpha gradient — matching a
+  standalone 150%/175% `RenderTargetBitmap` render (360×434 / 420×506 px).
+  Note: BitBlt screen captures cannot verify layered windows (they are excluded
+  from the screen surface — captures show black or the wallpaper behind), so
+  the presented-buffer dump is the ground truth.
+- **Splash logo rebuilt from scratch (uncommitted working tree)**: the previous
+  `Splash.png` was a programmatically-rendered rendition of the shield that
+  filled the canvas edge-to-edge with a distorted 460×397 aspect — it looked
+  squished/cramped next to the real product icon. The logo is now the app's own
+  icon extracted 1:1 (`Resources/Splash.png`, 256×256, alpha preserved), so the
+  splash always matches the product branding with the shield's natural padding.
+  The window layout was cleaned up to fit it (logo 240 DIP, slimmer bar, tighter
+  spacing → ~240×317 DIP), dead code removed (unused window-style constants),
+  and the old `SplashWindow.xaml`/`.xaml.cs` and the stale obj artifacts are
+  gone — only `Views/SplashWindow.cs` remains. Verified live at 175%: physical
+  rect 420×555 px, ~59% of the frame transparent (proper margins around the
+  shield), corners alpha 0, crisp 1:1 logo; handoff still fires via
+  `WEBVIEW_SEEDED`.
+- **Splash rewritten as a shaped, NON-layered window + startup-crash fix
+  (uncommitted working tree)**: `UpdateLayeredWindow` also rendered the splash
+  as a solid black rectangle on this machine (layered-window compositing is
+  flaky under software rendering / some drivers / remote sessions), so the
+  splash is now a plain opaque WPF `Window` (no `AllowsTransparency`, no
+  `WS_EX_LAYERED`) shaped to its content silhouette with `SetWindowRgn` — WPF
+  draws the logo/bar/text as usual under hardware **or** software rendering,
+  and the region cuts every other pixel away so the desktop shows through. No
+  layering means it cannot become a black box in any environment. This also
+  exposed and fixed the real cause of the "startup failed" black/empty splash:
+  `window.Show()` raises `SourceInitialized` **synchronously**, and the field
+  `_window` was only assigned *after* `Show()`, so `OnSourceInitialized` read
+  it as `null` and `new WindowInteropHelper(null)` threw
+  `ArgumentNullException` — aborting the whole startup at the splash's first
+  frame (the exact `"Startup failed: Value cannot be null (Parameter 'window')"`
+  dialog). `_window` is now assigned **before** `Show()`. Verified on screen
+  (DPI-aware  capture): the splash is `layered=False`, has a complex window region
+  applied (`GetWindowRgn=3`), is 420×555 px centered on the 2560×1600
+  175% display, and 99.6% of its frame samples are non-black with the dominant
+  color being the desktop wallpaper showing through — the logo/bar/text float
+  over the desktop with no background. Handoff still fires via `WEBVIEW_SEEDED`.
+- **Splash text rendering fixed (uncommitted working tree)**: the status
+  ("Başlatılıyor…"/"Hazır") and version lines looked broken/eroded because the
+  window region was cut with an alpha threshold of 128 — thin anti-aliased
+  11-13 px glyph strokes carry alpha well below 128, so most text pixels fell
+  outside the region and were clipped away (a pre-fix pixel analysis showed the
+  whole text contributed only ~111 bright pixels). The threshold is now 32
+  (empty background is alpha 0, so nothing extra leaks in) and the two text
+  blocks are pinned to an explicit `Segoe UI` font family so the region (cut
+  from a snapshot of the tree) always matches the live glyphs even after the
+  app font resource is applied. The configured UI font is also now applied
+  before the splash is created. The status text was bumped 13→14 px and the
+  version 11→12 px with a brighter color (`#B4BECE` instead of `#8A94A6` — the
+  old gray had too little contrast on dark wallpapers). Verified on screen
+  (DPI-aware capture, glyph-bounding-box analysis): the status row now renders
+  complete (125×19 px, ~399 bright pixels) and the version row jumped to ~204
+  bright pixels, both matching the reference render of the same string.
+- **Splash stage-text clipping fixed (uncommitted working tree)**: the status
+  line that appears *before* "Arayüz yükleniyor…" ("Başlatılıyor…") was still
+  rendering broken/unreadable — the real cause was **not** the alpha threshold
+  but the window region itself. The region is cut from a snapshot taken with
+  the *widest* known stage string ("Arayüz yükleniyor…") as a **glyph
+  silhouette** — per-row runs that follow that string's letter shapes and
+  gaps. The live stage-1 string renders at different letter positions, so its
+  glyphs fall into the region's letter-gaps and get clipped → whole strokes and
+  characters vanish. That is exactly why "Arayüz yükleniyor…" (the snapshot
+  string) always looked fine while the text before it did not. Fix:
+  - Both text rows are now covered by **solid region bands** (the element's
+    full laid-out bounds, DIP→physical at the window DPI), unioned into the
+    region after the alpha silhouette — so every stage string stays inside the
+    region no matter where its letters land.
+  - The status/version text is centered (`TextAlignment = Center`) so any
+    stage string lines up on the same axis as the band.
+  Verified on screen (DPI-aware first-frame capture): the stage-1 text now
+  renders as complete, readable glyphs (195×34 px, ~1947 bright pixels vs ~916
+  before), centered at x≈113..307 with the B, Turkish ş cedilla, y descender
+  and ellipsis all present.
+- **Splash logo high-resolution (uncommitted working tree)**: the splash logo
+  was the 256×256 app-icon frame upscaled to ~420 physical px on this 175%
+  display — a 1.64× stretch that looked soft/pixelated (the "logo bozuk"
+  report). `Resources/Splash.png` is now regenerated from the original
+  **1507×1302** dashboard logo (`Temalar/icon/AO GPN.png`, recovered from git
+  HEAD after the earlier dashboard downscale): alpha-cropped, padded with a 6%
+  margin, and resized to 700×615 px with high-quality bicubic. The splash
+  `Image` also sets `RenderOptions.SetBitmapScalingMode(HighQuality)` so the
+  source is downscaled 0.6× (crisp) instead of bilinearly upscaled. The emblem
+  (shield + "AO GPN GAMING VPN" + crescent/star + wings) is now rendered from a
+  sharp high-res source at any display scale. Verified on screen: the on-screen
+  logo edge profiles show a clean transition and the emblem renders in full
+  detail; text rows still render complete.
+- **Boot profiling + faster handoff (uncommitted working tree)**: boot phases are
+  now traceable end-to-end in `ao_diag.txt` (`WEBVIEW_BOOT splash-shown →
+  components-done → webview-init-start → window-shown → webview-init-done →
+  seeds-start`, `WEBVIEW_SEEDED`, `WEBVIEW_MSG first-message`). Profiling showed
+  the page itself loads in ~250 ms and the seeds in ~240 ms — the remaining
+  ~2 s is WebView2 renderer↔host channel latency on loaded/virtualized machines
+  (NavigationCompleted, ExecuteScriptAsync and postMessage all arrive at the
+  same mark; a renderer-side probe classified it as environmental). Changes that
+  did move the needle:
+  - **Dual ready signal**: the seeds now run from whichever comes first —
+    `NavigationCompleted` or a 120 ms `document.readyState` poll through
+    `ExecuteScriptAsync` (a fast, hidden-safe channel; insurance for machines
+    where the two diverge).
+  - **Parallel seed pushes**: the eight critical first-paint pushes
+    (connection/window state, nodes, settings, monitor snapshot, theme,
+    effects tier, language) run via `Task.WhenAll` instead of serially; the
+    banner/telemetry pushes (WinDivert/WARP health, telemetry, capture stats,
+    app info, HWA notice) moved **after** the reveal.
+  - **WebView2 environment flags**: `--disable-backgrounding-occluded-windows
+    --disable-renderer-backgrounding --disable-background-timer-throttling` so
+    a hidden/occluded controller is never background-throttled.
+  - **Dashboard icon 3 MB → 113 KB** (`Temalar/icon/AO GPN.png`, 1507×1302 →
+    256×221; the dashboard renders it at 32–72 px): faster decode/paint and
+    ~3 MB smaller shipped output.
 - **Mid-session restart deferral**: rule edits that change the structure
   (`IsStructuralEntryChange`) no longer restart the core mid-match — they are
   deferred to the next natural reconnect, preventing drops.
@@ -65,11 +379,6 @@ All notable changes to AoGPN will be documented in this file.
   `docs/ozellik-envanteri-2026-09-05.md`.
 
 ### Removed
-- **Startup splash screen (uncommitted working tree)**: `Views/SplashWindow.xaml` /
-  `.xaml.cs` and `Resources/Splash.png` deleted (csproj `<Resource>` entry
-  dropped); the boot logo window, progress stages and fade-out path removed from
-  `App.OnStartup`. `TANITIM.md` / `RELEASE_YONERGESI.md` no longer describe the
-  splash.
 - V2rayN leftovers and scratch scripts quarantined (commit `361218d`; files under
   `Silinecekler_Yedek/V2rayN-Kalintilari-2026-09-05`).
 - **Hidden legacy toolbar** (`legacyToolbar`, already `Visibility="Collapsed"`) deleted
@@ -95,12 +404,167 @@ All notable changes to AoGPN will be documented in this file.
   (45 s window, GPN priority, elevation/canRecover/port-carry derivation, script
   content) now covered by 16 new tests; MainWindow 3,999 → 3,752 lines.
 - New tests: `GpnBypassEgressControllerTests` (9), `GpnCaptureDriftCheckerTests`
-  (8), `GpnTargetResolverRefreshTests` (2), `FmtUriRoundTripTests` (15 cases),
+  (16 — +8 UDP-only candidate/regression tests incl. the TCP-only
+  end-to-end scenario), `GpnTargetResolverRefreshTests` (2), `FmtUriRoundTripTests` (15 cases),
   Speedtest regression tests (7), launcher-bypass rule tests +
   `lb-editor.integration.test.js`, `ConnectionFailureLedgerTests` (16).
+- `WebView2SweepProbe` gained `--jscheck` / `--hidden-boot` diagnostic modes:
+  a real-WebView2 probe that loads the packaged dashboard, captures page
+  console errors and lists registered modules under the app's exact
+  hidden-boot condition (`Visibility=Hidden`) — the tool that caught this
+  regression.
 - Verification at write time: `dotnet build` 0 errors; ServiceLib.Tests
   **1,178 passed / 0 failed** (incl. 16 new `ConnectionFailureLedgerTests`);
   dashboard JS **212/212**.
+
+---
+
+### Development milestones folded into this release
+
+The milestones below are the development build-up that will ship as this single **1.1.1** release. They were tracked as separate `7.26.x` changelog entries, but none has shipped on its own — together they form the release above them. Listed newest-first (`7.26.77` → `7.26.67`), matching the changelog order.
+
+#### [7.26.78] — Real app icons in the dashboards + Windows-style Game Boost view module
+
+##### Added
+- **Original executable icons** — the Game Boost application-routes table, the
+  Connection Monitor table, the running-apps picker and the dashboard boost
+  cards now show the REAL shell icon of each executable (the same icon Windows
+  Explorer shows), resolved by a new host-side `AppIconService` (`SHGetFileInfo`
+  + GDI+ → 64 px PNG data URI, cached per path) and fetched on demand through a
+  new `get_app_icons` dashboard action; rows fall back to a letter tile until
+  the icon arrives and never re-request cached paths.
+- **Windows-style view modules** — the Game Boost section (`Temalar/boost-view.js`)
+  and the Connection Monitor table (`Temalar/monitor-view.js`) each gain
+  Explorer-style display modes as standalone modules loaded after `app.js` (no
+  growth of the main script): Details (the classic table), Small / Medium /
+  Large icon grids with the real app icons, plus grouping ("kategorileme") —
+  Game Boost by Route, Status or Type; Connection Monitor additionally by
+  Protocol, State, Country or Application — with collapsible headers. Each
+  module injects its own toolbar, grid markup and styles, keeps its choices in
+  `localStorage`, honours the existing filters (boost filter / monitor filter +
+  Hide listeners), and drives the same `set_app_route` / `remove_app` host
+  contracts as its table. Labels are translated through the shared dictionary
+  (new `boost.view.*` and `monitor.view.*` keys in en/tr).
+- **Standalone skins get the same treatment** — the icon cache is now exposed
+  to every skin iframe through `skinBridge.appIcons` (with a `skinNotify` on
+  new batches), so NEXUS Game Profiles table rows, the GPN panel boost cards,
+  the game list and the running-apps picker, CYBER source cards and INFRA app
+  rows all render the REAL executable icons with the same letter-tile fallback.
+  NEXUS additionally loads its own Windows-style view module
+  (`Temalar/skins/nexus/boost-view.js`) — Details + Small/Medium/Large icon
+  grids with grouping by Route/Status/Type, collapsible headers, its own
+  toolbar and styles, and the same `set_app_route` / `remove_app` contracts.
+
+##### Technical
+- `DashboardPushService` carries `exePath` in the apps snapshot; the dispatcher
+  gained `get_app_icons` (path array capped at 48 × 320 chars) and the policy
+  allow-list entry; `AppIconService` caches ≤ 512 icons in memory. Covered by
+  23 new JS integration tests (`Temalar/skins/boost-view.integration.test.js`,
+  `Temalar/skins/monitor-view.integration.test.js` and the skin boot suite
+  `Temalar/skins/skin-icons.integration.test.js` that boots the real NEXUS /
+  CYBER / INFRA skins through the sandbox).
+
+#### [7.26.77] — Per-app WARP node picker replaces the Settings → GPN bypass editor
+
+##### Added
+- **Settings → GPN tab removed** — the VLESS Reality bypass textarea and the
+  launcher-bypass domain editor are gone from the dashboard settings; per-app
+  WARP egress is now chosen where the route lives.
+- **Per-app WARP node picker** — a WARP-routed app row shows a node selector
+  next to the route dropdown listing every node in the dashboard node list
+  (İtalya, Almanya, Güney Afrika…). The chosen node becomes that app's WARP
+  egress: WireGuard nodes get their own `wg-<id>` tunnel in the mihomo config,
+  other supported protocols (VLESS/VMess/SS/Trojan/Hysteria2/TUIC/SOCKS/HTTP)
+  a `warp-<id>` proxy outbound; the route badge reads `WARP · <node>`.
+- **Graceful fallback** — deleted, disabled or unsupported nodes fall back to
+  the default WARP egress (warp-socks / dual vless-launcher) so a rule never
+  targets a missing outbound; node changes are structural (config fingerprint)
+  and land on the next natural reconnect without dropping a live session.
+
+##### Technical
+- `ManualRouteSetting.WarpNodeIndexId` persists the choice per entry; the
+  snapshot carries `warpNodeIndexId` to the renderer; `GpnCoreLauncher` resolves
+  node ids to profiles at launch; `GpnMihomoConfigService` emits the dedicated
+  egress outbounds and per-entry group members. Covered by 3 new JS integration
+  tests and a new mihomo dispatch test.
+
+#### [7.26.76] — Dashboard canvas effects engine wired up: cursor trails, matrix rain and confetti are live again
+
+##### Fixed
+- **The whole canvas effects engine was defined but never started** — `initCursorEffects()` was never called at boot, so cursor trails, the per-theme cursor rings (cyberpunk/matrix/plasma/phantom), matrix rain and the connect-confetti silently did nothing. The engine now initializes once at startup; every loop self-stops when idle, so the compositor still goes fully idle between interactions.
+- **Cursor trails painted with the wrong colour** — the trail `fillStyle` used `rgba(var(--violet-rgb), …)`; canvas colours do not resolve CSS `var()`, so the assignment was rejected and trails fell back to black (or the last confetti colour). The trail now uses a literal theme triplet refreshed on every theme switch.
+- **Trails/confetti render crisply on HiDPI displays** — the cursor canvas is now device-pixel-ratio aware (`setTransform(dpr, …)`) while drawing in CSS pixels, at zero per-frame cost when idle.
+
+##### Technical
+- Regression coverage in `Temalar/skins/dashboard.integration.test.js` (5 tests) via a new `keepCanvasFx` sandbox mode with recording canvas contexts and deterministic rAF flushing; the reduced/balanced motion tiers are asserted to freeze the loops.
+
+---
+
+#### [7.26.75] — Splash-free boot: invisible startup with a fade-in reveal
+
+##### Added
+- **The main window starts invisible (`Opacity 0`) and is revealed by `MainWindow.RevealStartupWindow()` only once the WebView2 dashboard has loaded and received its initial state** (theme/settings/language/…), so launching never flashes an empty black frame while the browser boots. The reveal is a short (~120 ms) fade-in so the first composited frame — including a standalone skin iframe still painting — can never appear as a raw dark frame. Reveal also fires on navigation failure / startup-script errors, on restore from a tray/minimized startup, and via a 15 s fallback timer — the window can never stay invisible.
+
+##### Removed
+- **The startup splash screen** (`SplashWindow.xaml` / `.xaml.cs`, `Resources/Splash.png` and the boot logo/progress/fade-out path in `App.OnStartup`) is gone; boot is now silent.
+
+---
+
+#### [7.26.74] — Shell declutter: legacy toolbar and Servers tab removed
+
+##### Removed
+- The hidden legacy left-rail toolbar (`legacyToolbar`): 17 single-protocol "Add server" items, five Subscription items, the option/routing/DNS/full-config/hotkey/reboot/SetUWP/clear-stats/regional-preset menus and the Help/Reload/Promotion/Close/update/verbose-log entries — plus the old "Servers" tab (`tabProfiles2` + `btnNavServers`). Node management now lives solely in the dashboard **Nodes** view; Import (clipboard) and Scan (QR) stay. Rail buttons that already duplicate these commands (Settings/Routing/DNS/Import/Scan) remain.
+
+---
+
+#### [7.26.73] — Global TUN migrated to Mihomo: complete Sing-box purge
+
+##### Changed
+- **The last sing-box paths are gone** — Global TUN now runs on Mihomo like the GPN tunnel; the sing-box config/service/tests were removed and the AoGPN.csproj core-asset and wintun checks now target mihomo/xray.
+- Test-database leakage between runs is fixed.
+
+---
+
+#### [7.26.72] — Launcher bypass editor: per-launcher domain + egress rows
+
+##### Added
+- **The fixed `BsgLauncherDomains` list is replaced by a user-editable launcher bypass list** — per-launcher **domain + egress (WARP / VLESS / DIRECT)** rows managed in Dashboard Settings → GPN (add/remove/enable). An empty list disables launcher rows; `null` keeps the legacy BSG defaults; dual-connection mode (`VlessBypassNodeJson`) still works together with it.
+
+---
+
+#### [7.26.71] — WARP degrade-egress: launcher DIRECT fallback on faulted WARP
+
+##### Added
+- **While the WARP egress is faulted, launcher requests automatically fall back to DIRECT** (clean exit instead of hitting the Cloudflare WAF); when WARP health returns they switch back automatically. Dashboard Degraded badge + i18n keys in all 9 languages.
+
+---
+
+#### [7.26.70] — Capture-gap hardening: first-tick PID capture + capture-drift warning
+
+##### Added
+- **First-tick PID capture** — a game spawning while the connection is being established (launcher auto-start) enters the WinDivert filter in ~750 ms instead of up to 5 s; silent while the PID set is unchanged.
+- **Capture-drift warning** — a "live connections but 0 captured packets" rose banner (`GpnCaptureDriftChecker`; gpn mode + tunneled apps only, keys in all 9 languages).
+
+---
+
+#### [7.26.69] — Structural rule edits deferred to the next natural reconnect
+
+##### Changed
+- **Rule edits that change the structure (`IsStructuralEntryChange`) no longer restart the core mid-match** — they are deferred to the next natural reconnect, preventing connection drops.
+
+---
+
+#### [7.26.68] — Speedtest empty-selection crash fixed
+
+##### Fixed
+- `SpeedtestService` no longer throws `OverflowException` on an empty selection — the early exit (`Count == 0 || pageSize <= 0`) now covers Tcping/Realping/UDP alike, and an empty run reports "stopped" instead of "completed".
+
+---
+
+#### [7.26.67] — P0 Wave 3: DashboardNodeService + DashboardPushService extracted
+
+##### Technical
+- **`DashboardNodeService` (969 lines) and `DashboardPushService` (659) extracted from MainWindow** — the window went from 7,071 to ~3,981 lines. `ConnectionFailureLedger` moved the failure-card record/priority and the 45 s freshness window into a testable ServiceLib service (16 new tests); every moved member body was verified byte-identical.
 
 ---
 

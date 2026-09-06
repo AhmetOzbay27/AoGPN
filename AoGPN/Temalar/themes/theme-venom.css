@@ -2,19 +2,45 @@
    AoGPN dashboard — theme: venom
    Part of the split stylesheet (see Temalar/dashboard.css for the load order).
    ========================================================================== */
+body[data-theme="venom"] {
+  --bg: #080E09;
+  --violet: #65A30D;
+  --cyan: #059669;
+  --emerald: #16A34A;
+  --glass: rgba(101, 163, 13, 0.035);
+  --glass-border: rgba(101, 163, 13, 0.11);
+  --violet-rgb: 101,163,13;
+  --cyan-rgb: 5,150,105;
+  --emerald-rgb: 22,163,74;
 
+  /* Theme scaffold — shared rules in components.css consume these variables. */
+  --theme-glass-border: rgba(101, 163, 13, 0.13);
+  --theme-glass-shadow: 0 1px 16px rgba(5, 150, 105, 0.06);
+  --theme-glass-hover-border: rgba(163, 230, 53, 0.32);
+  --theme-glass-hover-shadow: 0 4px 26px rgba(101, 163, 13, 0.13);
+  --theme-font-shadow: 0 0 10px rgba(163, 230, 53, 0.22);
+  --theme-ring-glow: drop-shadow(0 0 9px #65A30D) drop-shadow(0 0 5px #059669);
+  --theme-spinner-top: #65A30D;
+  --theme-spinner-right: #059669;
+  --theme-spinner-bottom: rgba(101, 163, 13, 0.2);
+  --theme-spinner-duration: .62s;
+  --theme-tooltip-border: rgba(163, 230, 53, 0.34);
+  --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 16px rgba(101, 163, 13, 0.15);
+  --theme-toast-border: rgba(163, 230, 53, 0.3);
+  --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px rgba(101, 163, 13, 0.11);
+  --theme-badge-border: rgba(163, 230, 53, 0.3);
+  --theme-badge-color: #BEF264;
+}
 
-  body[data-theme="venom"] {
-    --bg: #080E09;
-    --violet: #65A30D;
-    --cyan: #059669;
-    --emerald: #16A34A;
-    --glass: rgba(101, 163, 13, 0.035);
-    --glass-border: rgba(101, 163, 13, 0.11);
-  }
-  body[data-theme="venom"]::after {
-    content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(163,230,53,.05) 3px 4px);
-    animation: scan-drift 9s linear infinite;
-  }
-  @keyframes scan-drift { from { transform: translateY(0); } to { transform: translateY(40px); } }
+/* Signature — toxic scan drift. */
+body[data-theme="venom"]::after {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(163,230,53,.05) 3px 4px);
+  animation: scan-drift 9s linear infinite;
+  will-change: transform;
+}
+@keyframes scan-drift { from { transform: translateY(0); } to { transform: translateY(40px); } }
+body[data-theme="venom"]::before {
+  animation-duration: 40s !important;
+}
+

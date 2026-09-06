@@ -35,6 +35,11 @@ Altyapıda **Xray** ve **sing-box** çekirdeklerini kullanır; arayüz, WebView2
 - EXE sürükle-bırak ile oyun ekleme
 
 ### 🖥️ Canlı kontrol merkezi (WebView2 dashboard)
+- **Şık, hatasız açılış deneyimi** — program başlarken arka plansız, sadece
+  logo (şeffaf) + gerçek aşamalara bağlı yükleme barı + durum metni görünür
+  (Başlatılıyor… → Arayüz yükleniyor… → Hazır); dashboard yüklenip ilk durumu
+  alınca splash ile pencere aynı anda kesişerek (cross-fade) geçiş yapar —
+  siyah çerçeve, renk takılması veya takılı kalan pencere olmaz
 - Animasyonlu CONNECT halkası, canlı durum panelleri, IP doğrulama, ISP taban çizgisi
 - **GlassWire tarzı Bağlantı İzleyici** — hangi program nereye, hangi rota
   üzerinden bağlanıyor (ülke/ASN bilgisi dahil)

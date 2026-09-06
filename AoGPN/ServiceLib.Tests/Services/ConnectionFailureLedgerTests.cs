@@ -153,6 +153,31 @@ public class ConnectionFailureLedgerTests
             null, CoreFailure(error: null, at: Base), null, Base));
     }
 
+    [Fact]
+    public void Decide_CoreCrashWithExitCodeAndOutputTail_CarriesExitDetails()
+    {
+        // Beklenmedik çekirdek çıkışı: hata kartı, kullanıcı dostu mesajın yanına
+        // çıkış kodunu ve son stdout/stderr satırlarını ayrıntı olarak taşımalı —
+        // "3-5 sn sonra kendiliğinden yeniden bağlandı" döngüsünün nedeni sessiz
+        // kalmamalı.
+        var coreCrash = new CoreHealthSnapshot(
+            CoreHealthRole.Main, CoreHealthState.Failed, ECoreType.mihomo, null,
+            "Core exited unexpectedly",
+            changedAt: Base - TimeSpan.FromSeconds(3),
+            exitCode: -1073741510,
+            outputTail: "fatal: wintun adapter init failed\nfatal: unable to open route");
+
+        var card = ConnectionFailureLedger.Decide(null, coreCrash, null, Base);
+
+        Assert.NotNull(card);
+        Assert.Equal("Core exited unexpectedly", card!.Message);
+        Assert.NotNull(card.Details);
+        Assert.Contains("Core exit code: -1073741510", card.Details);
+        Assert.Contains("Last core output:", card.Details);
+        Assert.Contains("fatal: wintun adapter init failed", card.Details);
+        Assert.False(card.Elevation);
+    }
+
     // ── Kayıt kuralları ──────────────────────────────────────────────────────
 
     [Fact]

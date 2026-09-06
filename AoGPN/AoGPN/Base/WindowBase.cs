@@ -9,7 +9,33 @@ public class WindowBase<TViewModel> : ReactiveWindow<TViewModel> where TViewMode
         Loaded += OnLoaded;
     }
 
+    /// <summary>
+    /// True while the main window's dashboard is still booting with the window
+    /// parked off-screen (see <c>App.OnStartup</c>). Placement (saved size /
+    /// position / maximized state) is deferred while this is true and applied by
+    /// <see cref="ApplySavedPlacement"/> at the reveal, so the boot window can
+    /// never jump on screen mid-startup. Defaults to false for all other windows.
+    /// </summary>
+    protected virtual bool DeferPlacementUntilReveal => false;
+
     protected virtual void OnLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (DeferPlacementUntilReveal)
+        {
+            // Boot: the window is parked off-screen; RevealStartupWindow applies
+            // the placement when the dashboard has painted.
+            return;
+        }
+
+        ApplySavedPlacement();
+    }
+
+    /// <summary>
+    /// Restores the saved size, position (when still reachable on some monitor)
+    /// and maximized state from config. Also used by the startup reveal, which
+    /// defers the placement until the dashboard has painted.
+    /// </summary>
+    protected void ApplySavedPlacement()
     {
         try
         {

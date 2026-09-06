@@ -2,7 +2,7 @@
    AoGPN dashboard — "reduce effects" (motion budget)
    --------------------------------------------------------------------------
    Kill switch for the heavy theme animations: aurora drift, matrix rain,
-   cursor trails, CONNECT ring spin/breathe/orbit and every per-theme loop.
+   CONNECT ring spin/breathe/orbit and every per-theme loop.
    Loaded LAST (after the themes) so these rules always win the cascade.
    Active when either
      - the user enables "Reduce effects" in Settings  -> body.reduce-effects
@@ -29,9 +29,9 @@ body.reduce-effects .ring-orbit {
 
 /* Balanced tier: freeze the perpetual full-screen loops (aurora drift, theme
    signature scans/breaths, matrix rain) so the compositor can go idle between
-   user interactions, while the reactive effects (cursor trails, confetti,
-   CONNECT ring spin while connecting, spinners, toasts, hover transitions)
-   keep working. The ambient look stays — it just stops moving on its own. */
+   user interactions,   while the reactive effects (confetti, CONNECT ring spin while connecting,
+   spinners, toasts, hover transitions) keep working. The ambient look stays
+   — it just stops moving on its own. */
 body.effects-balanced::before,
 body.effects-balanced::after {
   animation: none !important;
@@ -56,4 +56,81 @@ body.effects-balanced #matrixRainCanvas {
      the cascade-order contract (and a static glow costs nothing once motion is
      disabled above). The user-facing body.reduce-effects rule above does remove
      the glow on purpose. */
+}
+
+/* Connected ring glow: the per-theme filters are guarded with
+   body:not(.connected)[data-theme=...] (same element, no descendant space), so
+   they match ONLY while disconnected. While connected they cannot match, and
+   this rule is the only .ring-wrap .ring-svg filter in play — it wins by
+   matching alone, no source-order dependence. Sitting after the theme files
+   keeps the intent explicit. reduce-effects above still wins via !important. */
+body.connected .ring-wrap .ring-svg { filter: drop-shadow(0 0 8px var(--emerald)); }
+
+/* ==========================================================================
+   Perpetual-motion governor — keep every effect, stop the 60 fps GPU burn
+   --------------------------------------------------------------------------
+   The ambient aurora (body::before), the active theme's signature layer
+   (body::after) and the connected ring sweep are infinite animations. Left
+   smooth, each one forces the WebView2 compositor to re-render the whole
+   page every vsync forever — the dashboard looks static to the eye while the
+   GPU process (Task Manager: "WebView2 GPU İşlemi") sits near 75-97 %.
+
+   Quantizing these loops with steps() changes the per-frame value only a
+   handful of times per second, so the compositor idles between steps (the
+   same pattern velocity-lines already uses). The motion is preserved: each
+   step moves a nearly-invisible layer (opacity .06-.85, radial fades) by
+   sub-pixel to a few pixels, which the eye cannot resolve.
+
+   IMPORTANT — steps() counts jumps per ANIMATION CYCLE, not per second, so
+   the counts below are cycle duration x target rate:
+     - body::before  aurora drift       steps(240) = ~6 steps/s on the 35-42 s
+                                         cycles (aurora-drift is the only
+                                         animation that runs on every theme)
+     - body::after   theme signature    steps(120) = ~4.5-33 steps/s depending
+                                         on the theme's cycle (3.6-26 s): the
+                                         fastest (ember-pulse 3.6 s) stays
+                                         smooth, the slowest (ocean-drift
+                                         26 s) still steps invisibly (< 2 px
+                                         per jump on faint gradients)
+
+   The CONNECT ring (sweep, breathing halo, orbit dots) is deliberately NOT
+   quantized: its ~220 px layers are cheap to composite and steps() on a
+   rotating arc with a bright leading dot reads as visible stutter (the 12 s
+   sweep would jump only once every 2 s). Ring motion stays smooth.
+
+   reduce-effects already kills all animation with !important, so the governor
+   excludes it. effects-balanced freezes ::before/::after itself, so those two
+   are excluded there too; the connected ring is NOT frozen by balanced
+   (reactive motion tier), so the ring keeps its smooth sweep in both tiers.
+   ========================================================================== */
+body:not(.reduce-effects):not(.effects-balanced)::before {
+  animation-timing-function: steps(240, jump-none);
+}
+/* Velocity already quantizes its scan with steps(240) (finer than the 120-step
+   governor would allow, so the faint stripes keep their smooth crawl while
+   the compositor still idles between steps) — the governor must not coarsen
+   it. Its ::before is the shared aurora and stays governed. */
+body:not(.reduce-effects):not(.effects-balanced):not([data-theme="velocity"])::after {
+  animation-timing-function: steps(120, jump-none);
+}
+
+/* ==========================================================================
+   Effects freeze while the app is not visible
+   --------------------------------------------------------------------------
+   Alt+Tab away, minimize, or another window covering the app: the user is
+   not looking, so the whole motion budget pauses (body.effects-hidden is
+   toggled by app.js from visibilitychange + window blur/focus). Animations
+   PAUSE at their current frame (animation-play-state) instead of being
+   removed, so the exact visual state is kept and everything resumes
+   seamlessly on focus — no effect is lost, the GPU simply goes fully idle
+   while the window is not on screen. Transitions jump straight to their end
+   state (nothing is visible to watch them anyway).
+   ========================================================================== */
+body.effects-hidden::before,
+body.effects-hidden::after,
+body.effects-hidden *,
+body.effects-hidden *::before,
+body.effects-hidden *::after {
+  animation-play-state: paused !important;
+  transition: none !important;
 }

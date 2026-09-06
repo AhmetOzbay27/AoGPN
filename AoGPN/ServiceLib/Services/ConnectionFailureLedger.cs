@@ -138,6 +138,9 @@ public sealed class ConnectionFailureLedger
 
         // 2) Ana çekirdek başlatma hatası (CoreHealthSnapshot.Error kullanıcı
         //    dostudur; teknik ayrıntı CoreStartupDiagnostic.TechnicalDetails).
+        //    Beklenmedik çıkışlarda çekirdeğin çıkış kodu ve son stdout/stderr
+        //    satırları da ayrıntıya eklenir — "3-5 sn sonra kendiliğinden yeniden
+        //    bağlanma" gibi döngülerin nedeni karta yansır, sessiz kalmaz.
         if (coreFailure is not null
             && !string.IsNullOrEmpty(coreFailure.Error)
             && now - coreFailure.ChangedAt < Freshness)
@@ -145,13 +148,33 @@ public sealed class ConnectionFailureLedger
             var diag = coreDiagnostic is { } d && now - d.CreatedAt < Freshness ? d : null;
             return new ConnectionFailureCard(
                 coreFailure.Error,
-                diag?.TechnicalDetails,
+                ComposeDetails(diag?.TechnicalDetails, coreFailure),
                 diag?.Code is CoreStartupErrorCode.ElevationRequired or CoreStartupErrorCode.ElevationFailed,
                 diag?.CanRecover == true,
                 diag?.Port ?? coreFailure.Port);
         }
 
         return null;
+    }
+
+    /// <summary>Teknik ayrıntı + (varsa) beklenmedik çıkışın çıkış kodu / stdout-stderr kuyruğu.</summary>
+    private static string? ComposeDetails(string? technicalDetails, CoreHealthSnapshot coreFailure)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrEmpty(technicalDetails))
+        {
+            parts.Add(technicalDetails);
+        }
+        if (coreFailure.ExitCode is { } exitCode)
+        {
+            parts.Add($"Core exit code: {exitCode}");
+        }
+        if (coreFailure.OutputTail is { Length: > 0 } tail)
+        {
+            parts.Add("Last core output:");
+            parts.Add(tail);
+        }
+        return parts.Count > 0 ? string.Join("\n", parts) : null;
     }
 
     /// <summary>Hata kartını dashboard'a basar (window.setConnectionError).</summary>

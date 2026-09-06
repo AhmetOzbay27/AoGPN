@@ -125,7 +125,7 @@ public class GpnCaptureFlowIntegrationTests
             Remarks = "global-node",
             Address = "92.4.137.125",
             Port = 443,
-            Id = Guid.NewGuid().ToString(),
+            Password = Guid.NewGuid().ToString(),
             Network = nameof(ETransport.raw),
             StreamSecurity = Global.StreamSecurityReality,
             Sni = "example.com",

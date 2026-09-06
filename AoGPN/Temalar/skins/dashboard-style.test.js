@@ -58,9 +58,43 @@ function ruleFor(sheet, selector) {
   return walk(sheet.cssRules);
 }
 
+const ruleForContains = (sheet, selector) => {
+  const walk = (rules) => {
+    for (const r of rules || []) {
+      if (r.selectorText && String(r.selectorText).split(',').map(x => x.trim()).includes(selector)) return r;
+      if (r.cssRules) {
+        const hit = walk(r.cssRules);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  return walk(sheet.cssRules);
+};
+
 const decl = (sheet, selector, prop) => {
   const r = ruleFor(sheet, selector);
   return r ? r.style.getPropertyValue(prop) : null;
+};
+
+// First rule with the selector that actually declares `prop` — a selector can
+// legitimately appear in several rules (e.g. body.connected .ring-wrap .ring-svg
+// carries animation in components.css and filter in effects.css).
+const declAny = (sheet, selector, prop) => {
+  const walk = (rules) => {
+    for (const r of rules || []) {
+      if (r.selectorText === selector) {
+        const v = r.style.getPropertyValue(prop);
+        if (v) return v;
+      }
+      if (r.cssRules) {
+        const hit = walk(r.cssRules);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  return walk(sheet.cssRules);
 };
 
 // ---------------------------------------------------------------------------
@@ -123,6 +157,15 @@ test('cssom: dashboard connected state re-tints the CONNECT ring', () => {
   assert.equal(decl(sheet, 'body.connected .ring-halo', 'background'),
     'radial-gradient(circle, color-mix(in srgb, var(--emerald) 20%, transparent), transparent 62%)');
   assert.equal(decl(sheet, 'body.connected .ring-orbit.r2 i', 'background'), '#A7F3D0', 'second orbit dot light mint');
+  // Connected keeps the ring alive with a slow, transform-only radar sweep (the
+  // fast spin/breathe are the connecting signal; the sedate sweep is the
+  // connected one — never regress the connected ring back to a frozen state).
+  assert.equal(decl(sheet, 'body.connected .ring-wrap .ring-svg', 'animation'),
+    'ring-spin 12s linear infinite', 'connected arc keeps a slow radar sweep');
+  assert.equal(decl(sheet, 'body.connected .ring-halo', 'animation'),
+    'ring-breathe 4s ease-in-out infinite', 'connected halo breathes slowly');
+  assert.equal(decl(sheet, 'body.connected .ring-orbit', 'animation'),
+    'ring-spin 9s linear infinite', 'connected orbit dots keep circling');
 });
 
 test('jsdom: adding body.connected flips the orbit dot to the literal mint colour', () => {
@@ -138,6 +181,67 @@ test('jsdom: adding body.connected flips the orbit dot to the literal mint colou
   d.body.classList.add('connected');
   assert.equal(computed(dom, dot).backgroundColor, 'rgb(167, 243, 208)',
     'connected dot resolves the literal #A7F3D0 from the state rule');
+  dom.window.close();
+});
+
+test('cssom: the idle ring glow is guarded by a same-element :not(.connected) and the connected glow wins', () => {
+  // One SHARED scaffold rule drives the idle ring glow; it must carry the
+  // body:not(.connected) guard ON THE SAME element (body:not(.connected)[data-theme]
+  // — a descendant-space form could never match, since <body> cannot nest):
+  // while connected, the scaffold rule cannot match the ring, so the emerald
+  // connected glow (below) is the only filter in play.
+  const sheet = parseSheet(dashboardCss());
+  const connectedFilter = 'drop-shadow(0 0 8px var(--emerald))';
+  const scaffoldSel = 'body:not(.connected)[data-theme] .ring-wrap .ring-svg';
+  const scaffoldRule = ruleFor(sheet, scaffoldSel);
+  assert.ok(scaffoldRule, 'shared ring-glow scaffold rule exists');
+  assert.ok(String(scaffoldRule.style.getPropertyValue('filter')).startsWith('var(--theme-ring-glow'),
+    'scaffold ring rule drives the filter via --theme-ring-glow');
+  // Every theme feeds the scaffold rule its own glow value.
+  const palettes = embeddedThemePalettes();
+  assert.ok(Object.keys(palettes).length >= 25, 'all registered themes render');
+  for (const id of Object.keys(palettes)) {
+    assert.ok(palettes[id].decls['--theme-ring-glow'],
+      'theme "' + id + '" declares --theme-ring-glow (no inherited glow)');
+  }
+  // The connected glow must be present and come AFTER the scaffold rule in the
+  // embedded chain. (With the same-element guard the connected rule wins by
+  // matching alone — the scaffold cannot match while body.connected is set —
+  // so this ordering is belt-and-braces, but it keeps the intent explicit.)
+  const css = dashboardCss();
+  // The connected FILTER rule (effects.css) is the one that must win; the
+  // connected ANIMATION rule (components.css) is a different property and may
+  // sit anywhere in the chain.
+  const connectedIdx = css.indexOf('body.connected .ring-wrap .ring-svg { filter:');
+  assert.ok(connectedIdx >= 0, 'connected ring rule exists');
+  const scaffoldIdx = css.lastIndexOf(scaffoldSel);
+  assert.ok(scaffoldIdx >= 0, 'scaffold ring rule exists in the chain');
+  assert.ok(connectedIdx > scaffoldIdx,
+    'connected ring rule sits after the guarded scaffold rule in the cascade');
+  assert.equal(declAny(sheet, 'body.connected .ring-wrap .ring-svg', 'filter'), connectedFilter,
+    'connected glow switches the outer ring to emerald');
+});
+
+test('jsdom: the same-element ring guard matches when idle and stops matching when connected', () => {
+  // Regression guard for the old descendant-space form (body:not(.connected) body[...]):
+  // a <body> can never be a descendant of another <body>, so that selector never
+  // matched and the per-theme idle ring glow silently never applied. The fixed
+  // selector must match the themed ring while disconnected and unmatch on .connected.
+  const dom = styledDashboard();
+  const d = dom.window.document;
+  d.body.setAttribute('data-theme', 'nebula');
+  const ring = d.createElement('div');
+  ring.className = 'ring-wrap';
+  ring.innerHTML = '<svg class="ring-svg"></svg>';
+  d.body.appendChild(ring);
+  const svg = ring.querySelector('.ring-svg');
+  assert.ok(svg.matches('body:not(.connected)[data-theme="nebula"] .ring-wrap .ring-svg'),
+    'idle themed ring matches the same-element guard');
+  assert.ok(!svg.matches('body:not(.connected) body[data-theme="nebula"] .ring-wrap .ring-svg'),
+    'the old descendant-space form never matches (regression guard)');
+  d.body.classList.add('connected');
+  assert.ok(!svg.matches('body:not(.connected)[data-theme="nebula"] .ring-wrap .ring-svg'),
+    'the guard stops matching once connected, leaving the emerald glow alone');
   dom.window.close();
 });
 
@@ -299,15 +403,15 @@ test('cssom: skin-host rules hide the app frame and reveal the host when a skin 
   // Skin active -> host covers the window, standard UI is gone.
   assert.equal(decl(sheet, 'body[data-skin]:not([data-skin="standard"]) #skinHost', 'display'), 'block');
   assert.equal(decl(sheet, 'body[data-skin]:not([data-skin="standard"]) #appFrame', 'display'), 'none');
-  // The full-screen FX (cursor trails, matrix rain, cyber overlay) must die too.
-  assert.equal(declNorm('body[data-skin]:not([data-skin="standard"]) #cursorCanvas, body[data-skin]:not([data-skin="standard"]) #matrixRainCanvas, body[data-skin]:not([data-skin="standard"]) #cyberOverlay, body[data-skin]:not([data-skin="standard"]) .cursor-fx', 'display'), 'none');
+  // The full-screen FX (confetti/matrix canvases, cyber overlay) must die too.
+  assert.equal(declNorm('body[data-skin]:not([data-skin="standard"]) #cursorCanvas, body[data-skin]:not([data-skin="standard"]) #matrixRainCanvas, body[data-skin]:not([data-skin="standard"]) #cyberOverlay', 'display'), 'none');
   assert.equal(declNorm('body[data-skin]:not([data-skin="standard"])::before, body[data-skin]:not([data-skin="standard"])::after', 'display'), 'none');
   assert.equal(decl(sheet, 'body[data-skin]:not([data-skin="standard"])', 'overflow-y'), 'auto');
 
   // The app-frame / FX hides are forced with !important so nothing re-shows them.
   const frameRule = ruleFor(sheet, 'body[data-skin]:not([data-skin="standard"]) #appFrame');
   assert.equal(frameRule.style.getPropertyPriority('display'), 'important');
-  const fxRule = ruleNorm('body[data-skin]:not([data-skin="standard"]) #cursorCanvas, body[data-skin]:not([data-skin="standard"]) #matrixRainCanvas, body[data-skin]:not([data-skin="standard"]) #cyberOverlay, body[data-skin]:not([data-skin="standard"]) .cursor-fx');
+  const fxRule = ruleNorm('body[data-skin]:not([data-skin="standard"]) #cursorCanvas, body[data-skin]:not([data-skin="standard"]) #matrixRainCanvas, body[data-skin]:not([data-skin="standard"]) #cyberOverlay');
   assert.equal(fxRule.style.getPropertyPriority('display'), 'important');
 });
 
@@ -478,6 +582,80 @@ test('jsdom: switching body[data-theme] applies each palette at runtime', () => 
   dom.window.close();
 });
 
+// Selector comparison that ignores whitespace runs, so the embedded chain is
+// matched regardless of the source files' alignment spacing.
+const normSel = (s) => s.replace(/\s+/g, ' ').trim();
+
+// ruleForContains variant that normalizes whitespace on both sides.
+const ruleForNormContains = (sheet, selector) => {
+  const want = normSel(selector);
+  const walk = (rules) => {
+    for (const r of rules || []) {
+      if (r.selectorText && String(r.selectorText).split(',').map(normSel).includes(want)) return r;
+      if (r.cssRules) {
+        const hit = walk(r.cssRules);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  return walk(sheet.cssRules);
+};
+
+// The 16 scaffold variables the shared rules in components.css consume. Every
+// theme MUST declare all of them so no theme can inherit another theme's accents.
+const THEME_SCAFFOLD_VARS = [
+  '--theme-glass-border', '--theme-glass-shadow',
+  '--theme-glass-hover-border', '--theme-glass-hover-shadow',
+  '--theme-font-shadow', '--theme-ring-glow',
+  '--theme-spinner-top', '--theme-spinner-right', '--theme-spinner-bottom', '--theme-spinner-duration',
+  '--theme-tooltip-border', '--theme-tooltip-shadow',
+  '--theme-toast-border', '--theme-toast-shadow',
+  '--theme-badge-border', '--theme-badge-color'
+];
+
+test('cssom: every theme ships the complete signature contract (parity)', () => {
+  // Full-feature parity across ALL registered themes. The accent rules (.glass,
+  // .font-display, ring glow, spinner, tooltip, toast, .status-badge) are the
+  // SHARED scaffold in components.css — each theme declares the --theme-*
+  // variables that drive them, plus its unique signature ::after layer.
+  // No theme may inherit another theme's effects.
+  const themeDir = path.join(__dirname, '..', 'themes');
+  const sheet = parseSheet(dashboardCss());
+  const files = fs.readdirSync(themeDir).filter(f => /^theme-.+\.css$/.test(f));
+  const scaffold = [
+    { sel: 'body[data-theme] .glass', label: '.glass accent', prop: 'border-color' },
+    { sel: 'body[data-theme] .glass:hover', label: '.glass hover', prop: 'box-shadow' },
+    { sel: 'body[data-theme] .font-display', label: '.font-display text-shadow', prop: 'text-shadow' },
+    { sel: 'body[data-theme] .theme-spinner', label: '.theme-spinner', prop: 'border-top-color' },
+    { sel: 'body[data-theme] [title]:hover::after', label: 'tooltip', prop: 'border-color' },
+    { sel: 'body[data-theme] #nodeToast', label: '#nodeToast toast', prop: 'border-color' },
+    { sel: 'body[data-theme] .status-badge', label: '.status-badge', prop: 'color' },
+    { sel: 'body:not(.connected)[data-theme] .ring-wrap .ring-svg', label: 'ring glow', prop: 'filter' }
+  ];
+
+  const palettes = embeddedThemePalettes();
+  const ids = Object.keys(palettes);
+  assert.ok(ids.length >= 25, 'all registered themes render (' + ids.length + ')');
+  assert.equal(files.length, ids.length,
+    'each theme owns its own on-disk file (' + files.length + ' files, ' + ids.length + ' themes)');
+
+  const missing = [];
+  for (const c of scaffold) {
+    const rule = ruleFor(sheet, c.sel);
+    if (!rule || !rule.style.getPropertyValue(c.prop)) missing.push('shared :: ' + c.label + ' (' + c.sel + ')');
+  }
+  for (const id of ids) {
+    for (const v of THEME_SCAFFOLD_VARS) {
+      if (!palettes[id].decls[v]) missing.push(id + ' :: missing ' + v);
+    }
+    const sigRule = ruleForNormContains(sheet, 'body[data-theme="' + id + '"]::after');
+    if (!sigRule || !sigRule.style.getPropertyValue('animation')) missing.push(id + ' :: signature ::after layer');
+  }
+  assert.deepEqual(missing, [],
+    'every theme must define the complete signature contract:\n  ' + missing.join('\n  '));
+});
+
 // ---------------------------------------------------------------------------
 // Rule-order guard — every embedded block's overrides come after their bases
 // ---------------------------------------------------------------------------
@@ -516,6 +694,61 @@ test('cascade consistency: every embedded dashboard block has its overrides afte
     'dashboard has no jsdom cascade divergences (' + totalRules + ' rules scanned across all embedded blocks):\n\n' +
     problems.join('\n\n'));
 });
+
+// ---------------------------------------------------------------------------
+// Motion budget — perpetual loops are quantized; hidden app pauses everything
+// ---------------------------------------------------------------------------
+
+// The governor rules are multi-selector, so look the declaration up through
+// any rule that contains the selector (selectorText keeps the line breaks).
+const declContaining = (sheet, selector, prop) => {
+  const r = ruleForContains(sheet, selector);
+  return r ? r.style.getPropertyValue(prop) : null;
+};
+
+test('cssom: perpetual ambient loops are quantized so the compositor idles between steps', () => {
+  const sheet = parseSheet(dashboardCss());
+  // The ambient aurora and the active theme signature must not animate every
+  // vsync forever: the governor rewrites their timing to discrete steps.
+  // steps() counts jumps per ANIMATION CYCLE, not per second, so the counts
+  // are calibrated to the cycle lengths: 240 steps over the 35-42 s aurora
+  // cycle (~6 steps/s) and 120 steps over the 3.6-26 s signature cycles
+  // (4.5-33 steps/s — smooth on the fastest themes, invisible on the slowest).
+  assert.equal(declContaining(sheet, 'body:not(.reduce-effects):not(.effects-balanced)::before', 'animation-timing-function'),
+    'steps(240, jump-none)', 'aurora drift quantized');
+  assert.equal(declContaining(sheet, 'body:not(.reduce-effects):not(.effects-balanced):not([data-theme="velocity"])::after', 'animation-timing-function'),
+    'steps(120, jump-none)', 'theme signature quantized');
+  // The CONNECT ring is a small ~220 px layer and steps() on its rotating arc
+  // reads as visible stutter — it must stay smooth (no governor override).
+  assert.equal(declContaining(sheet, 'body.connected:not(.reduce-effects) .ring-wrap .ring-svg', 'animation-timing-function'),
+    null, 'connected ring sweep stays smooth');
+  assert.equal(declContaining(sheet, 'body.connected:not(.reduce-effects) .ring-halo', 'animation-timing-function'),
+    null, 'connected halo stays smooth');
+  assert.equal(declContaining(sheet, 'body.connected:not(.reduce-effects) .ring-orbit', 'animation-timing-function'),
+    null, 'orbit dots stay smooth');
+});
+
+test('cssom: effects-hidden pauses every animation instead of removing it', () => {
+  const sheet = parseSheet(dashboardCss());
+  // The freeze rule must exist and be multi-selector (pseudo-elements AND all
+  // descendants); pause (not animation:none) keeps the current frame so the
+  // visuals resume seamlessly — nothing is lost, the GPU just idles.
+  const pause = ruleForContains(sheet, 'body.effects-hidden *');
+  assert.ok(pause, 'effects-hidden descendant pause rule exists');
+  assert.equal(pause.style.getPropertyValue('animation-play-state'), 'paused');
+  assert.equal(pause.style.getPropertyPriority('animation-play-state'), 'important');
+  assert.equal(pause.style.getPropertyValue('transition'), 'none');
+  assert.equal(pause.style.getPropertyPriority('transition'), 'important');
+  const before = ruleForContains(sheet, 'body.effects-hidden::before');
+  assert.ok(before, 'effects-hidden pseudo-element rule exists');
+  assert.equal(before.style.getPropertyValue('animation-play-state'), 'paused');
+  assert.equal(before.style.getPropertyPriority('animation-play-state'), 'important');
+});
+
+// (No jsdom-level assertion for the pause: jsdom's cascade cannot resolve
+// !important against the style attribute, so the rule-level cssom assertions
+// above plus the dashboard.integration.test.js blur/focus class tests are the
+// real coverage — the live WebView2 applies the cascade correctly.)
 
 // ---------------------------------------------------------------------------
 // Palette — the :root variables everything else derives from

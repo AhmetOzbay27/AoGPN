@@ -237,6 +237,8 @@
   "route.vpn": "VPN",
   "route.warp": "WARP",
   "warp.fallbackNotice": "Rute WARP memerlukan node WireGuard — koneksi aktif bukan WireGuard, aplikasi WARP dialihkan lewat VPN.",
+  "warp.nodeDefault": "Default (node aktif)",
+  "warp.nodePickerHint": "Lalu lintas WARP aplikasi ini keluar melalui node yang dipilih — pilih node mana pun dari daftar Anda (Italia, Jerman, Afrika Selatan…).",
   "settings.language": "Bahasa",
   "settings.save": "Simpan Pengaturan",
   "settings.stack": "Tumpukan",

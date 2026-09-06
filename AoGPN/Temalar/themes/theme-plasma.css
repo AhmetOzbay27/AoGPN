@@ -11,6 +11,28 @@
     --emerald: #9333EA;
     --glass: rgba(124, 58, 237, 0.035);
     --glass-border: rgba(124, 58, 237, 0.11);
+
+    /* Theme scaffold — shared rules in components.css consume these variables.
+       Spinner is a full custom build (border:none + radial orb). */
+    --theme-glass-border: rgba(124, 58, 237, 0.08);
+    --theme-glass-shadow: 0 1px 15px rgba(124, 58, 237, 0.04);
+    --theme-glass-hover-border: rgba(0, 212, 255, 0.32);
+    --theme-glass-hover-shadow: 0 3px 24px rgba(124, 58, 237, 0.13);
+    --theme-font-shadow: 0 0 12px rgba(124, 58, 237, 0.26), 0 0 22px rgba(0, 212, 255, 0.14);
+    --theme-ring-glow: drop-shadow(0 0 10px #7B2FFF);
+    --theme-spinner-top: rgba(124, 58, 237, 0.2);
+    --theme-spinner-right: rgba(2, 132, 199, 0.2);
+    --theme-spinner-bottom: rgba(124, 58, 237, 0.2);
+    --theme-spinner-duration: 1.5s;
+    --theme-spinner-border: none;
+    --theme-spinner-bg: radial-gradient(circle, #00D4FF 20%, #7B2FFF 60%, transparent 70%);
+    --theme-spinner-animation: plasma-orb 1.5s ease-in-out infinite;
+    --theme-tooltip-border: rgba(123,47,255,.4);
+    --theme-tooltip-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(0,212,255,.2), 0 0 30px rgba(123,47,255,.1);
+    --theme-toast-border: rgba(123,47,255,.35);
+    --theme-toast-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px rgba(123,47,255,.15), 0 0 40px rgba(0,212,255,.08);
+    --theme-badge-border: rgba(0,212,255,.3);
+    --theme-badge-color: #00D4FF;
   }
 
   /* --- Plasma: slow breathing orb --- */
@@ -31,33 +53,8 @@
        per-frame GPU cost in the dashboard; the shared gradient is soft already */
   }
 
-  /* --- Plasma accent: electric purple glow --- */
-  body[data-theme="plasma"] .glass {
-    border-color: rgba(124, 58, 237, 0.08);
-    box-shadow: 0 1px 15px rgba(124, 58, 237, 0.04);
-  }
-  body[data-theme="plasma"]    .ring-wrap .ring-svg { filter: drop-shadow(0 0 10px #7B2FFF); }
-
   /* Plasma: pulsing orb spinner */
-  body[data-theme="plasma"] .theme-spinner {
-    border: none;
-    background: radial-gradient(circle, #00D4FF 20%, #7B2FFF 60%, transparent 70%);
-    border-radius: 50%;
-    animation: plasma-orb 1.5s ease-in-out infinite;
-  }
   @keyframes plasma-orb {
     0%, 100% { transform: scale(.7); opacity: .5; }
     50% { transform: scale(1.2); opacity: 1; }
   }
-  /* Plasma: electric glow tooltip */
-  body[data-theme="plasma"] [title]:hover::after {
-    border-color: rgba(123,47,255,.4);
-    box-shadow: 0 4px 20px rgba(0,0,0,.5), 0 0 18px rgba(0,212,255,.2), 0 0 30px rgba(123,47,255,.1);
-  }
-  /* Plasma: electric purple toast */
-  body[data-theme="plasma"] #nodeToast {
-    border-color: rgba(123,47,255,.35);
-    box-shadow: 0 14px 40px rgba(0,0,0,.55), 0 0 20px rgba(123,47,255,.15), 0 0 40px rgba(0,212,255,.08);
-  }
-  body[data-theme="plasma"] .status-badge { border-color: rgba(0,212,255,.3); color: #00D4FF; }
-  body[data-theme="plasma"] #plasmaCursor { display: block; }

@@ -237,6 +237,8 @@
   "route.vpn": "VPN",
   "route.warp": "WARP",
   "warp.fallbackNotice": "La route WARP nécessite un nœud WireGuard — la connexion active n'est pas WireGuard, les apps WARP passent donc par le VPN.",
+  "warp.nodeDefault": "Par défaut (nœud actif)",
+  "warp.nodePickerHint": "Le trafic WARP de cette application sort par le nœud sélectionné — choisissez n'importe quel nœud de votre liste (Italie, Allemagne, Afrique du Sud…).",
   "settings.language": "Langue",
   "settings.save": "Enregistrer",
   "settings.stack": "Pile",
