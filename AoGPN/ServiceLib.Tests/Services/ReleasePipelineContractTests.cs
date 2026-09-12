@@ -65,13 +65,57 @@ public sealed class ReleasePipelineContractTests
     [Fact]
     public void ReleaseJob_ForcesTheReleaseToBeStableAndLatest()
     {
+        // Çağrı iki biçimde yazılabilir: düz bir komut satırı (`gh release edit`)
+        // ya da argv dizisi (`@('release','edit',...)`). Sözleşme biçime değil
+        // İÇERİĞE bakar; bu yüzden karşılaştırma boşluk ve tırnaklardan
+        // arındırılmış metin üzerinde yapılır.
         var edit = StepRuns("release")
-            .FirstOrDefault(run => run.Contains("gh release edit", StringComparison.Ordinal));
+            .FirstOrDefault(run => Normalized(run).Contains("release,edit", StringComparison.Ordinal)
+                                || Normalized(run).Contains("ghreleaseedit", StringComparison.Ordinal));
 
         edit.Should().NotBeNull(
             "sürümün ön sürüm işareti kaldırılmazsa /releases/latest ucu onu atlar ve güncelleme hiç sunulmaz");
         edit.Should().Contain("--prerelease=false");
         edit.Should().Contain("--latest");
+    }
+
+    /// <summary>
+    /// Yayın işi BİLEREK checkout yapmaz: yalnızca üretilmiş artefaktları indirir.
+    /// gh ise deposunu çalışma dizininin git uzak adresinden çözer — ilk gerçek
+    /// yayında tam bu yüzden düştü (<c>fatal: not a git repository</c>) ve hiç
+    /// sürüm oluşmadı. Bu kilit, düzeltmenin sessizce geri alınmasını engeller.
+    /// </summary>
+    [Fact]
+    public void ReleaseJob_ResolvesTheRepositoryWithoutACheckout()
+    {
+        var hasCheckout = JobSteps("release")
+            .Select(step => Text(Child(step, "uses")) ?? string.Empty)
+            .Any(uses => uses.StartsWith("actions/checkout", StringComparison.Ordinal));
+
+        var runs = StepRuns("release").ToList();
+        var releaseCalls = runs
+            .Where(run => run.Contains("gh release", StringComparison.Ordinal)
+                       || run.Contains("'release',", StringComparison.Ordinal))
+            .ToList();
+
+        releaseCalls.Should().NotBeEmpty("sürümü oluşturan adım bulunmalı");
+
+        if (hasCheckout)
+        {
+            return;
+        }
+
+        // `env` bir eşleme, skaler değil: düğüm olarak alınmalı. (Bu satır ilk
+        // yazılışta Text() ile okunuyordu ve her zaman null dönüyordu.)
+        var envNode = Child(Child(Child(ReleaseRoot(), "jobs"), "release"), "env");
+        var jobGhRepo = envNode is null ? null : Text(Child(envNode, "GH_REPO"));
+        jobGhRepo.Should().NotBeNullOrEmpty(
+            "checkout yapılmayan işte gh depoyu GH_REPO'dan çözebilmeli");
+
+        foreach (var run in releaseCalls)
+        {
+            run.Should().Contain("--repo", "GH_REPO'ya ek olarak her çağrı depoyu açıkça da belirtmeli");
+        }
     }
 
     [Fact]
@@ -198,6 +242,13 @@ public sealed class ReleasePipelineContractTests
             .Where(file => file.EndsWith(".yml", StringComparison.OrdinalIgnoreCase) ||
                            file.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
             .OrderBy(file => file, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Boşluk ve tırnakları atar: <c>gh release edit</c> ile
+    /// <c>@('release','edit')</c> aynı çağrıyı anlatır ve sözleşme bu yazım
+    /// farkını önemsememeli.
+    /// </summary>
+    private static string Normalized(string run) => Regex.Replace(run, @"[\s'""]+", string.Empty);
 
     private static string ReadWorkflow(string fileName)
         => File.ReadAllText(Path.Combine(WorkflowsDirectory, fileName));

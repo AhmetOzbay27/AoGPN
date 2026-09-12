@@ -244,7 +244,30 @@ jobs:
     runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      # gh, deposunu üzerinde çalıştığı dizinin git uzak adresinden çözer. Bu iş
+      # BİLEREK checkout yapmaz (yalnızca artefaktları indirir), dolayısıyla
+      # çalışma dizininde .git yoktur ve gh "fatal: not a git repository" ile
+      # düşer — ilk gerçek yayın tam bu yüzden başarısız oldu. GH_REPO bu
+      # çözümlemeyi tamamen atlar; ayrıca her çağrıya --repo da açıkça verilir.
+      GH_REPO: ${{ github.repository }}
     steps:
+      - name: Check gh context
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          gh --version
+          Write-Host "GH_REPO=$env:GH_REPO"
+          # Jetonun gerçekten yazabildiğini ölçer. READ ise depo ayarı jetonu
+          # kısıtlıyor demektir (Settings > Actions > General > Workflow
+          # permissions) ve yayın oluşturma her hâlükârda başarısız olur.
+          $perm = gh repo view $env:GH_REPO --json viewerPermission --jq .viewerPermission
+          Write-Host "Jetonun depo izni: $perm"
+          if ($perm -notin @('WRITE', 'ADMIN', 'MAINTAIN')) {
+            Write-Host "::error::Jetonun depo izni '$perm'; yayin olusturulamaz. Settings > Actions > General > Workflow permissions: 'Read and write permissions' secilmeli."
+          }
+
       - name: Download packaged zips
         uses: actions/download-artifact@v8
         with:
@@ -261,38 +284,59 @@ jobs:
           # aksi halde başarısız bir yükleme adımı "başarılı" görünürdü.
           $PSNativeCommandUseErrorActionPreference = $false
           $tag = $env:RELEASE_TAG
+          $repo = $env:GH_REPO
+
+          # gh tek noktadan çağrılır; bu iki sorunu birden çözer:
+          #  (1) Yerel bir komutun stderr'i, ErrorActionPreference=Stop altında
+          #      Windows PowerShell 5.1'de SONLANDIRICI hataya dönüşür. Çağrı EAP
+          #      gevşetilerek yapılır, böylece adım hem pwsh 7 hem 5.1'de aynı
+          #      sonucu verir (hat etiket atılmadan önce yerelde denenebilsin).
+          #  (2) Hata metni ::error:: annotation'ına yazılır. Gerekçesi ölçülmüş:
+          #      koşum günlüklerini indirmek depo yöneticisi hakkı istiyor ve
+          #      ilk gerçek yayında hatanın ne olduğunu kimse okuyamadı.
+          #      Annotation uçları ise herkese açıktır.
+          function Invoke-Gh {
+            param([string[]]$GhArgs)
+            $prev = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            $out = & gh @GhArgs 2>&1
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = $prev
+            $script:GhOutput = (($out | Out-String).Trim() -replace "`r?`n", ' | ')
+            if ($script:GhOutput.Length -gt 600) { $script:GhOutput = $script:GhOutput.Substring(0, 600) + '...' }
+            return $code
+          }
+
+          function Format-GhError([string]$Message) {
+            Write-Host "::error::$Message - gh cikti: $script:GhOutput"
+            return "$Message - gh çıktısı: $script:GhOutput"
+          }
 
           # `gh release view`ın başarısız olması BEKLENEN durumdur (sürüm henüz
-          # yok). Ama yerel bir komutun stderr'i, ErrorActionPreference=Stop
-          # altında Windows PowerShell 5.1'de SONLANDIRICI hataya dönüşür ve
-          # adım "sürüm oluştur" dalına hiç ulaşamaz; PS 7.3+ ise yukarıdaki
-          # $PSNativeCommandUseErrorActionPreference ile bunu engeller. İki
-          # davranışı birleştirmek için çağrı EAP gevşetilerek ve stderr
-          # susturularak yapılır — adım hem pwsh 7 hem 5.1'de aynı sonucu verir
-          # (yayın hattı etiket atılmadan önce yerelde denenebilsin).
-          $previousEap = $ErrorActionPreference
-          $ErrorActionPreference = 'Continue'
-          & gh release view $tag 2>$null | Out-Null
-          $releaseExists = $LASTEXITCODE -eq 0
-          $ErrorActionPreference = $previousEap
+          # yok); bu yüzden burada hata fırlatılmaz, yalnızca var/yok çıkarılır.
+          $releaseExists = (Invoke-Gh @('release', 'view', $tag, '--repo', $repo)) -eq 0
 
           if (-not $releaseExists) {
-            & gh release create $tag --title $tag --generate-notes
-            if ($LASTEXITCODE -ne 0) { throw "Sürüm oluşturulamadı: $tag" }
+            if ((Invoke-Gh @('release', 'create', $tag, '--repo', $repo, '--title', $tag, '--generate-notes')) -ne 0) {
+              throw (Format-GhError "Sürüm oluşturulamadı: $tag")
+            }
           }
 
           # Ön sürüm işareti KALDIRILIR ve sürüm "latest" yapılır: uygulama yeni
           # sürümü /releases/latest ucundan bulur ve o uç ön sürümleri atlar.
-          & gh release edit $tag --title $tag --prerelease=false --latest
-          if ($LASTEXITCODE -ne 0) { throw "Sürüm güncellenemedi: $tag" }
+          if ((Invoke-Gh @('release', 'edit', $tag, '--repo', $repo, '--title', $tag, '--prerelease=false', '--latest')) -ne 0) {
+            throw (Format-GhError "Sürüm güncellenemedi: $tag")
+          }
 
           $assets = @(Get-ChildItem dist -Filter *.zip -Recurse | Select-Object -ExpandProperty FullName)
           if ($assets.Count -eq 0) {
             throw "Yüklenecek zip bulunamadı (dist boş)."
           }
 
-          & gh release upload $tag $assets --clobber
-          if ($LASTEXITCODE -ne 0) { throw "Varlıklar yüklenemedi: $tag" }
+          $uploadArgs = @('release', 'upload', $tag, '--repo', $repo) + $assets + @('--clobber')
+          if ((Invoke-Gh $uploadArgs) -ne 0) {
+            throw (Format-GhError "Varlıklar yüklenemedi: $tag")
+          }
 
           Write-Host "$tag sürümü yayımlandı: $($assets -join ', ')"
 
@@ -304,6 +348,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      # release işiyle AYNI sebep: gh `Upload signatures` adımında, checkout'tan
+      # ÖNCE çağrılıyor ve orada henüz .git yok. GH_REPO bu çözümlemeyi atlar;
+      # böylece adım checkout sırasına bağımlı olmaktan çıkar.
+      GH_REPO: ${{ github.repository }}
     steps:
       # Job seviyesinde `secrets` bağlamı kullanılamaz (GitHub buna izin vermez),
       # bu yüzden anahtarın varlığı bir adımda tespit edilip output olarak
