@@ -1,5 +1,17 @@
 name: publish GPG public key
 
+# Ortak anahtarı (AoGPN-public-key.asc) bir sürüme yükler.
+#
+# Bu iş akışı ARTIK ÜRETİMİN KENDİSİ DEĞİLDİR: gövdesi, release.yml'in imzalama
+# işiyle ortak olan tek uygulamayı (.github/actions/publish-public-key) çağırır.
+# Böylece AoGPN-public-key.asc'in tek bir tanımı olur; aynı varlık adını iki ayrı
+# kod yolunun beslemesi (ve zamanla ayrışması) imkânsızdır.
+#
+# Eski gövde `svenstaro/upload-release-action@v2` ile ve `prerelease: true`
+# bayrağıyla yüklüyordu. Sürüm yoksa o bayrak yayını ÖN SÜRÜM olarak açar ve
+# uygulama güncellemeyi /releases/latest ucundan okuduğu için hiç görmez. Ortak
+# uygulama bu yüzden yalnızca gh kullanır ve sürümü ön sürüm olarak açmaz.
+
 on:
   workflow_call:
     inputs:
@@ -8,10 +20,13 @@ on:
         type: string
     secrets:
       GPG_PRIVATE_KEY:
-        required: true
+        # Zorunlu DEĞİL: anahtar tanımlı değilse çağıran iş akışı kırılmaz,
+        # ortak uygulama yalnızca bir uyarı bırakıp atlar.
+        required: false
   workflow_dispatch:
     inputs:
       release_tag:
+        description: 'Ortak anahtarın yükleneceği sürüm etiketi (ör. v1.1.2)'
         required: true
         type: string
 
@@ -22,27 +37,11 @@ jobs:
   publish:
     runs-on: ubuntu-26.04
     steps:
-    - name: Import GPG private key
-      shell: bash
-      env:
-        GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-      run: |
-        set -euo pipefail
-        install -m 700 -d ~/.gnupg
-        printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+    - name: Checkout
+      uses: actions/checkout@v7
 
-    - name: Export GPG public key
-      shell: bash
-      run: |
-        set -euo pipefail
-        fingerprint="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
-        [[ -n "$fingerprint" ]] || { echo "No GPG secret key found."; exit 1; }
-        gpg --batch --armor --export "$fingerprint" > AoGPN-public-key.asc
-
-    - name: Upload GPG public key to release
-      uses: svenstaro/upload-release-action@v2
+    - name: Publish GPG public key
+      uses: ./.github/actions/publish-public-key
       with:
-        file: AoGPN-public-key.asc
-        tag: ${{ inputs.release_tag }}
-        prerelease: true
-        overwrite: true
+        release-tag: ${{ inputs.release_tag }}
+        private-key: ${{ secrets.GPG_PRIVATE_KEY }}

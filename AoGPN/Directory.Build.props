@@ -1,8 +1,94 @@
 <Project>
 
+    <!--
+      SÜRÜM TEK KAYNAKTAN GELİR: git etiketi (v<major>.<minor>.<patch>).
+
+      * Yayın hattı (release.yml) etiketi doğrulayıp derlemeye -p:Version=<etiket>
+        olarak verir; aşağıdaki mantık o değeri asla ezmez (komut satırı özelliği
+        geçersiz kılınamaz).
+      * Yerel/CI derlemelerinde sürüm, HEAD'den erişilebilen en yakın v<sayı>
+        etiketinden türetilir.
+      * Etiket yoksa (bu depoda ilk etiket atılana kadar) veya git yoksa (kaynak
+        arşivi) ya da etiket sürüm biçiminde değilse 0.0.1 kullanılır. Neden
+        sıfır değil de 0.0.1: AppUpdateChecker yerel sürümü 0.0.0 okuduğunda bunu
+        "sürüm bilinmiyor" kabul eder ve yeni sürüm olsa bile kullanıcıya
+        HİÇBİR ŞEY önermez. Etiketlenmemiş bir derlemede (her yerel geliştirme
+        derlemesi ve etiket dışı CI derlemesi) güncelleme denetiminin tümden
+        susması istenmeyen bir davranıştır. 0.0.1 yayınlanmış her gerçek
+        sürümden KÜÇÜKTÜR; böylece denetim çalışır (mevcut gerçek sürümler hâlâ
+        kendini "eski" görüp yeni sürümü fark eder), ama hiçbir sürüm numarası
+        uydurulmaz ve AssemblyVersion'ın ilk iki bileşeni 0 kaldığı için SDK'nın
+        sürüm varsayımıyla (1.0.0) karışmaz.
+
+      Neden bu dosyada (Directory.Build.props) ve neden tüm projelere:
+      Utils.GetVersionInfo() çalışma anında YÜRÜTÜLEN derlemenin — yani
+      ServiceLib'in — AssemblyVersion'ını okur ve uygulama güncelleme denetimi
+      (AppUpdateChecker.IsNewer) tam olarak bu değeri karşılaştırır. Sürümü
+      yalnızca AoGPN.csproj'a damgalamak, karşılaştırmayı SDK varsayılanına
+      (1.0.0) düşürür ve kurulu her sürüm kendini sonsuza kadar "eski" sanardı.
+    -->
+
+    <!-- Komut satırından -p:Version=... verildiyse hedef hiç çalışmasın. Bu
+         bayrak burada, değerlendirme anında alınır: hedefin içinde '$(Version)'
+         artık SDK varsayılanını taşıyor olur (değerlendirme tamamlanmıştır). -->
     <PropertyGroup>
-        <Version>1.1.1</Version>
+        <_AoGPNVersionFromGitTag Condition="'$(Version)' == ''">true</_AoGPNVersionFromGitTag>
     </PropertyGroup>
+
+    <Target Name="AoGPNResolveVersionFromGitTag"
+            Condition="'$(_AoGPNVersionFromGitTag)' == 'true'"
+            BeforeTargets="GetAssemblyVersion;CoreGenerateAssemblyInfo;GenerateAssemblyInfo">
+
+        <!-- 1) Depoda v<sayı...> biçiminde etiket var mı? Hiç etiket yokken
+                doğrudan `git describe` çağırmak stderr'e "fatal: No names found"
+                basar; önce sessiz listeleme yapılır. -->
+        <Exec Command="git tag --list &quot;v[0-9]*&quot;"
+              WorkingDirectory="$(MSBuildThisFileDirectory)"
+              ConsoleToMSBuild="true"
+              IgnoreExitCode="true"
+              IgnoreStandardErrorWarningFormat="true"
+              StandardOutputImportance="low">
+            <Output TaskParameter="ConsoleOutput" PropertyName="_AoGPNGitTags" />
+        </Exec>
+
+        <!-- 2) HEAD'den erişilebilen en yakın sürüm etiketi. -->
+        <Exec Command="git describe --tags --abbrev=0 --match &quot;v[0-9]*&quot;"
+              Condition="'$(_AoGPNGitTags.Trim())' != ''"
+              WorkingDirectory="$(MSBuildThisFileDirectory)"
+              ConsoleToMSBuild="true"
+              IgnoreExitCode="true"
+              IgnoreStandardErrorWarningFormat="true"
+              StandardOutputImportance="low">
+            <Output TaskParameter="ConsoleOutput" PropertyName="_AoGPNGitTag" />
+        </Exec>
+
+        <PropertyGroup>
+            <_AoGPNGitTag>$(_AoGPNGitTag.Trim())</_AoGPNGitTag>
+            <!-- Yedek: etiket yok / git yok / etiket sürüm biçiminde değil.
+                 Sıfırdan farklı olmalıdır: 0.0.0 güncelleme denetimini kapatır. -->
+            <_AoGPNResolvedVersion>0.0.1</_AoGPNResolvedVersion>
+        </PropertyGroup>
+
+        <!-- Yalnızca "v1.2.3" ya da "1.2.3" biçimi kabul edilir. Sonekli etiket
+             ("v1.2.3-rc1") BİLEREK kabul edilmez: AssemblyVersion sayısal olmak
+             zorundadır ve sonekli bir etiket güncelleme denetiminde kalıcı olarak
+             "daha yeni" görünürdü. Doğrulama regex ile yapılır çünkü MSBuild'in
+             String.IndexOf property function'ı değerlendirilemiyor (MSB4184). -->
+        <PropertyGroup Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(_AoGPNGitTag)', '^v?\d+\.\d+\.\d+$'))">
+            <_AoGPNResolvedVersion>$(_AoGPNGitTag.TrimStart('v'))</_AoGPNResolvedVersion>
+        </PropertyGroup>
+
+        <!-- Üçünü birlikte veriyoruz: SDK bunları normalde değerlendirme anında
+             '$(Version)' üzerinden hesaplar, bu yüzden hedef içinde yalnızca
+             Version'ı değiştirmek yeterli olmaz. Utils.GetVersionInfo()
+             AssemblyVersion'ı okur; File/Informational ise teşhis içindir. -->
+        <PropertyGroup>
+            <Version>$(_AoGPNResolvedVersion)</Version>
+            <AssemblyVersion>$(_AoGPNResolvedVersion)</AssemblyVersion>
+            <FileVersion>$(_AoGPNResolvedVersion)</FileVersion>
+            <InformationalVersion>$(_AoGPNResolvedVersion)</InformationalVersion>
+        </PropertyGroup>
+    </Target>
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>

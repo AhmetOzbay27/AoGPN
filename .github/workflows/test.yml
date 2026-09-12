@@ -3,6 +3,7 @@ name: Code Test
 on:
   pull_request:
     branches:
+      - main
       - master
     paths:
       - 'AoGPN/ServiceLib/Services/CoreConfig/**'
@@ -11,6 +12,19 @@ on:
       - 'AoGPN/ServiceLib/Resx/**'
       - 'AoGPN/ServiceLib.Tests/LocalizationConsistencyTests.cs'
       - 'AoGPN/Temalar/skins/**'
+      # Sürüm hattının sözleşmesi ReleasePipelineContractTests tarafından
+      # kilitlenir; hat (veya sözleşmeyi kuran servis) değiştiğinde testler
+      # çalışmazsa kural sessizce aşınır.
+      - 'AoGPN/ServiceLib.Tests/Services/ReleasePipelineContractTests.cs'
+      - 'AoGPN/ServiceLib/Services/AppUpdateChecker.cs'
+      - '.github/workflows/release.yml'
+      # Güncelleme akışı ve yan güncelleyici: uçtan uca test hem güncelleyiciyi
+      # hem de onu başlatan sözleşmeyi kapsar.
+      - 'AoGPN/AoGPN.Updater/**'
+      - 'AoGPN/ServiceLib.Tests/Services/AppUpdaterEndToEndTests.cs'
+      - 'AoGPN/ServiceLib.Tests/Services/AppUpdaterLauncherTests.cs'
+      - 'AoGPN/ServiceLib/Services/AppUpdaterLauncher.cs'
+      - 'AoGPN/ServiceLib/Services/AppUpdateUpdaterContract.cs'
       - '.github/workflows/test.yml'
 
 jobs:
@@ -23,14 +37,19 @@ jobs:
         submodules: 'recursive'
         fetch-depth: '0'
 
+    # SDK sürümü projelerin hedefiyle (net10.0) eşleşmelidir: 8.0.x ile
+    # derleme NETSDK1045 ile düşer ve aşağıdaki sözleşme testleri hiç koşmaz.
+    # Diğer iş akışları da aynı bandı kullanır.
     - name: Setup .NET
       uses: actions/setup-dotnet@v6.0.0
       with:
-        dotnet-version: '8.0.x'
+        dotnet-version: '10.0.1xx'
 
+    # --no-restore KALDIRILDI: işte bunun öncesinde bir geri yükleme adımı yok,
+    # bu yüzden temiz bir koşucuda test hiç başlamıyordu.
     - name: Test Code
       working-directory: ./AoGPN
-      run: dotnet test ./ServiceLib.Tests --no-restore
+      run: dotnet test ./ServiceLib.Tests
 
     # Standalone skin tests (Temalar/skins/*.test.js): the pure keyboard
     # contract, the real keydown listeners and the host-echo override cleanup.
@@ -50,3 +69,25 @@ jobs:
     - name: Test Skins (node)
       working-directory: ./AoGPN
       run: node --test "Temalar/skins/*.test.js"
+
+  # Yan güncelleyici gerçek bir Windows exe'sidir: uçtan uca test onu AYRI bir
+  # süreç olarak çalıştırıp sahte bir kurulumun üzerine gerçek bir paket açar.
+  # Bu yüzden ubuntu işinde atlanır (Assert.Skip) — kurulumu YERİNDE
+  # değiştirebilen tek bileşen olduğu için gerçek bir Windows koşucusunda sınanır.
+  updater-e2e:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: 'recursive'
+        fetch-depth: '0'
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6.0.0
+      with:
+        dotnet-version: '10.0.1xx'
+
+    - name: Update end-to-end tests
+      working-directory: ./AoGPN
+      run: dotnet test ./ServiceLib.Tests --filter "FullyQualifiedName~AppUpdaterEndToEnd"

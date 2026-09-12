@@ -5,6 +5,7 @@
     <File Path="../.github/workflows/build-osx.yml" />
     <File Path="../.github/workflows/build-windows-desktop.yml" />
     <File Path="../.github/workflows/build-windows.yml" />
+    <File Path="../.github/workflows/release.yml" />
     <File Path="../.github/workflows/winget-publish.yml" />
     <File Path="../package-debian.sh" />
     <File Path="../package-osx.sh" />
@@ -14,7 +15,6 @@
     <File Path="Directory.Build.props" />
     <File Path="Directory.Packages.props" />
   </Folder>
-  <Project Path="AmazTool/AmazTool.csproj" />
   <Project Path="ServiceLib.Tests/ServiceLib.Tests.csproj" />
   <Project Path="ServiceLib.UdpTest/ServiceLib.UdpTest.csproj" Id="77930428-4dc4-4130-9031-6b9e714f5d20" />
   <Project Path="ServiceLib/ServiceLib.csproj" />
@@ -23,5 +23,6 @@
   <Project Path="AoGPN.GpnJsonlConsumer/AoGPN.GpnJsonlConsumer.csproj" />
   <Project Path="AoGPN.GpnProbeTool/AoGPN.GpnProbeTool.csproj" />
   <Project Path="AoGPN.GpnSessionTool/AoGPN.GpnSessionTool.csproj" />
+  <Project Path="AoGPN.Updater/AoGPN.Updater.csproj" />
   <Project Path="AoGPN/AoGPN.csproj" />
 </Solution>

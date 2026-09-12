@@ -1,0 +1,390 @@
+name: release (tag)
+
+# `v*` etiketi itildiğinde çalışan TEK yayın hattı.
+#
+# Sözleşme — uygulamanın kendi güncelleme denetimiyle (AppUpdateChecker) birebir:
+#   * Varlık adları AppUpdateChecker.ExpectedAssetName'e uyar:
+#       x64   → AoGPN-windows-64.zip
+#       arm64 → AoGPN-windows-arm64.zip
+#   * Sürüm "latest" olarak yayımlanır ve ÖN SÜRÜM DEĞİLDİR; aksi halde
+#     /releases/latest ucu yeni sürümü göremez ve güncelleme hiç sunulmaz.
+#   * Paket kökünde AoGPN.exe'nin YANINDA AoGPN.Updater.exe bulunur; dosyaları
+#     yerine koyan tek bileşen odur ve yoksa uygulama güncellemeyi hiç önermez.
+#   * Derleme sürümü etiketten damgalanır: elle sürüm yükseltmek gerekmez ve
+#     "etiket, gömülü sürümden yeni" durumundan doğan sonsuz güncelleme
+#     döngüsü oluşamaz (AppUpdateChecker etiketi gömülü sürümle karşılaştırır).
+#   * Her zip için ayrılmış (detached) ASCII-armored imza yüklenir:
+#       AoGPN-windows-64.zip.sig
+#       AoGPN-windows-arm64.zip.sig
+#     İmzalama ayrı bir Linux işinde yapılır (Windows runner'da gpg kurulu
+#     olmayabilir; mevcut upload-sign.yml de bu yüzden Linux kullanır).
+#   * İmzalarla birlikte ortak anahtar da aynı sürüme yüklenir:
+#       AoGPN-public-key.asc
+#     Böylece kullanıcı indirdiği .sig dosyasını doğrulayabilir. Yükleme,
+#     pub-key.yml ile ORTAK tek uygulamadır (.github/actions/publish-public-key);
+#     aynı varlık adı iki ayrı kod yolundan üretilmediği için çakışma ya da
+#     tanım ayrışması olamaz.
+#
+# Etiket biçimi bilerek katı: v<major>.<minor>.<patch> (ör. v1.0.5). Sonekli bir
+# etiket (v1.0.5-beta) aynı sayısal sürümü damgalar ama güncelleme denetiminde
+# "yeni" görünmeye devam ederdi — bu yüzden erkenden reddedilir.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Yeniden yayımlanacak mevcut etiket (ör. v1.0.5)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  # Çekirdek ikilileri (xray/mihomo/geo) önceki sürümlerde olduğu gibi pakete
+  # gömülür. İndirilemezse sürüm YİNE üretilir; uygulama çekirdeği ilk
+  # çalıştırmada kendi indirebilir.
+  CORE_BIN_BASE: https://github.com/AhmetOzbay27/AoGPN-core-bin/raw/refs/heads/master
+
+jobs:
+  package:
+    name: package ${{ matrix.rid }}
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            asset: AoGPN-windows-64.zip
+          - rid: win-arm64
+            asset: AoGPN-windows-arm64.zip
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: '10.0.1xx'
+
+      - name: Validate tag and derive version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = $env:RELEASE_TAG
+          if ($tag -notmatch '^v(?<ver>\d+\.\d+\.\d+)$') {
+            throw "Etiket 'v<major>.<minor>.<patch>' biçiminde olmalı (ör. v1.0.5); gelen: '$tag'"
+          }
+          "APP_VERSION=$($Matches.ver)" >> $env:GITHUB_ENV
+          Write-Host "Yayımlanacak sürüm: $($Matches.ver) (etiket: $tag)"
+
+      - name: Reset the package stage
+        # `stage/<rid>` her zaman SIFIRDAN kurulur. GitHub'ın barındırdığı
+        # koşucular temiz olduğu için bu pratikte gereksiz görünür — ama paketi
+        # DETERMİNİSTİK yapar: önceki bir denemenin (workflow_dispatch yeniden
+        # koşusu, yarıda kesilmiş bir iş, yeniden denenen adım) bıraktığı
+        # dosyalar sessizce zip'e giremez. Ölçüldü: bayat bir stage'e publish
+        # etmek bayat dosyayı SİLMEZ, olduğu gibi paketler — yani temizlik
+        # olmadan "pakette ne var" sorusunun cevabı geçmişe bağlı kalır.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "stage/${{ matrix.rid }}"
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+      - name: Bundle core binaries (AoGPN-core-bin)
+        # Çekirdek deposu erişilemezse sürüm yine çıkar; bu adım yalnızca
+        # kullanıcıya hazır paketi sağlar.
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "stage/${{ matrix.rid }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          $url = "$env:CORE_BIN_BASE/${{ matrix.asset }}"
+          try {
+            Invoke-WebRequest -Uri $url -OutFile "core-bin.zip" -MaximumRetryCount 3 -RetryIntervalSec 5
+            Expand-Archive -Path "core-bin.zip" -DestinationPath "core-bin" -Force
+
+            # Arşiv tek bir kök klasör (ör. AoGPN-windows-64/) içerebilir; iki
+            # düzeni de destekle.
+            $top = @(Get-ChildItem "core-bin" -Force)
+            $source = if ($top.Count -eq 1 -and $top[0].PSIsContainer) { $top[0].FullName } else { (Resolve-Path "core-bin").Path }
+            Copy-Item -Path (Join-Path $source '*') -Destination $stage -Recurse -Force
+            Write-Host "Çekirdek ikilileri pakete eklendi: $url"
+          } catch {
+            Write-Warning "Çekirdek paketi eklenemedi ($url): $($_.Exception.Message)"
+          }
+
+      - name: Publish AoGPN
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Çekirdeklerin ÜZERİNE yazılır: paketteki uygulama her zaman bu
+          # etiketten derlenmiş sürüm olmalıdır.
+          dotnet publish "AoGPN/AoGPN/AoGPN.csproj" `
+            -c Release `
+            -r ${{ matrix.rid }} `
+            -p:SelfContained=true `
+            -p:EnableWindowsTargeting=true `
+            -p:Version=$env:APP_VERSION `
+            -o "stage/${{ matrix.rid }}"
+          # PowerShell yerel komut hatalarında adımı düşürmez; açıkça kontrol et.
+          if ($LASTEXITCODE -ne 0) { throw "Uygulama derlenemedi (çıkış kodu $LASTEXITCODE)." }
+
+      - name: Publish AoGPN.Updater
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "stage/${{ matrix.rid }}"
+
+          # Uygulamadan SONRA yayımlanır. Tek dosya + self-contained olması
+          # zorunlu: kullanıcıda .NET kurulu olmayabilir ve bölünmüş bir yayın
+          # pakete çalışma zamanı dosyaları sızdırırdı.
+          dotnet publish "AoGPN/AoGPN.Updater/AoGPN.Updater.csproj" `
+            -c Release `
+            -r ${{ matrix.rid }} `
+            -p:SelfContained=true `
+            -p:PublishSingleFile=true `
+            -p:PublishTrimmed=true `
+            -p:EnableWindowsTargeting=true `
+            -p:Version=$env:APP_VERSION `
+            -o $stage
+          if ($LASTEXITCODE -ne 0) { throw "Güncelleyici derlenemedi (çıkış kodu $LASTEXITCODE)." }
+
+          # AoGPN.csproj, güncelleyicinin bölünmüş (tek dosya olmayan) çıktısını
+          # da kopyalar; tek dosya sürümünün yanında bu üçü gereksizdir.
+          foreach ($stale in 'AoGPN.Updater.dll','AoGPN.Updater.deps.json','AoGPN.Updater.runtimeconfig.json') {
+            $path = Join-Path $stage $stale
+            if (Test-Path $path) { Remove-Item $path -Force }
+          }
+
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "stage/${{ matrix.rid }}"
+
+          foreach ($required in 'AoGPN.exe','AoGPN.Updater.exe') {
+            if (-not (Test-Path (Join-Path $stage $required))) {
+              throw "Pakette eksik dosya: $required"
+            }
+          }
+
+          # Geliştirme artıkları pakete SIZMAMALI. AoGPN.csproj Temalar glob'unda
+          # kara listeyle elenirler; burada bağımsız bir güvenlik ağı olarak
+          # yalnızca ADLANDIRMA kuralları kontrol edilir (aynı listenin ikinci
+          # kopyası tutulmaz). Glob bir gün yeniden genişlerse node_modules gibi
+          # 1000+ dosyalık bir dizin sürüme sessizce giremez.
+          # GetRelativePath yerine Substring: Windows PowerShell 5.1'de de çalışır.
+          $stageFull = (Resolve-Path $stage).Path
+          $forbidden = @(
+            Get-ChildItem $stage -Recurse -Force -File | Where-Object {
+              $rel = $_.FullName.Substring($stageFull.Length + 1)
+              $segments = $rel -split '[\\/]'
+              $segments -contains 'node_modules' -or
+              $segments -contains '__pycache__' -or
+              $_.Extension -in '.pyc','.map' -or
+              $_.Name -like '*.test.js' -or
+              ($rel -like 'Temalar*' -and $_.Name -like '_*') -or
+              ($rel -like 'Temalar*' -and $_.Name -in 'package.json','package-lock.json')
+            }
+          )
+          if ($forbidden.Count -gt 0) {
+            # Mesaj bilerek kısaltılır: node_modules gibi bir dizin kaçarsa
+            # yüzlerce dosya adı CI günlüğünü boğmasın.
+            $list = ($forbidden | Select-Object -First 15 | ForEach-Object { $_.FullName.Substring($stageFull.Length + 1) }) -join ', '
+            $more = if ($forbidden.Count -gt 15) { " ... (+$($forbidden.Count - 15) dosya daha)" } else { "" }
+            throw "Pakete gelistirme artigi sizdi ($($forbidden.Count) dosya): $list$more"
+          }
+          Write-Host "Paket icerigi temiz: gelistirme artigi yok."
+
+          $updater = Get-Item (Join-Path $stage 'AoGPN.Updater.exe')
+          # Self-contained tek dosya güncelleyici birkaç MB olur. Küçük bir exe,
+          # güncelleyicinin framework'e bağımlı yayımlandığını gösterir: .NET
+          # kurulu olmayan kullanıcıda güncelleme sessizce çalışmaz.
+          if ($updater.Length -lt 1MB) {
+            throw "AoGPN.Updater.exe beklenenden küçük ($($updater.Length) bayt): framework'e bağımlı yayımlanmış olabilir."
+          }
+          Write-Host "AoGPN.Updater.exe boyutu: $([math]::Round($updater.Length / 1MB, 2)) MB"
+
+      - name: Remove debug symbols
+        shell: pwsh
+        run: Get-ChildItem "stage/${{ matrix.rid }}" -Recurse -Include *.pdb -File | Remove-Item -Force
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Compress-Archive -Path "stage/${{ matrix.rid }}/*" -DestinationPath "${{ matrix.asset }}" -Force
+          $size = [math]::Round((Get-Item "${{ matrix.asset }}").Length / 1MB, 2)
+          Write-Host "${{ matrix.asset }} oluşturuldu ($size MB)"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub release
+    needs: package
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Download packaged zips
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update the release and upload assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # gh yerel bir komut olduğu için çıkış kodu her adımda AÇIKÇA denetlenir;
+          # aksi halde başarısız bir yükleme adımı "başarılı" görünürdü.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $tag = $env:RELEASE_TAG
+
+          # `gh release view`ın başarısız olması BEKLENEN durumdur (sürüm henüz
+          # yok). Ama yerel bir komutun stderr'i, ErrorActionPreference=Stop
+          # altında Windows PowerShell 5.1'de SONLANDIRICI hataya dönüşür ve
+          # adım "sürüm oluştur" dalına hiç ulaşamaz; PS 7.3+ ise yukarıdaki
+          # $PSNativeCommandUseErrorActionPreference ile bunu engeller. İki
+          # davranışı birleştirmek için çağrı EAP gevşetilerek ve stderr
+          # susturularak yapılır — adım hem pwsh 7 hem 5.1'de aynı sonucu verir
+          # (yayın hattı etiket atılmadan önce yerelde denenebilsin).
+          $previousEap = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          & gh release view $tag 2>$null | Out-Null
+          $releaseExists = $LASTEXITCODE -eq 0
+          $ErrorActionPreference = $previousEap
+
+          if (-not $releaseExists) {
+            & gh release create $tag --title $tag --generate-notes
+            if ($LASTEXITCODE -ne 0) { throw "Sürüm oluşturulamadı: $tag" }
+          }
+
+          # Ön sürüm işareti KALDIRILIR ve sürüm "latest" yapılır: uygulama yeni
+          # sürümü /releases/latest ucundan bulur ve o uç ön sürümleri atlar.
+          & gh release edit $tag --title $tag --prerelease=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "Sürüm güncellenemedi: $tag" }
+
+          $assets = @(Get-ChildItem dist -Filter *.zip -Recurse | Select-Object -ExpandProperty FullName)
+          if ($assets.Count -eq 0) {
+            throw "Yüklenecek zip bulunamadı (dist boş)."
+          }
+
+          & gh release upload $tag $assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Varlıklar yüklenemedi: $tag" }
+
+          Write-Host "$tag sürümü yayımlandı: $($assets -join ', ')"
+
+  sign:
+    name: sign release files
+    # Sürümden SONRA çalışır: imzalar ancak varlıklar yüklendikten sonra
+    # eklenebilir (gh release upload var olan bir sürüm ister).
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      # Job seviyesinde `secrets` bağlamı kullanılamaz (GitHub buna izin vermez),
+      # bu yüzden anahtarın varlığı bir adımda tespit edilip output olarak
+      # yayılır. Anahtar yoksa iş başarısız olmaz — yalnızca imza üretilmez.
+      - name: Check for a signing key
+        id: key
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [[ -n "${GPG_PRIVATE_KEY:-}" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Imzalama atlandi::GPG_PRIVATE_KEY tanimli degil; .sig dosyalari uretilmedi."
+          fi
+
+      - name: Download packaged zips
+        if: steps.key.outputs.present == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Import GPG private key
+        if: steps.key.outputs.present == 'true'
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.gnupg
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --list-secret-keys
+
+      - name: Sign packages
+        if: steps.key.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*.zip)
+          (( ${#files[@]} )) || { echo "Imzalanacak zip yok (dist bos)"; exit 1; }
+          for f in "${files[@]}"; do
+            gpg --batch --yes --armor --detach-sign --output "$f.sig" "$f"
+            # İmzayı hemen doğrula: yanlış anahtarla üretilmiş bir .sig sessizce
+            # yüklenmesin.
+            gpg --batch --verify "$f.sig" "$f"
+            echo "Imzalandi: $f.sig"
+          done
+
+      - name: Upload signatures
+        if: steps.key.outputs.present == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          signatures=(dist/*.zip.sig)
+          (( ${#signatures[@]} )) || { echo "Yuklenecek imza yok"; exit 1; }
+          gh release upload "$RELEASE_TAG" "${signatures[@]}" --clobber
+          echo "$RELEASE_TAG icin imzalar yuklendi: ${signatures[*]}"
+
+      # Ortak anahtar imzalarla AYNI sürüme gider: .sig dosyasını doğrulamak
+      # için gereken açık anahtar kullanıcıya ayrı bir sürümden toplanmasın.
+      # Yerel bir bileşen çağrıldığı için depo önce checkout edilir.
+      # clean: false — checkout'un varsayılanı `git clean -ffdx` çalıştırmaktır;
+      # bu, biraz önce indirilen/zaten yüklenmiş dist/ içeriğini silerdi.
+      # Depoda kirli bir dosya olmadığı için temizliğe hiç gerek yok.
+      - name: Checkout
+        if: steps.key.outputs.present == 'true'
+        uses: actions/checkout@v7
+        with:
+          clean: false
+
+      # AoGPN-public-key.asc'i üreten TEK uygulama. pub-key.yml de aynı bileşeni
+      # çağırır; varlık adı tek yerden yönetildiği için çakışma olamaz.
+      - name: Publish GPG public key
+        if: steps.key.outputs.present == 'true'
+        uses: ./.github/actions/publish-public-key
+        with:
+          release-tag: ${{ env.RELEASE_TAG }}
+          private-key: ${{ secrets.GPG_PRIVATE_KEY }}

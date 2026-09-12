@@ -78,10 +78,19 @@ jobs:
       working-directory: ./AoGPN
       run: dotnet publish $Project -c Release -r $RID -p:SelfContained=true $ExtOpt -o $Output
 
-    - name: Build AmazTool
+    # Yan güncelleyici TEK DOSYA olarak yayımlanır (self-contained + trimmed):
+    # bölünmüş bir yayın pakete gereksiz yan dosyalar bırakır. Tek dosyada her
+    # şey exe'nin içine gömülür, klasöre hiçbir şey sızmaz.
+    - name: Build AoGPN.Updater
       shell: bash
       working-directory: ./AoGPN
-      run: dotnet publish ./AmazTool/AmazTool.csproj -c Release -r $RID -p:SelfContained=true -p:PublishTrimmed=true $ExtOpt -o $Output
+      run: |
+        dotnet publish ./AoGPN.Updater/AoGPN.Updater.csproj -c Release -r $RID \
+          -p:SelfContained=true -p:PublishSingleFile=true -p:PublishTrimmed=true \
+          $ExtOpt -o "$Output"
+        # AoGPN.csproj hedefi güncelleyicinin bölünmüş çıktısını da kopyalar;
+        # tek dosya sürümünün yanında bunlar gereksizdir.
+        rm -f "$Output/AoGPN.Updater.dll" "$Output/AoGPN.Updater.deps.json" "$Output/AoGPN.Updater.runtimeconfig.json"
 
     - name: Remove Debug Symbols
       shell: bash

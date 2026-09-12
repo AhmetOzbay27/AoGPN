@@ -425,6 +425,11 @@ AoGPN/tmp-mihomo/
 # Core bundle builder output (make-core-bundles.ps1)
 out-core-bundles/
 
+# Kazara oluşan "…verify <n>Debug" derleme çıktısı dizinleri — `dotnet publish -o`
+# yanlış tırnaklandığında oluşur. Üç kopyası 234 MB'a ulaşmıştı ve [Dd]ebug/
+# desenine ("2Debug") takılmadığı için her `git add -A` ile commit edilebiliyordu.
+*-verify *[Dd]ebug/
+
 # P1 dead/residual files quarantine (2026-09-03) — deleted-file graveyard, never commit
 .icon-inspect/
 Silinecekler_Yedek/

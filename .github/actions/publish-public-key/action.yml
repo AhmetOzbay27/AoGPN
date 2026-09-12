@@ -1,0 +1,83 @@
+name: publish GPG public key
+description: >-
+  İmzalama gizli anahtarından ortak anahtarı (AoGPN-public-key.asc) türetir ve
+  verilen sürüme yükler.
+
+# AoGPN-public-key.asc'in ÜRETİLDİĞİ VE YAZILDIĞI TEK yerdir. release.yml'in
+# imzalama işi ile pub-key.yml bu bileşeni çağırır; aynı varlık adı iki ayrı kod
+# yolundan beslenmediği için iki tanımın zamanla ayrışması (drift) ya da aynı
+# sürüme çakışan iki yükleme yarışı oluşamaz.
+#
+# Sürüm yoksa ÖN SÜRÜM OLARAK OLUŞTURULMAZ: uygulamanın güncelleme denetimi
+# /releases/latest ucunu okur ve o uç ön sürümleri atlar — ön sürüm işaretli bir
+# yayın, açık anahtar uğruna güncellemeyi tümden görünmez kılardı.
+
+inputs:
+  release-tag:
+    description: 'Ortak anahtarın yükleneceği sürüm etiketi (ör. v1.1.2)'
+    required: true
+  private-key:
+    description: 'ASCII-armored GPG gizli anahtarı. Boşsa yükleme sessizce atlanır.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # Job seviyesinde `secrets` bağlamı kullanılamaz; anahtarın varlığı burada
+    # tespit edilip sonraki adımlara output olarak yayılır. Anahtar yoksa iş
+    # başarısız olmaz — yalnızca açık anahtar yayımlanmaz (release.yml'in
+    # imzalama işi de aynı sözleşmeyi uygular).
+    - name: Check for a signing key
+      id: key
+      shell: bash
+      env:
+        GPG_PRIVATE_KEY: ${{ inputs.private-key }}
+      run: |
+        if [[ -n "${GPG_PRIVATE_KEY:-}" ]]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Ortak anahtar atlandi::GPG_PRIVATE_KEY tanimli degil; AoGPN-public-key.asc uretilmedi."
+        fi
+
+    - name: Import GPG private key
+      if: steps.key.outputs.present == 'true'
+      shell: bash
+      env:
+        GPG_PRIVATE_KEY: ${{ inputs.private-key }}
+      run: |
+        set -euo pipefail
+        install -m 700 -d ~/.gnupg
+        printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+    - name: Export GPG public key
+      if: steps.key.outputs.present == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        fingerprint="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
+        [[ -n "$fingerprint" ]] || { echo "No GPG secret key found."; exit 1; }
+        gpg --batch --armor --export "$fingerprint" > AoGPN-public-key.asc
+        # Üretilen dosyanın gerçekten içe aktarılan anahtara ait olduğunu
+        # doğrula: boş ya da başka bir anahtara ait bir dosya yüklenmesin.
+        gpg --batch --list-keys "$fingerprint"
+        echo "Ortak anahtar parmak izi: $fingerprint"
+
+    - name: Upload GPG public key to release
+      if: steps.key.outputs.present == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_TAG: ${{ inputs.release-tag }}
+      run: |
+        set -euo pipefail
+        # gh yerel bir komuttur; çıkış kodu her adımda AÇIKÇA denetlenir, aksi
+        # halde başarısız bir yükleme "başarılı" görünürdü.
+        if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
+        fi
+        # --clobber: aynı sürüme ikinci kez (ör. hem release.yml hem pub-key.yml
+        # yolundan) yazılırsa yükleme hata değil, idempotent bir güncelleme olur.
+        gh release upload "$RELEASE_TAG" AoGPN-public-key.asc --clobber
+        echo "AoGPN-public-key.asc yüklendi: $RELEASE_TAG"

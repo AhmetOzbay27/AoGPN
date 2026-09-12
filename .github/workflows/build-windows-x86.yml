@@ -70,18 +70,30 @@ jobs:
             -p:EnableWindowsTargeting=true `
             -o "publish/${{ matrix.flavor }}"
 
-      - name: Publish AmazTool win-x86
+      # Tek dosya (self-contained + trimmed): pakete yalnızca AoGPN.Updater.exe
+      # girer, yanına çalışma zamanı/yan dosyalar sızmaz.
+      - name: Publish AoGPN.Updater win-x86
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $out = "publish/${{ matrix.flavor }}"
 
-          dotnet publish "./AoGPN/AmazTool/AmazTool.csproj" `
+          dotnet publish "./AoGPN/AoGPN.Updater/AoGPN.Updater.csproj" `
             -c Release `
             -r win-x86 `
             -p:SelfContained=true `
+            -p:PublishSingleFile=true `
             -p:PublishTrimmed=true `
             -p:EnableWindowsTargeting=true `
-            -o "publish/${{ matrix.flavor }}"
+            -o $out
+          if ($LASTEXITCODE -ne 0) { throw "Güncelleyici derlenemedi (çıkış kodu $LASTEXITCODE)." }
+
+          # AoGPN.csproj hedefi güncelleyicinin bölünmüş çıktısını da kopyalar;
+          # tek dosya sürümünün yanında bunlar gereksizdir.
+          foreach ($stale in 'AoGPN.Updater.dll','AoGPN.Updater.deps.json','AoGPN.Updater.runtimeconfig.json') {
+            $path = Join-Path $out $stale
+            if (Test-Path $path) { Remove-Item $path -Force }
+          }
 
       - name: Detect bundled core versions
         id: detect-core

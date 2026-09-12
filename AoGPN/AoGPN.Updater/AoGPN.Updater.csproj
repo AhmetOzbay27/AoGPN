@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<AssemblyName>AoGPN.Updater</AssemblyName>
+		<RootNamespace>AoGPN.Updater</RootNamespace>
+		<!--
+		  AoGPN'nin yan güncelleyicisidir (sidecar). Bilerek WPF/WebView2/ReactiveUI
+		  bağımlılığı YOKTUR: ağ yönlendirme motoruna, WinDivert katmanına ve Tier 4
+		  optimizasyonlarına hiçbir şekilde dokunmaz — yalnızca indirilmiş zip'i
+		  yerine açar ve uygulamayı yeniden başlatır. Küçük ve hızlı kalması için tek
+		  dosyada, hiçbir NuGet paketi kullanmadan yazılmıştır
+		  (System.IO.Compression BCL'de gelir; Velopack vb. gerekmez).
+		-->
+		<InvariantGlobalization>true</InvariantGlobalization>
+		<SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+	</PropertyGroup>
+
+</Project>

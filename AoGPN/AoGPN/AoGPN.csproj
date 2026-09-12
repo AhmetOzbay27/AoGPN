@@ -40,7 +40,41 @@
 		     theme definitions (themes.json) and UI strings (Dil/*.json) ship beside
 		     the document so styles, logic, themes and translations can be edited
 		     without touching the HTML itself. -->
-		<Content Include="..\Temalar\**" Link="Temalar\%(RecursiveDir)%(Filename)%(Extension)">
+		<!--
+		  YALNIZCA çalışma zamanı dosyaları paketlenir. Temalar/ altındaki
+		  geliştirme artıkları (node_modules, __pycache__/*.pyc, test koşum
+		  dosyaları, *.test.js, döküm/çeviri betikleri, npm manifestoları) yayın
+		  paketine girmez: uygulama bunların hiçbirini okumaz, ama kullanıcıya
+		  giden zip'i onlarca megabayt şişirirler.
+
+		  Hangi dosyanın gerçekten çalışma zamanında gerektiği bu glob ile
+		  tahmin edilmez; kaynağı bellidir: index.html ve skins/*/skin.html
+		  içindeki <script>/<link> etiketleri, skins.json ve themes.json. Bu
+		  yüzden Temalar/tailwind.js (index.html <script>) ile
+		  Temalar/skins/route-keys.js (üç skin.html de <script> ile yükler)
+		  buradadır ve HARİÇ TUTULMAZ — ekran görüntüsü/sandbox yardımcıları
+		  (skin-sandbox.js, skin-pairs.js, cascade-consistency.js) ise yalnızca
+		  *.test.js dosyalarından require edildiği için pakete girmez.
+
+		  Kara liste bilerek seçildi: yeni bir çalışma zamanı dosyası eklenince
+		  kendiliğinden pakete girer; beyaz liste olsaydı yeni skin/asset sessizce
+		  eksik kalırdı. Kaçak oluşursa 'Verify package contents' adımı yakalar.
+		-->
+		<Content Include="..\Temalar\**"
+		         Exclude="..\Temalar\**\node_modules\**;
+		                  ..\Temalar\**\__pycache__\**;
+		                  ..\Temalar\**\*.pyc;
+		                  ..\Temalar\**\*.test.js;
+		                  ..\Temalar\skins\_*;
+		                  ..\Temalar\skins\package.json;
+		                  ..\Temalar\skins\package-lock.json;
+		                  ..\Temalar\skins\skin-sandbox.js;
+		                  ..\Temalar\skins\skin-pairs.js;
+		                  ..\Temalar\skins\cascade-consistency.js;
+		                  ..\Temalar\split-*.js;
+		                  ..\Temalar\build-embedded-dashboard-css.js;
+		                  ..\Temalar\fetch-google-fonts.js"
+		         Link="Temalar\%(RecursiveDir)%(Filename)%(Extension)">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
 		</Content>
@@ -63,7 +97,63 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
+		<!--
+		  Yan güncelleyici (AoGPN.Updater.exe): ayrı bir YÜRÜTÜLEBİLİR dosya olarak
+		  AoGPN.exe'nin yanında dağıtılır. Ayrı süreç olması zorunludur — güncelleme
+		  sırasında AoGPN.exe ve bağımlılıkları kilitliyken kendi dosyalarının
+		  üzerine yazabilmesi gerekir. Ana derlemeye DERLEME bağımlılığı yoktur
+		  (ReferenceOutputAssembly=false): yalnızca yan yana durur; bu yüzden bir
+		  güncelleme paketi ana uygulamayı da bozsa güncelleyici yine çalışır.
+		-->
+		<ProjectReference Include="..\AoGPN.Updater\AoGPN.Updater.csproj">
+			<ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+			<Private>false</Private>
+		</ProjectReference>
 	</ItemGroup>
+
+	<!--
+	  Güncelleyici çıktısını AoGPN'nin çıktı klasörüne kopyalar. Güncelleyici
+	  WPF'siz olduğu için TFM'i net10.0'dır (ana uygulama net10.0-windows…); bu
+	  yüzden önce sabit net10.0 klasörü, bulunamazsa ana projenin TFM'i denenir.
+	  Framework'e bağımlı derlemede exe + .dll + .deps.json + .runtimeconfig.json
+	  gerekir; tek dosya (publish) yayınında yalnızca exe bulunur — hepsi
+	  "varsa kopyala" mantığıyla işlenir. Kopyalama başarısız olsa da derleme
+	  bozulmaz (uygulama çalışır; güncelleme özelliği devre dışı kalır ve
+	  UpdateAvailableWindow bunu kullanıcıya hiç göstermez).
+	-->
+	<Target Name="CopyUpdaterToOutput"
+	        AfterTargets="Build;Publish"
+	        Condition="!$(MSBuildProjectFile.EndsWith('_wpftmp.csproj'))">
+		<PropertyGroup>
+			<_UpdaterBaseDir>$(MSBuildProjectDirectory)\..\AoGPN.Updater\bin\$(Configuration)\</_UpdaterBaseDir>
+			<!-- RID'e özgü derlemede/yayında (dotnet publish -r win-x64) çıktı net10.0\<rid>\ altına düşer. -->
+			<_UpdaterOutDir Condition="'$(RuntimeIdentifier)' != '' AND Exists('$(_UpdaterBaseDir)net10.0\$(RuntimeIdentifier)\AoGPN.Updater.exe')">$(_UpdaterBaseDir)net10.0\$(RuntimeIdentifier)\</_UpdaterOutDir>
+			<_UpdaterOutDir Condition="'$(_UpdaterOutDir)' == '' AND Exists('$(_UpdaterBaseDir)net10.0\AoGPN.Updater.exe')">$(_UpdaterBaseDir)net10.0\</_UpdaterOutDir>
+			<_UpdaterOutDir Condition="'$(_UpdaterOutDir)' == ''">$(_UpdaterBaseDir)$(TargetFramework)\</_UpdaterOutDir>
+		</PropertyGroup>
+		<ItemGroup>
+			<_UpdaterFiles Include="$(_UpdaterOutDir)AoGPN.Updater.exe" Condition="Exists('$(_UpdaterOutDir)AoGPN.Updater.exe')" />
+			<_UpdaterFiles Include="$(_UpdaterOutDir)AoGPN.Updater.dll" Condition="Exists('$(_UpdaterOutDir)AoGPN.Updater.dll')" />
+			<_UpdaterFiles Include="$(_UpdaterOutDir)AoGPN.Updater.deps.json" Condition="Exists('$(_UpdaterOutDir)AoGPN.Updater.deps.json')" />
+			<_UpdaterFiles Include="$(_UpdaterOutDir)AoGPN.Updater.runtimeconfig.json" Condition="Exists('$(_UpdaterOutDir)AoGPN.Updater.runtimeconfig.json')" />
+		</ItemGroup>
+		<Copy SourceFiles="@(_UpdaterFiles)"
+		      DestinationFolder="$(OutDir)"
+		      SkipUnchangedFiles="true"
+		      ContinueOnError="ErrorAndContinue" />
+		<!--
+		  Yayın (publish) çıktısı çoğu zaman ayrı bir klasördür; paketleme betiği
+		  yayını sıkıştırıyorsa güncelleyici orada da bulunmalıdır — aksi halde
+		  kullanıcıya "yeni sürüm var" denip güncelleme uygulanamaz.
+		-->
+		<Copy SourceFiles="@(_UpdaterFiles)"
+		      DestinationFolder="$(PublishDir)"
+		      SkipUnchangedFiles="true"
+		      ContinueOnError="ErrorAndContinue"
+		      Condition="'$(PublishDir)' != ''" />
+		<Warning Condition="!Exists('$(OutDir)AoGPN.Updater.exe')"
+		         Text="AoGPN.Updater.exe could not be copied to '$(OutDir)'. The in-app updater stays disabled until the AoGPN.Updater project builds and its output is available at '$(_UpdaterOutDir)'." />
+	</Target>
 
 	<!--
 	  The dashboard ships as a single offline HTML whose <style
