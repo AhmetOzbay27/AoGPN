@@ -288,6 +288,15 @@ async function loadDashboard(opts) {
   // ---- confirm() is controllable so the delete-button path can be tested ----
   w.confirm = () => true;
 
+  // ---- optional localStorage seed, applied BEFORE the dashboard scripts boot ----
+  // Lets tests verify restart-restored state (e.g. the last routing mode).
+  if (opts && opts.seedLocalStorage) {
+    try {
+      const storage = w.localStorage;
+      Object.keys(opts.seedLocalStorage).forEach(k => storage.setItem(k, String(opts.seedLocalStorage[k])));
+    } catch (e) { /* storage unavailable */ }
+  }
+
   // ---- fake Date (controllable clock) ----
   const RealDate = Date;
   function FakeDate(...args) {
@@ -409,7 +418,7 @@ async function loadDashboard(opts) {
   // (the coordinator). Each IIFE runs immediately on eval.
   const MODULE_FILES = [
     'core/events.js', 'core/util.js', 'core/dom.js', 'core/bridge.js',
-    'core/i18n.js', 'core/selects.js', 'core/theme.js', 'core/tooltips.js',
+    'core/i18n.js', 'core/flags.js', 'core/selects.js', 'core/theme.js', 'core/tooltips.js',
     'features/window-controls.js', 'features/release-notes.js',
     'features/telemetry.js', 'features/settings.js', 'features/game-boost.js',
     'features/gpn.js', 'features/views.js', 'features/nodes.js', 'features/connection.js'

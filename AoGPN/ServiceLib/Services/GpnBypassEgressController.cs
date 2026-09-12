@@ -59,7 +59,9 @@ public sealed class GpnBypassEgressController : IDisposable
         _getConfig = getConfig ?? (() => AppManager.Instance.Config);
         _isMihomoRunning = isMihomoRunning ?? (() => AppManager.Instance.IsRunningCore(ECoreType.mihomo));
         _fetchProxies = fetchProxies
-            ?? (async () => (await ClashApiManager.Instance.GetClashProxiesAsync().ConfigureAwait(false))?.Item1?.proxies);
+            // forceAttempt: egress kararı restart'a yol açabilir; bayat geri
+            // çekilme penceresi yüzünden boş okumayla alınmamalı.
+            ?? (async () => (await ClashApiManager.Instance.GetClashProxiesAsync(forceAttempt: true).ConfigureAwait(false))?.Item1?.proxies);
         _setSelection = setSelection
             ?? ((group, target) => ClashApiManager.Instance.ClashSetActiveProxy(group, target));
     }

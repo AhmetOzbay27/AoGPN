@@ -65,17 +65,13 @@ public class MsgViewModel : MyReactiveObject
                 sb.Append(line);
             }
 
-            try
-            {
-                await DispatcherShowMsgInteraction.Handle(sb.ToString());
-            }
-            catch (ReactiveUI.UnhandledInteractionException<string, Unit>)
-            {
-                // The message tab is not active, so no view has registered a
-                // handler yet. The queued batch is dropped either way; swallowing
-                // the exception keeps background publishers from flooding the
-                // unobserved-task channel (and the debugger) on every message.
-            }
+            // The message tab is not active, so no view may have registered a
+            // handler. The queued batch is dropped either way. TryHandleAsync does
+            // not invoke the interaction at all when nobody is listening: the old
+            // try/catch kept publishing from flooding the unobserved-task channel,
+            // but every message still threw (and VS logged) a first-chance
+            // UnhandledInteractionException — thousands of lines in a session.
+            await DispatcherShowMsgInteraction.TryHandleAsync(sb.ToString());
         }
         finally
         {

@@ -98,7 +98,7 @@ public sealed class RoutingDriftHealthCheck
                 return Report(RuleDriftState.NotApplicable, error: "No active routing item.");
             }
 
-            var node = await ConfigHandler.GetDefaultServer(_config);
+            var node = await ResolveCheckNodeAsync();
             if (node is null)
             {
                 return Report(RuleDriftState.NotApplicable, error: "No active node.");
@@ -148,6 +148,18 @@ public sealed class RoutingDriftHealthCheck
                         softContext = softContext with { GpnVlessBypass = bypass };
                     }
                 }
+                // Per-app WARP egress düğümleri launcher ile AYNI çözücüden geçirilir:
+                // warp egress'li girişler canlı superset config'te launcher domain
+                // satırlarından ÖNCE kendi kural satırını üretir — çözülmezlerse
+                // beklenen taraf farklı sırada/eksik satırla üretilir ve yanlış drift
+                // bildirilir (kural SIRASI first-match-wins için anlamlıdır).
+                var warpNodes = await GpnCoreLauncher.ResolveWarpNodesAsync(
+                        softContext.GpnSoftPolicy, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (warpNodes.Count > 0)
+                {
+                    softContext = softContext with { GpnWarpNodes = warpNodes };
+                }
                 context = softContext;
             }
 
@@ -187,6 +199,27 @@ public sealed class RoutingDriftHealthCheck
             Logging.SaveLog(_tag, ex);
             return Report(RuleDriftState.Unknown, error: "Rule-drift check failed: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Superset oturumu (GPN kesintisiz rota) sırasında çekirdek, launcher'ın GEÇİCİ
+    /// WireGuard profiliyle (GpnCoreLauncher.BuildWireGuardProfile) üretilir —
+    /// uygulamanın varsayılan düğümü (kullanıcının son seçimi, örn. abonelikten bir
+    /// VLESS düğümü) bu profili DEĞİLDİR. Denetim beklenen config'i canlı superset
+    /// config'le birebir üretebilmek için oturum kaydındaki düğümü kullanmalıdır;
+    /// aksi hâlde varsayılan düğümle GLOBAL (tek MATCH kuralı) config üretilir ve
+    /// canlı superset config'e karşı yanlış "DRIFT detected expected=1 live=74"
+    /// bildirimi basılır. Oturum yoksa / düğüm kaydı yoksa eski davranış korunur.
+    /// </summary>
+    private async Task<ProfileItem?> ResolveCheckNodeAsync()
+    {
+        if (GpnSoftSession.IsActive
+            && GpnSoftSession.Node is { } sessionNode
+            && sessionNode.ConfigType == EConfigType.WireGuard)
+        {
+            return sessionNode;
+        }
+        return await ConfigHandler.GetDefaultServer(_config).ConfigureAwait(false);
     }
 
     /// <summary>

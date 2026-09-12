@@ -601,6 +601,18 @@ public class GpnConnectionCoordinatorTests
             CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<GpnServerProbeResult>>([]);
 
+        /// <summary>WarmProbeCacheAsync çağrı sayısı (Faz 3 ön yükleme doğrulaması).</summary>
+        public int WarmProbeCacheCount { get; private set; }
+
+        public Task WarmProbeCacheAsync(
+            IReadOnlyList<GpnServerProfile> servers,
+            GpnProbeOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            WarmProbeCacheCount++;
+            return Task.CompletedTask;
+        }
+
         public GpnFailoverMatrix EvaluateFailoverMatrix(
             GpnServerProfile active,
             IReadOnlyList<GpnServerProfile> candidates,

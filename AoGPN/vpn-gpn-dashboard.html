@@ -168,6 +168,16 @@
   .dash-theme-btn.active .dash-theme-signal { color: rgba(var(--cyan-rgb),.9); }
   @media (max-width: 560px) { .theme-deck-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .theme-deck-current { display: none; } }
 
+  /* Compact variant of the same deck cards for the title-bar theme popover.
+     The popover grid reuses .dash-theme-btn so both pickers stay in sync, but
+     sized down; the grid itself scrolls invisibly when the theme list is taller
+     than the window (25 themes). */
+  #topThemePopover .dash-theme-btn { min-height: 44px; padding: 6px 8px; }
+  #topThemePopover .dash-theme-swatch { height: 3px; }
+  #topThemePopover .dash-theme-name { font-size: 10.5px; }
+  .theme-popover-grid { scrollbar-width: none; }
+  .theme-popover-grid::-webkit-scrollbar { display: none; }
+
   .theme-card {
     position: relative;
     overflow: hidden;
@@ -583,6 +593,49 @@
     letter-spacing: .02em;
   }
   .app-icon img { width: 100%; height: 100%; object-fit: contain; }
+  /* Gaming-style rail cards (frameless): the icon is the hero — a neon-glow
+     spotlight (cyan when the app is running, neutral when idle), zero borders
+     or boxes — and every text stays a micro detail. The letter-tile
+     placeholder scales with the icon so the layout stays stable while the
+     host resolves the real shell icon. */
+  .app-icon-glow {
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 20px;
+    padding: 6px;
+    background: radial-gradient(120% 120% at 50% 30%, rgba(148,163,184,.14), rgba(148,163,184,0) 70%);
+    transition: transform .2s ease;
+  }
+  .boost-card:hover .app-icon-glow { transform: scale(1.07); }
+  .app-icon-glow-alive {
+    background: radial-gradient(120% 120% at 50% 30%, rgba(34,211,238,.24), rgba(34,211,238,0) 72%);
+    box-shadow: 0 0 24px rgba(34,211,238,.16), 0 0 8px rgba(34,211,238,.10);
+  }
+  .app-icon-glow .app-icon { border-radius: 14px; font-size: 18px; }
+  /* Route micro-dot on the frameless cards (mirrors the route-badge palette). */
+  .route-dot { width: 5px; height: 5px; border-radius: 9999px; flex-shrink: 0; }
+  /* Per-app quick-settings popover: active route pill (gaming neon chip, dark
+     text on the route colour; inactive pills stay ghosted). */
+  .route-pill-on { color: #0B0F17; }
+  .route-pill-on.route-pill-proxy { background: rgba(34,211,238,.88); box-shadow: 0 0 12px rgba(34,211,238,.35); }
+  .route-pill-on.route-pill-direct { background: rgba(52,211,153,.88); box-shadow: 0 0 12px rgba(52,211,153,.35); }
+  .route-pill-on.route-pill-block { background: rgba(248,113,113,.88); box-shadow: 0 0 12px rgba(248,113,113,.35); }
+  .route-pill-on.route-pill-warp { background: rgba(167,139,250,.88); box-shadow: 0 0 12px rgba(167,139,250,.35); }
+  .route-pill-on.route-pill-unknown { background: rgba(148,163,184,.88); }
+  .route-dot.proxy { background: #22D3EE; box-shadow: 0 0 6px rgba(34,211,238,.7); }
+  .route-dot.direct { background: #34D399; box-shadow: 0 0 6px rgba(52,211,153,.7); }
+  .route-dot.block { background: #F87171; box-shadow: 0 0 6px rgba(248,113,113,.7); }
+  .route-dot.warp { background: #A78BFA; box-shadow: 0 0 6px rgba(167,139,250,.7); }
+  .route-dot.unknown { background: #64748B; }
+  /* Connection Center rail: grab-cursor drag-to-scroll for the mouse.
+     .rail-dragging is set while a pointer drag is active (and blocks text
+     selection mid-gesture); trackpad/touch panning is untouched. */
+  #dashboardBoostCards { cursor: grab; }
+  #dashboardBoostCards.rail-dragging { cursor: grabbing; user-select: none; }
+  /* The rail still scrolls (‹ › arrows, wheel, trackpad, drag-to-scroll) but
+     its scrollbar is hidden — over the frameless cards the bar only adds
+     visual noise. */
+  #dashboardBoostCards { scrollbar-width: none; }
+  #dashboardBoostCards::-webkit-scrollbar { display: none; }
   .proxy-toggle {
     transition: all .2s ease;
   }
@@ -2539,15 +2592,7 @@ body.effects-hidden *::after {
         <button id="topThemeBtn" type="button" class="window-control flex h-7 w-8 items-center justify-center rounded-md text-[#8A94A6] hover:bg-white/8" aria-label="Change theme" title="Change theme">
           <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm0 2a8 8 0 1 1-8 8 8 8 0 0 1 8-8Zm0 1a7 7 0 1 0 7 7 7 7 0 0 0-7-7Z"/></svg>
         </button>
-        <div id="skinBadge" role="button" tabindex="0" class="window-control flex h-7 items-center gap-1.5 rounded-md pl-2 pr-1 text-[10px] font-semibold text-[#C7CDD9] hover:bg-white/8 cursor-pointer" aria-label="Active skin — open skin manager">
-          <span id="skinBadgeDot" class="shrink-0 w-1.5 h-1.5 rounded-full"></span>
-          <span id="skinBadgeName" class="whitespace-nowrap">Standard</span>
-          <svg class="w-3 h-3 text-[#8A94A6] shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-        </div>
-        <button id="skinManagerBtn" type="button" class="window-control flex h-7 w-8 items-center justify-center rounded-md text-[#8A94A6] hover:bg-white/8" aria-label="Skin manager" title="Skins" data-i18n="skins.manage">
-          <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M3 4h8v5H3V4zm0 11h8v5H3v-5zM13 4h8v5h-8V4zm0 11h8v5h-8v-5zM5 6v1h4V6H5zm0 11v1h4v-1H5zm8-11v1h4V6h-4zm0 11v1h4v-1h-4z"/></svg>
-        </button>
-        <div id="topThemePopover" class="hidden absolute right-0 top-full mt-1.5 p-2 rounded-xl border border-white/10 bg-[#12182B]/95 backdrop-blur-xl shadow-[0_18px_50px_rgba(0,0,0,.6)] z-50 min-w-[210px]">
+        <div id="topThemePopover" class="hidden absolute right-0 top-full mt-1.5 p-2 rounded-xl border border-white/10 bg-[#12182B]/95 backdrop-blur-xl shadow-[0_18px_50px_rgba(0,0,0,.6)] z-50 w-[318px]">
           <!-- Layout axis: how the connection controls are arranged. Independent
                from the color theme — 'status' keeps controls in the sidebar
                (default), 'compact' shows them in a hero strip. -->
@@ -2562,7 +2607,13 @@ body.effects-hidden *::after {
           <div id="topSkinRow" class="flex items-center gap-1.5 mb-2 pb-2 border-b border-white/10">
             <button type="button" data-skin="standard" class="skin-opt flex-1 rounded-lg px-2 py-1.5 text-[10px] font-semibold border transition-colors">Standard</button>
           </div>
-          <div id="topThemeGrid" class="grid grid-cols-4 gap-1.5"></div>
+          <div id="topThemeGrid" class="theme-popover-grid grid grid-cols-3 gap-1.5 overflow-y-auto max-h-[min(52vh,420px)] pr-0.5"></div>
+          <!-- Full skin gallery entry. The title bar keeps a single theme button;
+               the manager (live per-skin previews) opens from here instead of a
+               second icon next to the theme toggle. -->
+          <div class="flex justify-end pt-1.5 mt-1.5 border-t border-white/10">
+            <button type="button" id="skinManagerBtn" class="flex items-center rounded-md px-2 py-1 text-[10px] font-semibold text-[#8A94A6] hover:text-cyan-300 hover:bg-white/5 transition-colors cursor-pointer" data-i18n="skins.managerTitle" aria-haspopup="dialog">Skin Manager</button>
+          </div>
         </div>
       </div>
       <button id="minimizeButton" type="button" class="window-control flex h-7 w-8 items-center justify-center rounded-md text-[#8A94A6]" aria-label="Minimize window" title="Minimize">
@@ -2603,13 +2654,9 @@ body.effects-hidden *::after {
           <svg class="nav-ico w-[18px] h-[18px] shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm3 4v2h2V7H7Zm6 0v2h4V7h-4Zm-6 4v2h2v-2H7Zm6 0v2h4v-2h-4Zm-6 4v2h2v-2H7Zm6 0v2h4v-2h-4Z"/></svg>
           <span class="truncate" data-i18n="nav.nodes">VPN Routes</span>
         </a>
-        <a href="#" data-view="gpnServers" class="nav-item flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent text-sm font-medium text-[#A7B0BF]">
-          <svg class="nav-ico w-[18px] h-[18px] shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7v1h2V9a5 5 0 0 1 10 0v1h2V9a7 7 0 0 0-7-7ZM6 10h12l1 3v2h-1v5h-3v-5H9v5H6v-5H5v-2l1-3Z"/></svg>
-          <span class="truncate" data-i18n="nav.gpnServers">GPN Servers</span>
-        </a>
         <a href="#" data-view="boost" class="nav-item flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent text-sm font-medium text-[#A7B0BF]">
           <svg class="nav-ico w-[18px] h-[18px] shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M16.5 9 13 12.5 9.5 9 6 12.5 12 18l6-5.5L16.5 9ZM12 1l1.5 4.5L18 7l-4.5 1.5L12 13l-1.5-4.5L6 7l4.5-1.5L12 1Zm8 10 1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3Z"/></svg>
-          <span class="truncate" data-i18n="nav.boost">GPN Game Boost</span>
+          <span class="truncate" data-i18n="nav.boost">Application Management Center</span>
         </a>
         <a href="#" data-view="perf" class="nav-item flex items-center gap-3 px-3 py-2.5 rounded-lg border border-transparent text-sm font-medium text-[#A7B0BF]">
           <svg class="nav-ico w-[18px] h-[18px] shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
@@ -2644,7 +2691,7 @@ body.effects-hidden *::after {
               <span class="text-[9px] uppercase tracking-[0.15em] text-[#8A94A6] shrink-0 truncate min-w-0" data-i18n="quick.mode">Mode</span>
               <div class="flex gap-1 shrink-0" role="tablist" aria-label="Connection mode">
                 <button class="mode-pill active rounded-lg px-2 py-1 text-[11px] font-semibold border border-transparent text-cyan-300" data-mode="gpn" data-tip-key="tip.modeGpn">GPN</button>
-                <button class="mode-pill rounded-lg px-2 py-1 text-[11px] font-semibold border border-transparent text-[#A7B0BF]" data-mode="vpn" data-tip-key="tip.modeVpn">Global</button>
+                <button class="mode-pill rounded-lg px-2 py-1 text-[11px] font-semibold border border-transparent text-[#A7B0BF]" data-mode="vpn" data-tip-key="tip.modeVpn">VPN</button>
               </div>
             </div>
             <div class="flex items-center justify-between gap-2 min-w-0">
@@ -2656,23 +2703,23 @@ body.effects-hidden *::after {
             </div>
             <div id="tunStackRow" class="hidden items-center justify-between gap-2 min-w-0">
               <label for="captureTunStack" class="text-[9px] uppercase tracking-[0.15em] text-[#8A94A6] shrink-0" data-i18n="tun.stack">TUN Stack</label>
-              <select id="captureTunStack" class="bg-[#1A1830]/80 border border-white/10 rounded-md px-1.5 py-0.5 text-[11px] text-[#C9D1E0] focus:outline-none focus:border-cyan-400/50" title="TUN network stack — gvisor (user-space, most compatible), system (kernel, fastest), mixed (balanced).">
-                <option value="gvisor">gvisor</option>
-                <option value="system">system</option>
-                <option value="mixed">mixed</option>
+              <select id="captureTunStack" data-i18n-title="quick.tunStackTip" class="bg-[#1A1830]/80 border border-white/10 rounded-md px-1.5 py-0.5 text-[11px] text-[#C9D1E0] focus:outline-none focus:border-cyan-400/50" title="TUN network stack — gvisor (user-space, most compatible), system (kernel, fastest), mixed (balanced).">
+                <option value="gvisor" data-i18n="opt.stack.gvisor">gvisor</option>
+                <option value="system" data-i18n="opt.stack.system">system</option>
+                <option value="mixed" data-i18n="opt.stack.mixed">mixed</option>
               </select>
             </div>
             <div class="flex items-center justify-between gap-2 min-w-0">
               <span class="text-[9px] uppercase tracking-[0.15em] text-[#8A94A6] shrink-0 truncate min-w-0" data-i18n="quick.protocol">Protocol</span>
-              <select id="quickProtocolSelect" class="quick-select shrink-0" aria-label="Protocol strategy" title="Protocol strategy — Automatic / WireGuard / Mimic (Reality-TLS fingerprint) / Hysteria2-TUIC (QUIC) / OpenVPN.">
-                <option value="auto">Automatic</option>
-                <option value="wireguard">WireGuard</option>
-                <option value="mimic">Reality / TLS</option>
-                <option value="hysteria2">Hysteria2 / TUIC</option>
-                <option value="openvpn">OpenVPN</option>
+              <select id="quickProtocolSelect" data-i18n-title="quick.protocolTip" class="quick-select shrink-0" aria-label="Protocol strategy" title="Protocol strategy — Automatic / WireGuard / Mimic (Reality-TLS fingerprint) / Hysteria2-TUIC (QUIC) / OpenVPN.">
+                <option value="auto" data-i18n="quick.protocolAuto">Automatic</option>
+                <option value="wireguard" data-i18n="quick.protocolWireguard">WireGuard</option>
+                <option value="mimic" data-i18n="quick.protocolMimic">Reality / TLS</option>
+                <option value="hysteria2" data-i18n="quick.protocolHysteria2">Hysteria2 / TUIC</option>
+                <option value="openvpn" data-i18n="quick.protocolOpenvpn">OpenVPN</option>
               </select>
             </div>
-            <label class="flex items-center justify-between gap-2 pt-0.5 text-[10px] text-[#A7B0BF] cursor-pointer" title="Reconnect automatically when the tunnel drops."><span class="truncate min-w-0" data-i18n="quick.autoReconnect">Auto reconnect</span><span class="switch quick-switch shrink-0"><input id="quickAutoReconnect" type="checkbox" /><span class="slider"></span></span></label>
+            <label data-i18n-title="quick.autoReconnectTip" class="flex items-center justify-between gap-2 pt-0.5 text-[10px] text-[#A7B0BF] cursor-pointer" title="Reconnect automatically when the tunnel drops."><span class="truncate min-w-0" data-i18n="quick.autoReconnect">Auto reconnect</span><span class="switch quick-switch shrink-0"><input id="quickAutoReconnect" type="checkbox" /><span class="slider"></span></span></label>
           </div>
         </div>
       </div>
@@ -2682,8 +2729,8 @@ body.effects-hidden *::after {
         <div class="glass-soft rounded-xl p-3 flex items-center gap-3">
           <div class="w-11 h-8 rounded-full bg-gradient-to-br from-[var(--cyan)] to-[var(--violet)] flex items-center justify-center text-[9px] font-bold shrink-0 px-1 whitespace-nowrap">AO GPN</div>
           <div class="min-w-0">
-            <p class="text-xs font-semibold truncate">AO GPN Desktop</p>
-            <p class="text-[10px] text-[#8A94A6] truncate">Local Tunnel · Secure</p>
+            <p class="text-xs font-semibold truncate" data-i18n="footer.appName">AO GPN Desktop</p>
+            <p class="text-[10px] text-[#8A94A6] truncate" data-i18n="footer.tagline">Local Tunnel · Secure</p>
           </div>
           <span id="sidebarStatusDot" class="ml-auto w-2 h-2 rounded-full status-dot shrink-0" style="color:var(--cyan)" title="Disconnected"></span>
         </div>
@@ -2714,7 +2761,7 @@ body.effects-hidden *::after {
             <h1 id="viewTitle" class="font-display font-bold text-2xl md:text-3xl tracking-wide leading-none">
               <span data-i18n="header.connectionCenter">Connection Center</span>
             </h1>
-            <p id="viewSub" class="text-xs text-[#8A94A6] mt-1.5 truncate">Realtime tunnel status · low-latency game routing</p>
+            <p id="viewSub" class="text-xs text-[#8A94A6] mt-1.5 truncate" data-i18n="view.dashboard.sub">Realtime tunnel status · low-latency game routing</p>
           </div>
           <div class="ml-auto shrink-0 flex flex-wrap items-center justify-end gap-2">
             <!-- Node selector: quick server switch, mirrored by the Nodes view -->
@@ -2744,14 +2791,6 @@ body.effects-hidden *::after {
             <div class="glass-soft rounded-full px-3.5 py-1.5 flex items-center gap-2 text-xs">
               <span id="statusDot" class="w-2 h-2 rounded-full bg-cyan-400 status-dot shrink-0" style="color:#22D3EE"></span>
               <span id="statusLabel" class="font-medium text-cyan-300" title="No active tunnel — press CONNECT to route traffic through the selected node.">DISCONNECTED</span>
-            </div>
-            <div class="hidden sm:flex glass-soft rounded-full px-3.5 py-1.5 text-xs text-[#8A94A6] items-center gap-2">
-              <span class="live-blink w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
-              <span>LIVE</span>
-            </div>
-            <!-- Routing-engine mode badge: gpn (stripped v2rayN) / global (full legacy) / proxy / none -->
-            <div id="routingModeBadge" class="hidden sm:flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[.14em] border">
-              <span id="routingModeLabel">—</span>
             </div>
           </div>
         </header>
@@ -2786,7 +2825,7 @@ body.effects-hidden *::after {
                 <button id="connectBtn" class="ring-core group" data-tip-key="tip.connectIdle">
                   <svg id="btnIcon" class="w-10 h-10 mb-2 text-cyan-300 transition-all duration-300" style="filter:drop-shadow(0 0 13px rgba(var(--cyan-rgb),.65))" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5.14v14l11-7-11-7Z"/></svg>
                   <span id="btnText" class="font-display font-bold text-xl tracking-[0.20em] text-white">CONNECT</span>
-                  <span id="btnSub" class="text-[10px] uppercase tracking-[0.22em] text-slate-400 mt-0.5">Global VPN</span>
+                  <span id="btnSub" class="text-[10px] uppercase tracking-[0.22em] text-slate-400 mt-0.5">VPN</span>
                 </button>
               </div>
               <!-- Connection mode selector sits right under the CONNECT button -->
@@ -2794,51 +2833,39 @@ body.effects-hidden *::after {
                 <span class="ring-mode-label" data-i18n="quick.mode">Mode</span>
                 <div class="seg" role="tablist" aria-label="Connection mode">
                   <button class="mode-pill seg-opt active" data-mode="gpn" data-tip-key="tip.modeGpn">GPN</button>
-                  <button class="mode-pill seg-opt" data-mode="vpn" data-tip-key="tip.modeVpn">Global</button>
+                  <button class="mode-pill seg-opt" data-mode="vpn" data-tip-key="tip.modeVpn">VPN</button>
                 </div>
               </div>
             </div>
 
             <!-- Right side: live GPN/Global status panels + status banners -->
             <div class="flex-1 min-w-0 w-full">
-              <!-- Mode-aware dual panel: GPN Game Boost ↔ Global VPN Status -->
+              <!-- Mode-aware dual panel: Application Management Center summary ↔ Global VPN Status -->
               <div class="mode-panel-wrapper min-w-0">
                 <!-- === GPN PANEL === -->
                 <section id="panelGPN" class="min-w-0 mode-panel active-panel">
-                  <div class="flex items-center gap-2 mb-4 min-w-0">
+                  <div class="flex flex-wrap items-center gap-2 mb-4 min-w-0">
                     <svg class="w-4 h-4 text-[var(--violet)] shrink-0" style="filter:drop-shadow(0 0 6px color-mix(in srgb, var(--violet) 80%, transparent))" fill="currentColor" viewBox="0 0 24 24"><path d="M16.5 9 13 12.5 9.5 9 6 12.5 12 18l6-5.5L16.5 9Z"/></svg>
-                    <h2 class="font-display font-semibold text-lg tracking-wide" data-i18n="boost.title">GPN Game Boost</h2>
+                    <h2 class="font-display font-semibold text-lg tracking-wide" data-i18n="boost.title">Application Management Center</h2>
                     <span id="boostSummaryBadge" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-300 border border-emerald-400/20">Loading…</span>
-                    <a href="#" data-view="boost" class="ml-auto shrink-0 flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-lg bg-cyan-400/10 text-cyan-300 border border-cyan-400/20 hover:bg-cyan-400/20 transition-colors font-semibold whitespace-nowrap" data-i18n="boost.full">Full Game Boost <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41Z"/></svg></a>
+                    <button type="button" id="dashAddAppBtn" class="ml-auto shrink-0 flex items-center gap-1 text-[10px] px-3 py-1.5 rounded-lg bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors font-semibold whitespace-nowrap" aria-expanded="false" aria-controls="dashQuickAddPanel" data-tip-key="boost.addAppTip">
+                      <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
+                      <span data-i18n="boost.addApp">＋ Add App</span>
+                    </button>
+                    <a href="#" data-view="boost" class="shrink-0 flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-lg bg-cyan-400/10 text-cyan-300 border border-cyan-400/20 hover:bg-cyan-400/20 transition-colors font-semibold whitespace-nowrap" data-i18n="boost.full">Manage <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41Z"/></svg></a>
                   </div>
-                  <!-- GPN routing direction: whitelist (only listed apps tunneled) ↔ blacklist (everything except listed apps tunneled) -->
-                  <div class="glass-soft rounded-xl p-3 mb-4 min-w-0">
-                    <div class="flex items-center gap-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="dir.title">Routing direction</p>
-                      <div class="flex gap-1.5 ml-auto">
-                        <button type="button" class="dir-pill active rounded-lg px-3 py-1.5 text-[11px] font-semibold border text-cyan-300 border-cyan-400/40 bg-cyan-400/10" data-dir="whitelist" data-tip-key="tip.dirWhitelist">
-                          <span class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Zm-2 16-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg><span data-i18n="dir.whitelist">Whitelist</span></span>
-                        </button>
-                        <button type="button" class="dir-pill rounded-lg px-3 py-1.5 text-[11px] font-semibold border border-white/10 text-[#A7B0BF] hover:border-white/25" data-dir="blacklist" data-tip-key="tip.dirBlacklist">
-                          <span class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Zm2 16H9v-2h5v2Z"/></svg><span data-i18n="dir.blacklist">Blacklist</span></span>
-                        </button>
+                  <!-- Quick app picker: running processes + disk EXE → GPN tunnel -->
+                  <div id="dashQuickAddPanel" class="hidden glass-soft rounded-xl p-3.5 mb-4 border border-cyan-400/20 bg-cyan-400/5">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                      <div class="min-w-0">
+                        <p class="text-xs font-semibold text-slate-100" data-i18n="boost.addAppTitle">Add an app to the GPN tunnel</p>
+                        <p class="text-[10px] text-[#8A94A6] mt-0.5" data-i18n="boost.addAppDesc">Pick a running app to route it through GPN right away — or choose an EXE from disk.</p>
                       </div>
+                      <button type="button" id="dashQuickAddClose" class="w-7 h-7 rounded-md text-[#8A94A6] hover:text-slate-100 hover:bg-white/10 shrink-0" aria-label="Close quick add">×</button>
                     </div>
-                    <p id="dirHint" class="text-[10px] text-[#64748B] mt-1.5" data-i18n="dir.hintWhitelist">Whitelist — only assigned games/apps are tunneled; all other traffic stays direct.</p>
+                    <input id="dashQuickAddFilter" type="search" placeholder="Search running apps…" class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-slate-200 outline-none focus:border-cyan-400/50 placeholder:text-[#5B6472]" />
+                    <div id="dashQuickAddList" class="mt-2 max-h-56 overflow-y-auto divide-y divide-white/5"></div>
                   </div>
-                  <!-- Distinct GPN Connect button: force the Italy/Germany auto-selection
-                       and tunnel even when the selected profile isn't WireGuard, because
-                       the user has explicitly chosen GPN mode. -->
-                  <button id="gpnConnectBtn" type="button" class="w-full rounded-xl px-4 py-3 flex items-center gap-3 border transition-colors min-w-0 group/gpn mb-4 text-left"
-                          style="background:linear-gradient(135deg,var(--violet-15,rgba(124,58,237,.15)),var(--cyan-10,rgba(34,211,238,.10)));border-color:rgba(124,58,237,.35)"
-                          data-tip-key="tip.modeGpn">
-                    <svg class="w-5 h-5 text-[var(--violet)] shrink-0" style="filter:drop-shadow(0 0 8px color-mix(in srgb, var(--violet) 80%, transparent))" fill="currentColor" viewBox="0 0 24 24"><path d="M16.5 9 13 12.5 9.5 9 6 12.5 12 18l6-5.5L16.5 9Z"/></svg>
-                    <span class="min-w-0">
-                      <span class="block text-sm font-semibold text-white" data-i18n="gpn.connect">GPN Connect</span>
-                      <span class="block text-[11px] text-[#8A94A6] truncate" data-i18n="gpn.connectSub">Auto-select best Italy/Germany server</span>
-                    </span>
-                    <span id="gpnConnectState" class="ml-auto shrink-0 text-[10px] px-2.5 py-1 rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-400/25">—</span>
-                  </button>
                   <!-- Live tunnel connection info for the selected node -->
                   <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4 min-w-0">
                     <div class="glass-soft rounded-xl px-4 py-3 min-w-0">
@@ -2857,254 +2884,28 @@ body.effects-hidden *::after {
                       <p id="ipVerifyDetail" class="text-[11px] text-[#8A94A6] truncate">IP check pending…</p>
                     </div>
                   </div>
-                  <div id="dashboardBoostCards" class="grid sm:grid-cols-2 xl:grid-cols-4 gap-3 min-w-0">
-                    <div class="glass-soft rounded-xl p-3.5 flex items-center gap-3 min-w-0 opacity-60">
-                      <div class="min-w-0"><p class="text-sm text-[#8A94A6]">No games assigned yet. Add apps in the Game Boost view.</p></div>
-                    </div>
-                  </div>
-                  <!-- Server cluster card: live Italy/Germany latency measured via
-                       GpnServerSelectionService (MainWindowViewModel.ProbeServersAsync). -->
-                  <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.cluster.title">Server cluster</p>
-                      <span id="gpnClusterPing" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono"></span>
-                      <!-- Tünel etkinken ölçüm fiziksel NIC üzerinden yapılır (ICMP atlanır,
-                           gecikme UDP el sıkışma RTT'si) — küme kartı başlığında ipucu rozeti. -->
-                      <span id="gpnClusterEgressHint" class="hidden shrink-0 items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-400/20 cursor-help">🧭 fiziksel NIC</span>
-                      <div class="ml-auto flex items-center gap-1.5 shrink-0">
-                        <button id="gpnClusterProbe" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.cluster.measure">Measure</button>
-                      </div>
-                    </div>
-                    <div id="gpnClusterList" class="flex flex-col gap-1.5 min-w-0">
-                      <p class="text-[#64748B]" data-i18n="gpn.cluster.empty">No active servers — GPN Connect will not auto-select.</p>
-                    </div>
-                  </div>
-                  <!-- Collapsible "Advanced & Diagnostics" group: settings and live
-                       telemetry the user rarely touches (server tuning, failover,
-                       capture/Wintun internals, diagnostics). Collapsed by default so
-                       the main GPN flow — connect, status, games, cluster — stays clean.
-                       The host still feeds the cards inside; they only render on expand. -->
-                  <div id="gpnAdvanced" class="min-w-0">
-                    <button type="button" id="gpnAdvancedToggle" aria-expanded="false" class="glass-soft rounded-xl px-3.5 py-3 w-full flex items-center gap-2.5 text-left transition-colors hover:bg-white/5 cursor-pointer min-w-0" title="Advanced GPN settings & diagnostics">
-                      <svg id="gpnAdvancedChevron" class="w-3.5 h-3.5 text-[#8A94A6] shrink-0 transition-transform duration-200 -rotate-90" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
-                      <span class="shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-md bg-white/5 text-[var(--violet)]">
-                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58ZM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2Z"/></svg>
-                      </span>
-                      <span class="font-display font-semibold text-xs tracking-wide text-slate-100 shrink-0" data-i18n="gpn.advanced">Advanced & Diagnostics</span>
-                      <span class="ml-auto min-w-0 text-[9px] uppercase tracking-[0.15em] text-[#64748B] truncate hidden sm:inline" data-i18n="gpn.advanced.sub">settings & live telemetry</span>
-                    </button>
-                    <div id="gpnAdvancedBody" class="hidden min-w-0">
-                  <!-- Best candidate card: shows WHICH server + mode GPN Connect will
-                       pick BEFORE the user connects — same pure DecideSelection logic
-                       as SelectBestServerAsync (GpnServerSelectionService.EvaluateSelection
-                       → setGpnSelectionPrediction). The dashboard never re-decides. -->
-                  <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.candidate.title">Best candidate</p>
-                      <span id="gpnCandidateTs" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono"></span>
-                    </div>
-                    <div id="gpnCandidateBody" class="min-w-0">
-                      <p class="text-[#64748B]" data-i18n="gpn.candidate.empty">No measurement yet — run a server probe.</p>
-                    </div>
-                  </div>
-                  <!-- PID pool card: live GpnTargetResolver pool fed from the
-                       SplitTunnelViewModel vpn-routed games (GpnTargetResolverBridge). -->
-                  <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.pidpool.title">PID pool</p>
-                      <span id="gpnPidPoolState" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono">idle</span>
-                      <div class="ml-auto flex items-center gap-1.5 shrink-0">
-                        <button id="gpnPidPoolStart" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-emerald-400/10 text-emerald-300 border border-emerald-400/25 hover:bg-emerald-400/20 transition-colors" data-i18n="gpn.pidpool.start">Watch</button>
-                        <button id="gpnPidPoolStop" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.pidpool.stop">Stop</button>
-                        <button id="gpnPidPoolRefresh" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.pidpool.refresh">Refresh</button>
-                      </div>
-                    </div>
-                    <div id="gpnPidPoolTargets" class="flex flex-wrap gap-1.5 mb-2 min-w-0"></div>
-                    <div id="gpnPidPoolList" class="font-mono text-[10px] leading-relaxed text-[#8A94A6] min-w-0">
-                      <p class="text-[#64748B]" data-i18n="gpn.pidpool.empty">No vpn-routed game yet — assign a game in Game Boost to build the pool.</p>
-                    </div>
-                  </div>
-                  <!-- Captured traffic card: per-packet telemetry from GpnCaptureLoop
-                       (protocol/direction/bytes, top flows, per-PID via UDP port table). -->
-                  <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.capture.title">Captured traffic</p>
-                      <span id="gpnCaptureTotal" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono">0</span>
-                    </div>
-                    <div id="gpnCaptureAgg" class="flex flex-wrap gap-1.5 font-mono text-[10px] mb-2 min-w-0"></div>
-                    <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] mb-1" data-i18n="gpn.capture.flows">Top flows</p>
-                    <div id="gpnCaptureFlows" class="font-mono text-[10px] leading-relaxed text-[#8A94A6] min-w-0"></div>
-                    <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] mb-1 mt-2" data-i18n="gpn.capture.perPid">Per-PID</p>
-                    <div id="gpnCapturePids" class="font-mono text-[10px] leading-relaxed text-[#8A94A6] min-w-0"></div>
-                  </div>
-                  <!-- Failover decision matrix: the SAME live measurement evaluated under
-                       default + strict policy side by side (GpnServerSelectionService.EvaluateFailoverMatrix
-                       → setGpnFailoverMatrix; the dashboard only renders, never re-decides). -->
-                  <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.matrix.title">Failover matrix</p>
-                      <span id="gpnMatrixTs" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono"></span>
-                    </div>
-                    <div id="gpnMatrixBody" class="min-w-0">
-                      <p class="text-[#64748B]" data-i18n="gpn.matrix.empty">No measurement yet — run a server probe.</p>
-                    </div>
-                  </div>
-                  <!-- GPN stable mode: when failover is OFF (default) the connection sticks
-                       to the chosen server — no auto server switching, no V2rayTCP fallback,
-                       no recovery. Toggle persisted in config (GuiItem.GpnEnableFailover). -->
-                  <div class="glass-soft rounded-xl px-3.5 py-3 min-w-0 mt-4 flex items-center gap-3">
-                    <div class="min-w-0 flex-1">
-                      <p class="text-xs font-semibold text-slate-100" data-i18n="gpn.failover.title">Stable connection (no auto switch)</p>
-                      <p class="text-[11px] text-[#8A94A6] mt-0.5" data-i18n="gpn.failover.sub">OFF = stick to the chosen server for the most stable, uninterrupted connection. ON = auto-switch/failover allowed.</p>
-                    </div>
-                    <!-- Simple toggle: posts set_gpn_failover -->
-                    <button type="button" id="gpnFailoverToggle" role="switch" aria-checked="false"
-                            class="shrink-0 relative w-10 h-6 rounded-full transition-colors bg-white/15">
-                      <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform"></span>
-                    </button>
-                  </div>
-                  <!-- GPN recovery watch: after a V2rayTCP fallback, auto-return to
-                       Tier 2 (WireGuard) once a healthy server is found. Toggle persisted
-                       in config (GuiItem.GpnEnableRecoveryWatch). -->
-                  <div class="glass-soft rounded-xl px-3.5 py-3 min-w-0 mt-4 flex items-center gap-3">
-                    <div class="min-w-0 flex-1">
-                      <p class="text-xs font-semibold text-slate-100" data-i18n="gpn.recovery.title">Auto-recover after V2ray</p>
-                      <p class="text-[11px] text-[#8A94A6] mt-0.5" data-i18n="gpn.recovery.sub">After a V2rayTCP fallback, watch for a healthy server and return to WireGuard automatically.</p>
-                    </div>
-                    <!-- Simple toggle: posts set_gpn_recovery_watch -->
-                    <button type="button" id="gpnRecoveryWatchToggle" role="switch" aria-checked="true"
-                            class="shrink-0 relative w-10 h-6 rounded-full transition-colors bg-cyan-400/70">
-                      <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-4"></span>
-                    </button>
-                  </div>
-                  <!-- GPN failover / recovery telemetry counters (lives updated by host) -->
-                  <div id="gpnTelemetryCard" class="glass-soft rounded-xl px-3.5 py-3 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.telemetry.title">Failover telemetry</p>
-                      <span id="gpnTelemetryTotal" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono">0</span>
-                      <button id="gpnTelemetryReset" type="button" class="ml-auto shrink-0 text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.telemetry.reset">Reset</button>
-                    </div>
-                    <div class="flex flex-wrap gap-1.5 font-mono text-[10px]">
-                      <span class="px-2 py-0.5 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/20" data-i18n="gpn.telemetry.switchShort">switch</span>
-                      <span id="gpnTelSwitches" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
-                      <span class="px-2 py-0.5 rounded-md bg-red-400/10 text-red-300 border border-red-400/20" data-i18n="gpn.telemetry.deathShort">death</span>
-                      <span id="gpnTelDeaths" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
-                      <span class="px-2 py-0.5 rounded-md bg-amber-400/10 text-amber-300 border border-amber-400/20" data-i18n="gpn.telemetry.fallbackShort">fallback</span>
-                      <span id="gpnTelFallbacks" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
-                      <span class="px-2 py-0.5 rounded-md bg-emerald-400/10 text-emerald-300 border border-emerald-400/20" data-i18n="gpn.telemetry.recoverShort">recover</span>
-                      <span id="gpnTelRecovers" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
-                      <span class="px-2 py-0.5 rounded-md bg-violet-400/10 text-violet-300 border border-violet-400/20" data-i18n="gpn.telemetry.selectShort">select</span>
-                      <span id="gpnTelDecisions" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
-                    </div>
-                  </div>
-                  <!-- WinDivert queue settings: GpnCaptureItem → WinDivertOpenParams
-                       (queue len/time/size + layer/direction). Editable; the Apply button
-                       posts set_gpn_capture_settings, the host writes the config (next
-                       capture start applies the values). -->
-                  <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.captureSet.title">WinDivert queue</p>
-                      <span id="gpnCaptureSetSlot" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono"></span>
-                      <button id="gpnCaptureSetSave" type="button" class="ml-auto shrink-0 text-[10px] font-semibold px-2.5 py-1 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors" data-i18n="gpn.captureSet.save">Apply</button>
-                    </div>
-                    <div class="grid grid-cols-3 gap-2 font-mono text-[10px] mb-2 min-w-0">
-                      <label class="flex flex-col gap-1 min-w-0">
-                        <span class="text-[#8A94A6]" data-i18n="gpn.captureSet.queueLen">Queue len</span>
-                        <input id="gpnCaptureSetQueueLen" type="number" min="1" step="64" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
-                      </label>
-                      <label class="flex flex-col gap-1 min-w-0">
-                        <span class="text-[#8A94A6]" data-i18n="gpn.captureSet.queueTime">Queue time (ms)</span>
-                        <input id="gpnCaptureSetQueueTime" type="number" min="1" step="100" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
-                      </label>
-                      <label class="flex flex-col gap-1 min-w-0">
-                        <span class="text-[#8A94A6]" data-i18n="gpn.captureSet.queueSize">Queue size (B)</span>
-                        <input id="gpnCaptureSetQueueSize" type="number" min="0" step="1024" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
-                      </label>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-[10px] mb-2 min-w-0">
-                      <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0"><input id="gpnCaptureSetEnableLen" type="checkbox" class="accent-cyan-400"><span data-i18n="gpn.captureSet.enableLen">len</span></label>
-                      <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0"><input id="gpnCaptureSetEnableTime" type="checkbox" class="accent-cyan-400"><span data-i18n="gpn.captureSet.enableTime">time</span></label>
-                      <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0"><input id="gpnCaptureSetEnableSize" type="checkbox" class="accent-cyan-400"><span data-i18n="gpn.captureSet.enableSize">size</span></label>
-                      <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0 ml-auto">
-                        <span data-i18n="gpn.captureSet.layer">Layer</span>
-                        <select id="gpnCaptureSetLayer" class="bg-white/5 border border-white/10 rounded-md px-1.5 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
-                          <option value="0">Network</option>
-                          <option value="1">Forward</option>
-                        </select>
-                      </label>
-                      <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0">
-                        <span data-i18n="gpn.captureSet.direction">Direction</span>
-                        <select id="gpnCaptureSetDirection" class="bg-white/5 border border-white/10 rounded-md px-1.5 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
-                          <option value="0">Inbound</option>
-                          <option value="1">Outbound</option>
-                        </select>
-                      </label>
-                    </div>
-                    <p class="text-[9px] text-[#64748B]" data-i18n="gpn.captureSet.hint">Values apply to the next capture start; the running loop keeps its current parameters.</p>
-                  </div>
-                  <!-- Wintun adapter settings: GpnWintunItem → WireGuardTunnelService.Open
-                       (adapter name prefix + ring capacity). Editable; the Apply button
-                       posts set_gpn_wintun_settings, the host writes the config (next
-                       WireGuard connect applies the values). -->
-                  <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.wintunSet.title">Wintun adapter</p>
-                      <span id="gpnWintunSetSlot" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono"></span>
-                      <button id="gpnWintunSetSave" type="button" class="ml-auto shrink-0 text-[10px] font-semibold px-2.5 py-1 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors" data-i18n="gpn.wintunSet.save">Apply</button>
-                    </div>
-                    <div class="grid grid-cols-2 gap-2 font-mono text-[10px] mb-2 min-w-0">
-                      <label class="flex flex-col gap-1 min-w-0">
-                        <span class="text-[#8A94A6]" data-i18n="gpn.wintunSet.adapter">Adapter name prefix</span>
-                        <input id="gpnWintunSetAdapterName" type="text" maxlength="32" spellcheck="false" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
-                      </label>
-                      <label class="flex flex-col gap-1 min-w-0">
-                        <span class="text-[#8A94A6]" data-i18n="gpn.wintunSet.ring">Ring capacity (B)</span>
-                        <input id="gpnWintunSetRingCapacity" type="number" min="131072" step="65536" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
-                      </label>
-                    </div>
-                    <p class="text-[9px] text-[#64748B]" data-i18n="gpn.wintunSet.hint">Applies to the next WireGuard connect; the server id is appended to the adapter name (AoGPN-it). Ring capacity is clamped to 128 KiB–64 MiB and rounded to a power of two.</p>
-                  </div>
-                  <!-- GPN diagnostics feed: DiagLog "GPN_*" lines streamed live by the host -->
-                  <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.diag.title">GPN diagnostics</p>
-                      <span id="gpnDiagCount" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono">0</span>
-                      <button id="gpnDiagClear" type="button" class="ml-auto shrink-0 text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.diag.clear">Clear</button>
-                    </div>
-                    <div id="gpnDiagFeed" class="max-h-36 overflow-y-auto font-mono text-[10px] leading-relaxed text-[#8A94A6] min-w-0">
-                      <p class="text-[#64748B]" data-i18n="gpn.diag.empty">No GPN diagnostics yet — connect to see the live pipeline.</p>
-                    </div>
-                  </div>
-                  <!-- Last-50 decisions ring buffer (host GpnResilienceLog) for troubleshooting -->
-                  <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
-                    <div class="flex items-center gap-2 mb-2 min-w-0">
-                      <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.reslog.title">Last 50 decisions</p>
-                      <span id="gpnResLogCount" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono">0</span>
-                      <div class="ml-auto flex items-center gap-1.5 shrink-0">
-                        <button id="gpnResLogRefresh" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.reslog.refresh">Refresh</button>
-                        <button id="gpnResLogClear" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.reslog.clear">Clear</button>
-                      </div>
-                    </div>
-                    <div id="gpnResilienceLogList" class="max-h-44 overflow-y-auto text-[10px] leading-relaxed min-w-0 scroll-smooth">
-                      <p class="text-[#64748B]" data-i18n="gpn.reslog.empty">No decisions recorded yet.</p>
-                    </div>
-                    <p class="text-[9px] text-[#5B6472] mt-1.5 truncate"><span data-i18n="gpn.reslog.path">Mirrored to</span>&nbsp;<span id="gpnResLogPath" class="font-mono"></span></p>
-                  </div>
-                    </div>
+                  <!-- All routed apps as a scrollable, interactive rail: every
+                       entry is reachable from the Connection Center — ‹ › buttons,
+                       drag or a horizontal wheel scroll through the whole list.
+                       Cards toggle the per-app GPN route directly (set_app_route). -->
+                  <div class="relative min-w-0">
+                    <button type="button" id="boostCardsPrevBtn" class="boost-rail-btn absolute left-0 top-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full glass-soft flex items-center justify-center text-[#8A94A6] hover:text-cyan-300 hover:border-cyan-400/40 disabled:opacity-30 disabled:pointer-events-none transition-colors" data-tip-key="boost.railPrev" aria-label="Scroll apps left">‹</button>
+                    <div id="dashboardBoostCards" class="boost-cards flex items-stretch gap-3 overflow-x-auto min-w-0 px-8 py-1"></div>
+                    <button type="button" id="boostCardsNextBtn" class="boost-rail-btn absolute right-0 top-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full glass-soft flex items-center justify-center text-[#8A94A6] hover:text-cyan-300 hover:border-cyan-400/40 disabled:opacity-30 disabled:pointer-events-none transition-colors" data-tip-key="boost.railNext" aria-label="Scroll apps right">›</button>
                   </div>
                 </section>
                 <!-- === GLOBAL VPN PANEL === -->
                 <section id="panelGlobal" class="min-w-0 mode-panel hidden-panel">
                   <div class="flex items-center gap-2 mb-4 min-w-0">
                     <svg class="w-4 h-4 text-[var(--cyan)] shrink-0" style="filter:drop-shadow(0 0 6px color-mix(in srgb, var(--cyan) 80%, transparent))" fill="currentColor" viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Z"/></svg>
-                    <h2 class="font-display font-semibold text-lg tracking-wide">Global VPN</h2>
+                    <h2 class="font-display font-semibold text-lg tracking-wide" data-i18n="mode.globalVpn">VPN</h2>
                     <span id="globalStatusBadge" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-400/20" data-i18n="global.allTraffic">All Traffic Tunnelled</span>
                   </div>
                   <div class="grid sm:grid-cols-2 gap-3">
                     <div class="glass-soft rounded-xl p-4">
-                      <p class="text-[10px] uppercase tracking-[.14em] text-[#8A94A6] mb-1">Transport</p>
+                      <p class="text-[10px] uppercase tracking-[.14em] text-[#8A94A6] mb-1" data-i18n="global.transport">Transport</p>
                       <p class="text-sm font-semibold text-cyan-200"><span id="globalTransport">TUN</span> <span data-i18n="global.modeActive">mode active</span></p>
-                      <p class="text-[11px] text-[#64748B] mt-1">All network traffic is captured at the network layer and routed through the VPN tunnel.</p>
+                      <p class="text-[11px] text-[#64748B] mt-1" data-i18n="global.transportDesc">All network traffic is captured at the network layer and routed through the VPN tunnel.</p>
                     </div>
                     <div class="glass-soft rounded-xl p-4">
                       <p class="text-[10px] uppercase tracking-[.14em] text-[#8A94A6] mb-1" data-i18n="global.ipVerification">IP Verification</p>
@@ -3122,22 +2923,22 @@ body.effects-hidden *::after {
                       </div>
                       <span class="text-[11px] font-semibold text-slate-300 whitespace-nowrap" data-i18n="global.coverage100">100% of traffic</span>
                     </div>
-                    <p class="text-[11px] text-[#64748B] mt-2">All applications, services, and system processes route through the secure tunnel. No traffic bypasses the VPN.</p>
+                    <p class="text-[11px] text-[#64748B] mt-2" data-i18n="global.coverageDesc">All applications, services, and system processes route through the secure tunnel. No traffic bypasses the VPN.</p>
                   </div>
                 </section>
               </div>
 
               <!-- Capture/protocol status banners (controls now live in the sidebar) -->
               <div id="vpnCaptureLockNotice" class="hidden mt-1.5 rounded-lg border border-cyan-400/15 bg-cyan-400/5 px-3 py-1.5 text-[10px] text-[#8A94A6]">
-                🔒 <span id="vpnCaptureLockText" class="min-w-0">Global VPN locks capture to TUN — every app is captured at the network layer so nothing can bypass the tunnel. Choose GPN Game Tunnel to pick Proxy capture.</span>
+                🔒 <span id="vpnCaptureLockText" class="min-w-0">VPN locks capture to TUN — every app is captured at the network layer so nothing can bypass the tunnel. Choose GPN Game Tunnel to pick Proxy capture.</span>
               </div>
               <div id="tunProxyNotice" class="hidden mt-1.5 rounded-lg border border-cyan-400/15 bg-cyan-400/5 px-3 py-1.5 tun-proxy-notice">
                 💡 <span class="tun-accent">TUN</span> capture won't touch your system proxy — your top-right <span class="proxy-accent">PROXY ON</span> preference stays independent. Only traffic that ignores the OS proxy (games, some apps) needs TUN.
               </div>
               <div id="tunAdminNotice" class="hidden mt-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3.5 py-2.5 text-xs font-medium text-amber-200 flex items-center gap-2.5 min-w-0">
                 <svg class="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm1 14h-2v2h2v-2Zm0-6h-2v4h2v-4Z"/></svg>
-                <span id="tunAdminNoticeText" class="min-w-0">TUN requires administrator privileges — CONNECT is locked. Relaunch as admin or switch to Proxy capture.</span>
-                <button id="tunAdminRelaunchBtn" type="button" class="ml-auto shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-amber-500/15 text-amber-200 border border-amber-400/30 hover:bg-amber-500/25 transition-colors">Relaunch as admin</button>
+                <span id="tunAdminNoticeText" class="min-w-0" data-i18n="banner.tunAdmin">TUN requires administrator privileges — CONNECT is locked. Relaunch as admin or switch to Proxy capture.</span>
+                <button id="tunAdminRelaunchBtn" type="button" class="ml-auto shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-amber-500/15 text-amber-200 border border-amber-400/30 hover:bg-amber-500/25 transition-colors" data-i18n="banner.relaunch">Relaunch as admin</button>
               </div>
 
               <!-- Connection error / failure card: shows WHY a connect attempt failed
@@ -3147,8 +2948,8 @@ body.effects-hidden *::after {
               <div id="connectionError" class="hidden mt-3 rounded-xl border border-red-400/30 bg-red-500/10 px-3.5 py-2.5 text-xs font-medium text-red-200 min-w-0">
                 <div class="flex items-center gap-2.5 min-w-0">
                   <svg class="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm1 14h-2v2h2v-2Zm0-6h-2v4h2v-4Z"/></svg>
-                  <span id="connectionErrorText" class="min-w-0">TUN mode requires administrator privileges.</span>
-                  <button id="relaunchAdminBtn" type="button" class="ml-auto shrink-0 hidden text-[11px] font-semibold px-2.5 py-1 rounded-md bg-amber-500/15 text-amber-200 border border-amber-400/30 hover:bg-amber-500/25 transition-colors">Relaunch as admin</button>
+                  <span id="connectionErrorText" class="min-w-0" data-i18n="banner.tunAdminShort">TUN mode requires administrator privileges.</span>
+                  <button id="relaunchAdminBtn" type="button" class="ml-auto shrink-0 hidden text-[11px] font-semibold px-2.5 py-1 rounded-md bg-amber-500/15 text-amber-200 border border-amber-400/30 hover:bg-amber-500/25 transition-colors" data-i18n="banner.relaunch">Relaunch as admin</button>
                 </div>
                 <div id="connectionErrorDetails" class="hidden mt-2 pl-7 text-[10px] leading-relaxed text-red-300/70 font-mono break-all"></div>
               </div>
@@ -3194,7 +2995,7 @@ body.effects-hidden *::after {
                 <span id="captureDriftText" class="min-w-0"></span>
               </div>
 
-              <p id="connectionStatusLine" class="text-xs text-[#8A94A6] leading-relaxed mt-4">Route <span class="text-cyan-300 font-medium">Global VPN</span> · Capture <span class="text-cyan-300 font-medium">Proxy</span> — press <span class="text-cyan-300 font-medium">CONNECT</span> to start the tunnel.</p>
+              <p id="connectionStatusLine" class="text-xs text-[#8A94A6] leading-relaxed mt-4">Route <span class="text-cyan-300 font-medium">VPN</span> · Capture <span class="text-cyan-300 font-medium">Proxy</span> — press <span class="text-cyan-300 font-medium">CONNECT</span> to start the tunnel.</p>
             </div>
           </div>
 
@@ -3208,7 +3009,7 @@ body.effects-hidden *::after {
               <div class="flex items-center gap-1.5 min-w-0">
                 <span class="text-[10px] uppercase tracking-[0.15em] text-[#8A94A6] shrink-0" data-i18n="quick.mode">Mode</span>
                 <button class="mode-pill active rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border border-transparent text-cyan-300" data-mode="gpn">GPN</button>
-                <button class="mode-pill rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border border-transparent text-[#A7B0BF]" data-mode="vpn">Global</button>
+                <button class="mode-pill rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border border-transparent text-[#A7B0BF]" data-mode="vpn">VPN</button>
               </div>
               <div class="flex items-center gap-1.5 min-w-0">
                 <span class="text-[10px] uppercase tracking-[0.15em] text-[#8A94A6] shrink-0" data-i18n="quick.capture">Capture</span>
@@ -3218,14 +3019,14 @@ body.effects-hidden *::after {
               <div class="flex items-center gap-1.5 min-w-0">
                 <span class="text-[10px] uppercase tracking-[0.15em] text-[#8A94A6] shrink-0" data-i18n="quick.protocol">Protocol</span>
                 <select id="mobileProtocolSelect" class="quick-select text-[11px]" aria-label="Protocol strategy" title="Protocol strategy — Automatic / WireGuard / Mimic (Reality-TLS fingerprint) / Hysteria2-TUIC (QUIC) / OpenVPN.">
-                  <option value="auto">Automatic</option>
-                  <option value="wireguard">WireGuard</option>
-                  <option value="mimic">Reality / TLS</option>
-                  <option value="hysteria2">Hysteria2 / TUIC</option>
-                  <option value="openvpn">OpenVPN</option>
+                  <option value="auto" data-i18n="quick.protocolAuto">Automatic</option>
+                  <option value="wireguard" data-i18n="quick.protocolWireguard">WireGuard</option>
+                  <option value="mimic" data-i18n="quick.protocolMimic">Reality / TLS</option>
+                  <option value="hysteria2" data-i18n="quick.protocolHysteria2">Hysteria2 / TUIC</option>
+                  <option value="openvpn" data-i18n="quick.protocolOpenvpn">OpenVPN</option>
                 </select>
               </div>
-              <label class="flex items-center gap-1.5 min-w-0 cursor-pointer" title="Reconnect automatically when the tunnel drops.">
+              <label data-i18n-title="quick.autoReconnectTip" class="flex items-center gap-1.5 min-w-0 cursor-pointer" title="Reconnect automatically when the tunnel drops.">
                 <span class="text-[10px] uppercase tracking-[0.15em] text-[#8A94A6] shrink-0" data-i18n="quick.autoReconnect">Auto reconnect</span>
                 <span class="switch quick-switch"><input id="mobileAutoReconnect" type="checkbox" /><span class="slider"></span></span>
               </label>
@@ -3287,7 +3088,7 @@ body.effects-hidden *::after {
           <div class="flex flex-wrap items-center gap-2 mb-4 min-w-0">
             <svg class="w-4 h-4 text-[var(--violet)] shrink-0" style="filter:drop-shadow(0 0 6px color-mix(in srgb, var(--violet) 80%, transparent))" fill="currentColor" viewBox="0 0 24 24"><path d="M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm3 4v2h2V7H7Zm6 0v2h4V7h-4Zm-6 4v2h2v-2H7Zm6 0v2h4v-2h-4Zm-6 4v2h2v-2H7Zm6 0v2h4v-2h-4Z"/></svg>
             <h2 class="font-display font-semibold text-lg tracking-wide" data-i18n="nodes.title">VPN Routes</h2>
-            <span class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-400/20"><span id="nodesCount">8</span> online</span>
+            <span class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-400/20"><span id="nodesCount">8</span> <span data-i18n="nodes.online">online</span></span>
             <select id="nodeSortSel" class="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 outline-none focus:border-cyan-400/50 cursor-pointer">
               <option value="default" data-i18n="nodes.sortDefault">Default order</option>
               <option value="country" data-i18n="nodes.sortCountry">Country A-Z</option>
@@ -3302,23 +3103,23 @@ body.effects-hidden *::after {
                 <button id="nodeGroupsHideAllBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-[#8A94A6] border border-white/10 hover:bg-white/10 transition-colors" data-i18n="nodes.hideAll">Hide all</button>
               </div>
               <div class="hidden items-center gap-1.5" id="nodeTestControls">
-                <select id="nodeTestType" title="Ping test type" class="text-[11px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 outline-none focus:border-cyan-400/50 cursor-pointer">
-                  <option value="tcp">TCP ping</option>
-                  <option value="udp">UDP ping</option>
-                  <option value="both">TCP + UDP</option>
+                <select id="nodeTestType" class="text-[11px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 outline-none focus:border-cyan-400/50 cursor-pointer">
+                  <option value="tcp" data-i18n="nodes.pingTypeTcp">TCP ping</option>
+                  <option value="udp" data-i18n="nodes.pingTypeUdp">UDP ping</option>
+                  <option value="both" data-i18n="nodes.pingTypeBoth">TCP + UDP</option>
                 </select>
                 <button id="nodeTestAllBtn" type="button" class="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-400/25 hover:bg-emerald-500/20 transition-colors">
                   <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
                   <span id="nodeTestAllLabel">Ping all</span>
                 </button>
               </div>
-              <button id="nodePasteBtn" type="button" class="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors" title="Pano bağlantısını düğüm olarak ekle (Ctrl+V)">
+              <button id="nodePasteBtn" type="button" class="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors" data-tip-key="nodes.addNodeTip">
                 <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M19 2h-4.18C14.4.84 13.3 0 12 0S9.6.84 9.18 2H5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Zm-7 0a1 1 0 1 1-1 1 1 1 0 0 1 1-1Zm7 18H5V4h2v3h10V4h2Z"/></svg>
-                Düğüm ekle
+                <span data-i18n="nodes.addNode">Düğüm ekle</span>
               </button>
               <button id="nodeEditBtn" type="button" class="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors">
                 <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="m14.06 9.02.92.92L5.92 19H5v-.92l9.06-9.06ZM17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83a.996.996 0 0 0 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29Zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75Z"/></svg>
-                Edit
+                <span data-i18n="nodes.edit">Edit</span>
               </button>
               <button id="nodeDisabledBtn" type="button" class="hidden items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-300 border border-amber-400/25 hover:bg-amber-500/20 transition-colors">
                 <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm4.2 14.2a1 1 0 0 1-1.4 0L12 13.41l-2.8 2.79a1 1 0 1 1-1.4-1.4l2.79-2.8-2.79-2.8a1 1 0 1 1 1.4-1.4l2.8 2.79 2.8-2.79a1 1 0 1 1 1.4 1.4l-2.79 2.8 2.79 2.8a1 1 0 0 1 0 1.4Z"/></svg>
@@ -3329,17 +3130,17 @@ body.effects-hidden *::after {
           <!-- Edit-mode toolbar: destructive list edits are only available here. -->
           <div id="nodeEditBar" class="hidden items-center gap-2 mb-3 px-3 py-2 rounded-xl border border-violet-400/25 bg-violet-500/5 min-w-0">
             <svg class="w-4 h-4 text-violet-300 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="m14.06 9.02.92.92L5.92 19H5v-.92l9.06-9.06ZM17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83a.996.996 0 0 0 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29Z"/></svg>
-            <span class="text-xs font-semibold text-violet-300 shrink-0">Edit mode</span>
-            <button id="nodeDedupBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors">Remove duplicates</button>
-            <button id="nodeCleanupDeleteBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-red-500/10 text-red-300 border border-red-400/25 hover:bg-red-500/20 transition-colors">Delete failed</button>
-            <button id="nodeCleanupDisableBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-300 border border-amber-400/25 hover:bg-amber-500/20 transition-colors">Disable failed</button>
+            <span class="text-xs font-semibold text-violet-300 shrink-0" data-i18n="nodes.editMode">Edit mode</span>
+            <button id="nodeDedupBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="nodes.removeDuplicates">Remove duplicates</button>
+            <button id="nodeCleanupDeleteBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-red-500/10 text-red-300 border border-red-400/25 hover:bg-red-500/20 transition-colors" data-i18n="nodes.deleteFailed">Delete failed</button>
+            <button id="nodeCleanupDisableBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-300 border border-amber-400/25 hover:bg-amber-500/20 transition-colors" data-i18n="nodes.disableFailed">Disable failed</button>
           </div>
           <!-- Disabled-section banner: restore or permanently delete disabled nodes. -->
           <div id="nodeDisabledBar" class="hidden items-center gap-2 mb-3 px-3 py-2 rounded-xl border border-amber-400/25 bg-amber-500/5 min-w-0">
             <svg class="w-4 h-4 text-amber-300 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm4.2 14.2a1 1 0 0 1-1.4 0L12 13.41l-2.8 2.79a1 1 0 1 1-1.4-1.4l2.79-2.8-2.79-2.8a1 1 0 1 1 1.4-1.4l2.8 2.79 2.8-2.79a1 1 0 1 1 1.4 1.4l-2.79 2.8 2.79 2.8a1 1 0 0 1 0 1.4Z"/></svg>
-            <span id="nodeDisabledBarText" class="text-xs font-semibold text-amber-300 shrink-0">Disabled nodes</span>
-            <button id="nodeDisabledBackBtn" type="button" class="ml-auto text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors">Back to active</button>
-            <button id="nodeDeleteAllDisabledBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-red-500/10 text-red-300 border border-red-400/25 hover:bg-red-500/20 transition-colors">Delete all</button>
+            <span id="nodeDisabledBarText" class="text-xs font-semibold text-amber-300 shrink-0" data-i18n="nodes.disabledNodes">Disabled nodes</span>
+            <button id="nodeDisabledBackBtn" type="button" class="ml-auto text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="nodes.backToActive">Back to active</button>
+            <button id="nodeDeleteAllDisabledBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-red-500/10 text-red-300 border border-red-400/25 hover:bg-red-500/20 transition-colors" data-i18n="nodes.deleteAll">Delete all</button>
           </div>
           <!-- Multi-select toolbar: appears once nodes are selected (Ctrl+click,
                Shift+click range, Ctrl+A all). Copy/paste/delete mirror AoGPN's
@@ -3347,25 +3148,25 @@ body.effects-hidden *::after {
           <div id="nodeSelBar" class="hidden items-center gap-2 mb-3 px-3 py-2 rounded-xl border border-cyan-400/25 bg-cyan-400/5 min-w-0">
             <svg class="w-4 h-4 text-cyan-300 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2Z"/></svg>
             <span id="nodeSelCount" class="text-xs font-semibold text-cyan-300 num-tabular shrink-0">0 selected</span>
-            <select id="nodeTestSelType" title="Selected node ping type" class="text-[11px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 outline-none focus:border-cyan-400/50 cursor-pointer">
-              <option value="tcp">TCP</option>
-              <option value="udp">UDP</option>
-              <option value="both">TCP + UDP</option>
+            <select id="nodeTestSelType" class="text-[11px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 outline-none focus:border-cyan-400/50 cursor-pointer">
+              <option value="tcp" data-i18n="nodes.pingTypeTcp">TCP</option>
+              <option value="udp" data-i18n="nodes.pingTypeUdp">UDP</option>
+              <option value="both" data-i18n="nodes.pingTypeBoth">TCP + UDP</option>
             </select>
             <button id="nodeTestSelBtn" type="button" class="flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-400/25 hover:bg-emerald-500/20 transition-colors">
               <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
-              Ping
+              <span data-i18n="stat.ping">Ping</span>
             </button>
-            <button id="nodeCopyBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors">Copy</button>
-            <button id="nodeDeleteBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-red-500/10 text-red-300 border border-red-400/25 hover:bg-red-500/20 transition-colors">Delete</button>
-            <button id="nodeDisableSelBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-300 border border-amber-400/25 hover:bg-amber-500/20 transition-colors">Disable</button>
-            <button id="nodeClearBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-[#8A94A6] border border-white/10 hover:bg-white/10 transition-colors">Clear</button>
-            <span class="ml-auto hidden md:inline text-[10px] text-[#5B6472] whitespace-nowrap">Ping testis · Ctrl+Click multi · Ctrl+A all · Ctrl+C copy · Del delete</span>
+            <button id="nodeCopyBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="nodes.copy">Copy</button>
+            <button id="nodeDeleteBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-red-500/10 text-red-300 border border-red-400/25 hover:bg-red-500/20 transition-colors" data-i18n="nodes.delete">Delete</button>
+            <button id="nodeDisableSelBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-300 border border-amber-400/25 hover:bg-amber-500/20 transition-colors" data-i18n="nodes.disable">Disable</button>
+            <button id="nodeClearBtn" type="button" class="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-white/5 text-[#8A94A6] border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.diag.clear">Clear</button>
+            <span class="ml-auto hidden md:inline text-[10px] text-[#5B6472] whitespace-nowrap" data-i18n="nodes.ctxHelp">Ping testis · Ctrl+Click multi · Ctrl+A all · Ctrl+C copy · Del delete</span>
           </div>
           <div id="nodeGrid" class="grid sm:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4 min-w-0"></div>
           <div id="selNodeRow" class="glass rounded-xl p-4 mt-4 flex flex-wrap items-center gap-3 min-w-0">
             <span id="selNodeFlag" class="w-10 h-10 rounded-lg bg-gradient-to-br from-[var(--violet-30)] to-[var(--cyan-20)] flex items-center justify-center font-display font-bold text-sm text-cyan-300 shrink-0 shadow-[0_0_10px_var(--violet-30)]">TR</span>
-            <p class="text-xs text-[#8A94A6] min-w-0"><span class="text-cyan-300 font-medium" data-i18n="nodes.selectedNode">Selected node:</span> <span id="selNodeSummary" class="text-slate-100 font-semibold">Istanbul TR-1</span> — connect from the Dashboard to tunnel through it.</p>
+            <p class="text-xs text-[#8A94A6] min-w-0"><span class="text-cyan-300 font-medium" data-i18n="nodes.selectedNode">Selected node:</span> <span id="selNodeSummary" class="text-slate-100 font-semibold">Istanbul TR-1</span> <span data-i18n="nodes.connectHint">— connect from the Dashboard to tunnel through it.</span></p>
           </div>
           <!-- Node pool: GitHub raw .txt / subscription links whose shared nodes
                can be pulled into the list with one click. -->
@@ -3385,13 +3186,12 @@ body.effects-hidden *::after {
             </div>
             <ul id="nodePoolList" class="flex flex-col gap-1.5 min-w-0"></ul>
           </div>
-        </section>
 
-        <!-- ================= GPN SERVERS ================= -->
-        <section id="viewGpnServers" class="hidden min-w-0">
-          <div class="flex flex-wrap items-center gap-2 mb-4 min-w-0">
+        <!-- ================= GPN SERVERS — viewNodes paneline taşındı ================= -->
+        <div id="gpnServersPanel" class="glass rounded-xl p-4 mt-4 min-w-0">
+          <div class="flex flex-wrap items-center gap-2 mb-3 min-w-0">
             <svg class="w-4 h-4 text-[var(--violet)] shrink-0" style="filter:drop-shadow(0 0 6px color-mix(in srgb, var(--violet) 80%, transparent))" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7v1h2V9a5 5 0 0 1 10 0v1h2V9a7 7 0 0 0-7-7Z"/></svg>
-            <h2 class="font-display font-semibold text-lg tracking-wide" data-i18n="gpn.servers.title">GPN Servers</h2>
+            <h2 class="font-display font-semibold text-sm tracking-wide" data-i18n="gpn.servers.title">GPN Servers</h2>
             <span id="gpnServerCount" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-400/20">0</span>
             <div class="ml-auto flex items-center gap-2 shrink-0">
               <button id="gpnServerAddBtn" type="button" class="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors">
@@ -3457,6 +3257,7 @@ body.effects-hidden *::after {
               </div>
             </div>
           </div>
+        </div>
         </section>
 
         <!-- ================= SETTINGS ================= -->
@@ -3467,10 +3268,10 @@ body.effects-hidden *::after {
             <div class="relative flex flex-wrap items-center gap-3 mb-6 min-w-0">
               <div class="min-w-0">
                 <h2 class="font-display font-semibold text-xl tracking-wide"><span data-i18n="settings.title">Application Settings</span></h2>
-                <p class="text-[11px] text-[#8A94A6] mt-1">Tune the AO GPN core, proxy stack and routing behaviour — mirrors the native AO GPN options.</p>
+                <p data-i18n="settings.subtitle" class="text-[11px] text-[#8A94A6] mt-1">Tune the AO GPN core, proxy stack and routing behaviour — mirrors the native AO GPN options.</p>
               </div>
               <div class="ml-auto shrink-0 flex items-center gap-2">
-                <button id="settingsSaveBtn" type="button" class="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-[var(--violet)] to-[var(--cyan)] shadow-[0_0_16px_var(--violet-45)] hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                <button id="settingsSaveBtn" data-i18n="settings.save" type="button" class="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-[var(--violet)] to-[var(--cyan)] shadow-[0_0_16px_var(--violet-45)] hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                   <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4Zm-5 16a3 3 0 1 1 3-3 3 3 0 0 1-3 3Zm3-10H5V5h10v4Z"/></svg>
                   Save Settings
                 </button>
@@ -3480,38 +3281,39 @@ body.effects-hidden *::after {
             <!-- Restart-required notice (shown by the host after a save) -->
             <div id="settingsRestartNotice" class="hidden mb-5 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-200 flex items-start gap-2.5">
               <svg class="w-4 h-4 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm1 14h-2v2h2v-2Zm0-6h-2v4h2v-4Z"/></svg>
-              <span>Some changes (statistics, realtime speed, drag-drop sort, hardware acceleration) only take effect after the application restarts.</span>
+              <span data-i18n="settings.restartNotice">Some changes (statistics, realtime speed, drag-drop sort, hardware acceleration) only take effect after the application restarts.</span>
             </div>
 
             <!-- Tab bar -->
             <div class="relative flex gap-1.5 overflow-x-auto pb-1 mb-4" role="tablist">
-              <button type="button" data-settings-tab="core" class="settings-tab active rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">Core</button>
-              <button type="button" data-settings-tab="general" class="settings-tab rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">General</button>
-              <button type="button" data-settings-tab="tun" class="settings-tab rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">TUN Mode</button>
-              <button type="button" data-settings-tab="coretype" class="settings-tab rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">Core Type</button>
-              <button type="button" data-settings-tab="appearance" class="settings-tab rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">Appearance</button>
+              <button type="button" data-settings-tab="core" data-i18n="settings.tab.core" class="settings-tab active rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">Core</button>
+              <button type="button" data-settings-tab="general" data-i18n="settings.tab.general" class="settings-tab rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">General</button>
+              <button type="button" data-settings-tab="tun" data-i18n="settings.tab.tun" class="settings-tab rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">TUN Mode</button>
+              <button type="button" data-settings-tab="coretype" data-i18n="settings.tab.coretype" class="settings-tab rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">Core Type</button>
+              <button type="button" data-settings-tab="appearance" data-i18n="settings.tab.appearance" class="settings-tab rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">Appearance</button>
+              <button type="button" data-settings-tab="gpn" data-i18n="settings.tab.gpn" class="settings-tab rounded-lg px-4 py-2 text-xs font-semibold text-slate-300 border border-white/10">GPN</button>
             </div>
 
             <!-- ============ CORE ============ -->
             <div data-settings-panel="core" class="relative">
               <div class="settings-row">
-                <label class="settings-label" for="st_localPort">Local SOCKS5 listening port</label>
-                <div><input id="st_localPort" data-settings="localPort" type="text" class="settings-input" /><p class="settings-hint">Port the local mixed SOCKS5 listener binds to. Change requires a core restart.</p></div>
+                <label data-i18n="settings.localPort" class="settings-label" for="st_localPort">Local SOCKS5 listening port</label>
+                <div><input id="st_localPort" data-settings="localPort" type="text" class="settings-input" /><p data-i18n="settings.localPortHint" class="settings-hint">Port the local mixed SOCKS5 listener binds to. Change requires a core restart.</p></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Second local port — an extra local listener on a separate port; only needed if you want two local proxies.">Second local port</label>
+                <label data-i18n="settings.secondPort" data-i18n-title="settings.secondPortTip" class="settings-label" title="Second local port — an extra local listener on a separate port; only needed if you want two local proxies.">Second local port</label>
                 <label class="switch" title="Second local port — an extra local listener on a separate port; only needed if you want two local proxies."><input data-settings="secondLocalPortEnabled" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="UDP enabled — allow UDP traffic through the tunnel; required for gaming, VoIP and DNS-over-UDP.">UDP enabled</label>
+                <label data-i18n="settings.udp" data-i18n-title="settings.udpTip" class="settings-label" title="UDP enabled — allow UDP traffic through the tunnel; required for gaming, VoIP and DNS-over-UDP.">UDP enabled</label>
                 <label class="switch" title="UDP enabled — allow UDP traffic through the tunnel; required for gaming, VoIP and DNS-over-UDP."><input data-settings="udpEnabled" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Sniffing enabled — inspect the start of each connection and route by its real destination (HTTP/TLS/QUIC).">Sniffing enabled</label>
+                <label data-i18n="settings.sniffing" data-i18n-title="settings.sniffingTip" class="settings-label" title="Sniffing enabled — inspect the start of each connection and route by its real destination (HTTP/TLS/QUIC).">Sniffing enabled</label>
                 <label class="switch" title="Sniffing enabled — inspect the start of each connection and route by its real destination (HTTP/TLS/QUIC)."><input data-settings="sniffingEnabled" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Dest override — rewrite the connection destination with the sniffed host for http, tls or quic; helps routing rules match.">Dest override</label>
+                <label data-i18n="settings.destOverride" data-i18n-title="settings.destOverrideTip" class="settings-label" title="Dest override — rewrite the connection destination with the sniffed host for http, tls or quic; helps routing rules match.">Dest override</label>
                 <div class="flex flex-wrap gap-2 pt-1">
                   <label class="settings-chip inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-300"><input data-settings="destOverride" type="checkbox" value="http" /> http</label>
                   <label class="settings-chip inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-300"><input data-settings="destOverride" type="checkbox" value="tls" /> tls</label>
@@ -3519,203 +3321,203 @@ body.effects-hidden *::after {
                 </div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Route only — the core only routes traffic and does not proxy it; typically used with TUN capture.">Route only</label>
+                <label data-i18n="settings.routeOnly" data-i18n-title="settings.routeOnlyTip" class="settings-label" title="Route only — the core only routes traffic and does not proxy it; typically used with TUN capture.">Route only</label>
                 <label class="switch" title="Route only — the core only routes traffic and does not proxy it; typically used with TUN capture."><input data-settings="routeOnly" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Allow connections from LAN — let other devices on your network use this machine's local proxy.">Allow connections from LAN</label>
+                <label data-i18n="settings.lanConn" data-i18n-title="settings.lanConnTip" class="settings-label" title="Allow connections from LAN — let other devices on your network use this machine's local proxy.">Allow connections from LAN</label>
                 <label class="switch" title="Allow connections from LAN — let other devices on your network use this machine's local proxy."><input data-settings="allowLANConn" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Use a new port for LAN — bind a dedicated port for LAN clients instead of reusing the local loopback port.">Use a new port for LAN</label>
+                <label data-i18n="settings.newPortLAN" data-i18n-title="settings.newPortLANTip" class="settings-label" title="Use a new port for LAN — bind a dedicated port for LAN clients instead of reusing the local loopback port.">Use a new port for LAN</label>
                 <label class="switch" title="Use a new port for LAN — bind a dedicated port for LAN clients instead of reusing the local loopback port."><input data-settings="newPort4LAN" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_user">User (optional)</label>
-                <div><input id="st_user" data-settings="user" type="text" class="settings-input" placeholder="socks5 username" /><p class="settings-hint">Optional auth credentials for the local listener. Empty disables auth.</p></div>
+                <label data-i18n="settings.user" class="settings-label" for="st_user">User (optional)</label>
+                <div><input id="st_user" data-settings="user" type="text" class="settings-input" placeholder="socks5 username" data-i18n-placeholder="settings.userPlaceholder" /><p data-i18n="settings.userHint" class="settings-hint">Optional auth credentials for the local listener. Empty disables auth.</p></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_pass" title="Password (optional) — auth credential for the local listener; paired with the user above, empty disables auth.">Password (optional)</label>
-                <div><input id="st_pass" data-settings="pass" type="password" class="settings-input" placeholder="socks5 password" /></div>
+                <label data-i18n="settings.pass" data-i18n-title="settings.passTip" class="settings-label" for="st_pass" title="Password (optional) — auth credential for the local listener; paired with the user above, empty disables auth.">Password (optional)</label>
+                <div><input id="st_pass" data-settings="pass" type="password" class="settings-input" placeholder="socks5 password" data-i18n-placeholder="settings.passPlaceholder" /></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Log enabled (to file) — write core logs to disk for debugging.">Log enabled (to file)</label>
+                <label data-i18n="settings.logFile" data-i18n-title="settings.logFileTip" class="settings-label" title="Log enabled (to file) — write core logs to disk for debugging.">Log enabled (to file)</label>
                 <label class="switch" title="Log enabled (to file) — write core logs to disk for debugging."><input data-settings="logEnabled" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_loglevel" title="Log level — verbosity of the core log; debug is the most verbose.">Log level</label>
+                <label data-i18n="settings.logLevel" data-i18n-title="settings.logLevelTip" class="settings-label" for="st_loglevel" title="Log level — verbosity of the core log; debug is the most verbose.">Log level</label>
                 <div><select id="st_loglevel" data-settings="loglevel" data-settings-options="logLevels" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_defFingerprint" title="Default fingerprint — browser TLS fingerprint used when the profile has none; pick the browser you want to mimic.">Default fingerprint</label>
+                <label data-i18n="settings.fingerprint" data-i18n-title="settings.fingerprintTip" class="settings-label" for="st_defFingerprint" title="Default fingerprint — browser TLS fingerprint used when the profile has none; pick the browser you want to mimic.">Default fingerprint</label>
                 <div><select id="st_defFingerprint" data-settings="defFingerprint" data-settings-options="fingerprints" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_defUserAgent" title="Default user agent — HTTP User-Agent sent by the core when a profile does not specify one.">Default user agent</label>
+                <label data-i18n="settings.userAgent" data-i18n-title="settings.userAgentTip" class="settings-label" for="st_defUserAgent" title="Default user agent — HTTP User-Agent sent by the core when a profile does not specify one.">Default user agent</label>
                 <div><select id="st_defUserAgent" data-settings="defUserAgent" data-settings-options="userAgents" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_mux4SboxProtocol" title="sing-box mux protocol — multiplexing strategy for sing-box (h2mux, smux, yamux or off).">sing-box mux protocol</label>
+                <label data-i18n="settings.muxProtocol" data-i18n-title="settings.muxProtocolTip" class="settings-label" for="st_mux4SboxProtocol" title="sing-box mux protocol — multiplexing strategy for sing-box (h2mux, smux, yamux or off).">sing-box mux protocol</label>
                 <div><select id="st_mux4SboxProtocol" data-settings="mux4SboxProtocol" data-settings-options="singboxMuxs" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Cache file (sing-box) — persist sing-box DNS/geoip cache to disk between sessions.">Cache file (sing-box)</label>
+                <label data-i18n="settings.cacheFile" data-i18n-title="settings.cacheFileTip" class="settings-label" title="Cache file (sing-box) — persist sing-box DNS/geoip cache to disk between sessions.">Cache file (sing-box)</label>
                 <label class="switch" title="Cache file (sing-box) — persist sing-box DNS/geoip cache to disk between sessions."><input data-settings="enableCacheFile4Sbox" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_hyUpMbps" title="Hysteria2 bandwidth (Mbps) — advertised up/down bandwidth used by Hysteria2/TUIC congestion control.">Hysteria2 bandwidth (Mbps)</label>
-                <div class="flex gap-2"><input id="st_hyUpMbps" data-settings="hyUpMbps" type="text" class="settings-input" placeholder="Up" /><input data-settings="hyDownMbps" type="text" class="settings-input" placeholder="Down" /></div>
+                <label data-i18n="settings.hyBandwidth" data-i18n-title="settings.hyBandwidthTip" class="settings-label" for="st_hyUpMbps" title="Hysteria2 bandwidth (Mbps) — advertised up/down bandwidth used by Hysteria2/TUIC congestion control.">Hysteria2 bandwidth (Mbps)</label>
+                <div class="flex gap-2"><input id="st_hyUpMbps" data-settings="hyUpMbps" type="text" class="settings-input" placeholder="Up" data-i18n-placeholder="settings.hyUp" /><input data-settings="hyDownMbps" type="text" class="settings-input" placeholder="Down" data-i18n-placeholder="settings.hyDown" /></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Fragment (Xray) — split TLS ClientHello packets to evade packet-size based blocking.">Fragment (Xray)</label>
+                <label data-i18n="settings.fragment" data-i18n-title="settings.fragmentTip" class="settings-label" title="Fragment (Xray) — split TLS ClientHello packets to evade packet-size based blocking.">Fragment (Xray)</label>
                 <label class="switch" title="Fragment (Xray) — split TLS ClientHello packets to evade packet-size based blocking."><input data-settings="enableFragment" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_fragmentPackets" title="Fragment packets — how the TLS ClientHello is split (e.g. tlshello or 1-1).">Fragment packets</label>
+                <label data-i18n="settings.fragmentPackets" data-i18n-title="settings.fragmentPacketsTip" class="settings-label" for="st_fragmentPackets" title="Fragment packets — how the TLS ClientHello is split (e.g. tlshello or 1-1).">Fragment packets</label>
                 <div><select id="st_fragmentPackets" data-settings="fragmentPackets" data-settings-options="fragmentPacketsOptions" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_fragmentLengths" title="Fragment lengths — min-max range (e.g. 50-100) for the size of each fragment packet.">Fragment lengths</label>
+                <label data-i18n="settings.fragmentLengths" data-i18n-title="settings.fragmentLengthsTip" class="settings-label" for="st_fragmentLengths" title="Fragment lengths — min-max range (e.g. 50-100) for the size of each fragment packet.">Fragment lengths</label>
                 <div><input id="st_fragmentLengths" data-settings="fragmentLengths" type="text" class="settings-input" placeholder="50-100" /></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_fragmentDelays" title="Fragment delays (ms) — min-max delay in milliseconds between sending fragment packets.">Fragment delays (ms)</label>
+                <label data-i18n="settings.fragmentDelays" data-i18n-title="settings.fragmentDelaysTip" class="settings-label" for="st_fragmentDelays" title="Fragment delays (ms) — min-max delay in milliseconds between sending fragment packets.">Fragment delays (ms)</label>
                 <div><input id="st_fragmentDelays" data-settings="fragmentDelays" type="text" class="settings-input" placeholder="10-20" /></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_fragmentMaxSplit" title="Fragment max split — maximum number of splits; 0 keeps the default.">Fragment max split</label>
+                <label data-i18n="settings.fragmentMaxSplit" data-i18n-title="settings.fragmentMaxSplitTip" class="settings-label" for="st_fragmentMaxSplit" title="Fragment max split — maximum number of splits; 0 keeps the default.">Fragment max split</label>
                 <div><input id="st_fragmentMaxSplit" data-settings="fragmentMaxSplit" type="text" class="settings-input" placeholder="0" /></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Final fragment — send the last chunk of the split packet normally; recommended for compatibility.">Final fragment</label>
+                <label data-i18n="settings.finalFragment" data-i18n-title="settings.finalFragmentTip" class="settings-label" title="Final fragment — send the last chunk of the split packet normally; recommended for compatibility.">Final fragment</label>
                 <label class="switch" title="Final fragment — send the last chunk of the split packet normally; recommended for compatibility."><input data-settings="enableFinalFragment" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_bindInterface">Bind interface</label>
-                <div><input id="st_bindInterface" data-settings="bindInterface" type="text" class="settings-input" placeholder="e.g. eth0" /><p class="settings-hint">Interface to bind outbound connections to.</p></div>
+                <label data-i18n="settings.bindInterface" class="settings-label" for="st_bindInterface">Bind interface</label>
+                <div><input id="st_bindInterface" data-settings="bindInterface" type="text" class="settings-input" placeholder="e.g. eth0" data-i18n-placeholder="settings.bindInterfacePh" /><p data-i18n="settings.bindInterfaceHint" class="settings-hint">Interface to bind outbound connections to.</p></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_sendThrough">Send through (IP)</label>
-                <div><input id="st_sendThrough" data-settings="sendThrough" type="text" class="settings-input" placeholder="0.0.0.0" /><p class="settings-hint">Local IP used as the outbound source address.</p></div>
+                <label data-i18n="settings.sendThrough" class="settings-label" for="st_sendThrough">Send through (IP)</label>
+                <div><input id="st_sendThrough" data-settings="sendThrough" type="text" class="settings-input" placeholder="0.0.0.0" data-i18n-placeholder="settings.sendThroughPh" /><p data-i18n="settings.sendThroughHint" class="settings-hint">Local IP used as the outbound source address.</p></div>
               </div>
             </div>
 
             <!-- ============ GENERAL ============ -->
             <div data-settings-panel="general" class="hidden relative">
               <div class="settings-row">
-                <label class="settings-label" title="Auto run on startup — launch AO GPN when Windows starts.">Auto run on startup</label>
+                <label data-i18n="settings.autoRun" data-i18n-title="settings.autoRunTip" class="settings-label" title="Auto run on startup — launch AO GPN when Windows starts.">Auto run on startup</label>
                 <label class="switch" title="Auto run on startup — launch AO GPN when Windows starts."><input data-settings="autoRun" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Enable statistics — track per-node traffic counters; requires a core restart.">Enable statistics</label>
+                <label data-i18n="settings.statistics" data-i18n-title="settings.statisticsTip" class="settings-label" title="Enable statistics — track per-node traffic counters; requires a core restart.">Enable statistics</label>
                 <label class="switch" title="Enable statistics — track per-node traffic counters; requires a core restart."><input data-settings="enableStatistics" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Display realtime speed — show live up/down speed in the tray menu and status bar.">Display realtime speed</label>
+                <label data-i18n="settings.realtimeSpeed" data-i18n-title="settings.realtimeSpeedTip" class="settings-label" title="Display realtime speed — show live up/down speed in the tray menu and status bar.">Display realtime speed</label>
                 <label class="switch" title="Display realtime speed — show live up/down speed in the tray menu and status bar."><input data-settings="displayRealTimeSpeed" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Keep older on dedup — when removing duplicate nodes keep the older profile instead of the newer one.">Keep older on dedup</label>
+                <label data-i18n="settings.keepOlder" data-i18n-title="settings.keepOlderTip" class="settings-label" title="Keep older on dedup — when removing duplicate nodes keep the older profile instead of the newer one.">Keep older on dedup</label>
                 <label class="switch" title="Keep older on dedup — when removing duplicate nodes keep the older profile instead of the newer one."><input data-settings="keepOlderDedupl" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Auto adjust main column width — resize the node list columns automatically when the window resizes.">Auto adjust main column width</label>
+                <label data-i18n="settings.autoAdjustCol" data-i18n-title="settings.autoAdjustColTip" class="settings-label" title="Auto adjust main column width — resize the node list columns automatically when the window resizes.">Auto adjust main column width</label>
                 <label class="switch" title="Auto adjust main column width — resize the node list columns automatically when the window resizes."><input data-settings="enableAutoAdjustMainLvColWidth" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Auto hide on startup — start minimized to the tray instead of showing the main window.">Auto hide on startup</label>
+                <label data-i18n="settings.autoHideStartup" data-i18n-title="settings.autoHideStartupTip" class="settings-label" title="Auto hide on startup — start minimized to the tray instead of showing the main window.">Auto hide on startup</label>
                 <label class="switch" title="Auto hide on startup — start minimized to the tray instead of showing the main window."><input data-settings="autoHideStartup" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Minimize to tray — pressing the minimize (–) hides the window to the tray and keeps the app running (connection/proxy stay active); off keeps the window in the taskbar. Applies immediately, no Save needed.">Minimize to tray</label>
+                <label data-i18n="settings.minimizeTray" data-i18n-title="settings.minimizeTrayTip" class="settings-label" title="Minimize to tray — pressing the minimize (–) hides the window to the tray and keeps the app running (connection/proxy stay active); off keeps the window in the taskbar. Applies immediately, no Save needed.">Minimize to tray</label>
                 <label class="switch" title="Minimize to tray — pressing the minimize (–) hides the window to the tray and keeps the app running (connection/proxy stay active); off keeps the window in the taskbar. Applies immediately, no Save needed."><input data-settings="minimize2Tray" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Hide to tray when closed — closing the window (X) keeps the app running in the tray (connection/proxy stay active); off fully quits the app. Only the tray menu's Exit quits it while on. Applies immediately, no Save needed.">Hide to tray when closed</label>
+                <label data-i18n="settings.hideTrayClose" data-i18n-title="settings.hideTrayCloseTip" class="settings-label" title="Hide to tray when closed — closing the window (X) keeps the app running in the tray (connection/proxy stay active); off fully quits the app. Only the tray menu's Exit quits it while on. Applies immediately, no Save needed.">Hide to tray when closed</label>
                 <label class="switch" title="Hide to tray when closed — closing the window (X) keeps the app running in the tray (connection/proxy stay active); off fully quits the app. Only the tray menu's Exit quits it while on. Applies immediately, no Save needed."><input data-settings="hide2TrayWhenClose" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Drag &amp; drop to sort nodes — reorder the node list by dragging rows.">Drag &amp; drop to sort nodes</label>
+                <label data-i18n="settings.dragDropSort" data-i18n-title="settings.dragDropSortTip" class="settings-label" title="Drag &amp; drop to sort nodes — reorder the node list by dragging rows.">Drag &amp; drop to sort nodes</label>
                 <label class="switch" title="Drag &amp; drop to sort nodes — reorder the node list by dragging rows."><input data-settings="enableDragDropSort" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Double click activates node — a double click connects to the node instead of a single click.">Double click activates node</label>
+                <label data-i18n="settings.doubleClick" data-i18n-title="settings.doubleClickTip" class="settings-label" title="Double click activates node — a double click connects to the node instead of a single click.">Double click activates node</label>
                 <label class="switch" title="Double click activates node — a double click connects to the node instead of a single click."><input data-settings="doubleClick2Activate" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Hardware acceleration (HWA) — GPU-accelerated rendering; takes effect after a restart. On by default; the app falls back to software automatically (and turns this off) when no usable GPU path exists or after repeated graphics failures, and you can re-enable it here after updating your GPU driver.">Hardware acceleration (HWA)</label>
+                <label data-i18n="settings.hwa" data-i18n-title="settings.hwaTip" class="settings-label" title="Hardware acceleration (HWA) — GPU-accelerated rendering; takes effect after a restart. On by default; the app falls back to software automatically (and turns this off) when no usable GPU path exists or after repeated graphics failures, and you can re-enable it here after updating your GPU driver.">Hardware acceleration (HWA)</label>
                 <label class="switch" title="Hardware acceleration (HWA) — GPU-accelerated rendering; takes effect after a restart. On by default; the app falls back to software automatically (and turns this off) when no usable GPU path exists or after repeated graphics failures, and you can re-enable it here after updating your GPU driver."><input data-settings="enableHWA" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Verbose logging — enables detailed module-level diagnostic trace for debugging (GPN routing decisions, WebView2 bridge calls, connection lifecycle, proxy transitions, subscription downloads). Logs are written to disk.">Verbose logging (diagnostics)</label>
+                <label data-i18n="settings.verboseLog" data-i18n-title="settings.verboseLogTip" class="settings-label" title="Verbose logging — enables detailed module-level diagnostic trace for debugging (GPN routing decisions, WebView2 bridge calls, connection lifecycle, proxy transitions, subscription downloads). Logs are written to disk.">Verbose logging (diagnostics)</label>
                 <label class="switch" title="Verbose logging — enables detailed module-level diagnostic trace for debugging (GPN routing decisions, WebView2 bridge calls, connection lifecycle, proxy transitions, subscription downloads). Logs are written to disk."><input data-settings="verboseLogEnabled" type="checkbox" onchange="postToHost({ action: 'set_verbose_log', enabled: this.checked })" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Visual effects — Full keeps every ambient animation (highest GPU usage); Balanced freezes the perpetual full-screen loops (aurora drift, theme signature scans, matrix rain) while keeping reactive effects (cursor trails, confetti, CONNECT ring, spinners); Reduced turns all effects off (the old Reduce effects switch). Applies instantly; also applies automatically when Windows reduced motion is enabled.">Visual effects</label>
+                <label data-i18n="settings.visualEffects" data-i18n-title="settings.visualEffectsTip" class="settings-label" title="Visual effects — Full keeps every ambient animation (highest GPU usage); Balanced freezes the perpetual full-screen loops (aurora drift, theme signature scans, matrix rain) while keeping reactive effects (cursor trails, confetti, CONNECT ring, spinners); Reduced turns all effects off (the old Reduce effects switch). Applies instantly; also applies automatically when Windows reduced motion is enabled.">Visual effects</label>
                 <div class="seg" role="group" aria-label="Visual effects tier">
-                  <button type="button" class="seg-opt" data-effects-tier="full" aria-pressed="true" title="Full — every visual effect (highest GPU usage)" onclick="setEffectsTierFromSettings('full')">Full</button>
-                  <button type="button" class="seg-opt" data-effects-tier="balanced" aria-pressed="false" title="Balanced — ambient loops frozen, reactive effects stay" onclick="setEffectsTierFromSettings('balanced')">Balanced</button>
-                  <button type="button" class="seg-opt" data-effects-tier="reduced" aria-pressed="false" title="Reduced — all effects off (lowest GPU usage)" onclick="setEffectsTierFromSettings('reduced')">Reduced</button>
+                  <button type="button" class="seg-opt" data-effects-tier="full" data-i18n="settings.effectsFull" data-i18n-title="settings.effectsFullTip" aria-pressed="true" title="Full — every visual effect (highest GPU usage)" onclick="setEffectsTierFromSettings('full')">Full</button>
+                  <button type="button" class="seg-opt" data-effects-tier="balanced" data-i18n="settings.effectsBalanced" data-i18n-title="settings.effectsBalancedTip" aria-pressed="false" title="Balanced — ambient loops frozen, reactive effects stay" onclick="setEffectsTierFromSettings('balanced')">Balanced</button>
+                  <button type="button" class="seg-opt" data-effects-tier="reduced" data-i18n="settings.effectsReduced" data-i18n-title="settings.effectsReducedTip" aria-pressed="false" title="Reduced — all effects off (lowest GPU usage)" onclick="setEffectsTierFromSettings('reduced')">Reduced</button>
                 </div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Performance HUD — shows a live diagnostics overlay (CSS animation count, canvas loop status, probe frame timings). Toggle with Ctrl+Shift+H.">Performance HUD (diagnostics)</label>
+                <label data-i18n="settings.perfHud" data-i18n-title="settings.perfHudTip" class="settings-label" title="Performance HUD — shows a live diagnostics overlay (CSS animation count, canvas loop status, probe frame timings). Toggle with Ctrl+Shift+H.">Performance HUD (diagnostics)</label>
                 <label class="switch" title="Performance HUD — shows a live diagnostics overlay (CSS animation count, canvas loop status, probe frame timings). Toggle with Ctrl+Shift+H."><input type="checkbox" onchange="togglePerfHud(this.checked)" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_rootCertProvider" title="Root certificate provider — source for trusted root certificates (system, chrome or mozilla).">Root certificate provider</label>
+                <label data-i18n="settings.rootCert" data-i18n-title="settings.rootCertTip" class="settings-label" for="st_rootCertProvider" title="Root certificate provider — source for trusted root certificates (system, chrome or mozilla).">Root certificate provider</label>
                 <div><select id="st_rootCertProvider" data-settings="rootCertProvider" data-settings-options="rootCertProviders" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_autoUpdateInterval" title="Auto update check interval (hours) — how often AO GPN checks for updates; 0 disables the check.">Auto update check interval (hours)</label>
+                <label data-i18n="settings.updateInterval" data-i18n-title="settings.updateIntervalTip" class="settings-label" for="st_autoUpdateInterval" title="Auto update check interval (hours) — how often AO GPN checks for updates; 0 disables the check.">Auto update check interval (hours)</label>
                 <div><input id="st_autoUpdateInterval" data-settings="autoUpdateInterval" type="text" class="settings-input" /></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_trayMenuServersLimit" title="Tray menu servers limit — maximum number of servers shown in the tray menu.">Tray menu servers limit</label>
+                <label data-i18n="settings.trayServersLimit" data-i18n-title="settings.trayServersLimitTip" class="settings-label" for="st_trayMenuServersLimit" title="Tray menu servers limit — maximum number of servers shown in the tray menu.">Tray menu servers limit</label>
                 <div><input id="st_trayMenuServersLimit" data-settings="trayMenuServersLimit" type="text" class="settings-input" /></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_currentFontFamily" title="Font family — UI font used across the application.">Font family</label>
+                <label data-i18n="settings.fontFamily" data-i18n-title="settings.fontFamilyTip" class="settings-label" for="st_currentFontFamily" title="Font family — UI font used across the application.">Font family</label>
                 <div><input id="st_currentFontFamily" data-settings="currentFontFamily" type="text" class="settings-input" list="dl_currentFontFamily" /><datalist id="dl_currentFontFamily"></datalist></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_mixedConcurrencyCount" title="Mixed concurrency count — number of parallel tasks used by mixed speed tests.">Mixed concurrency count</label>
+                <label data-i18n="settings.mixedConcurrency" data-i18n-title="settings.mixedConcurrencyTip" class="settings-label" for="st_mixedConcurrencyCount" title="Mixed concurrency count — number of parallel tasks used by mixed speed tests.">Mixed concurrency count</label>
                 <div><select id="st_mixedConcurrencyCount" data-settings="mixedConcurrencyCount" data-settings-options="mixedConcurrencyCounts" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_speedTestTimeout" title="Speed test timeout (s) — per-URL timeout in seconds for speed tests.">Speed test timeout (s)</label>
+                <label data-i18n="settings.speedTimeout" data-i18n-title="settings.speedTimeoutTip" class="settings-label" for="st_speedTestTimeout" title="Speed test timeout (s) — per-URL timeout in seconds for speed tests.">Speed test timeout (s)</label>
                 <div><select id="st_speedTestTimeout" data-settings="speedTestTimeout" data-settings-options="speedTestTimeouts" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_speedTestUrl" title="Speed test download URL — file used to measure download speed; {0} is replaced with the node address.">Speed test download URL</label>
+                <label data-i18n="settings.speedUrl" data-i18n-title="settings.speedUrlTip" class="settings-label" for="st_speedTestUrl" title="Speed test download URL — file used to measure download speed; {0} is replaced with the node address.">Speed test download URL</label>
                 <div><input id="st_speedTestUrl" data-settings="speedTestUrl" type="text" class="settings-input" list="dl_speedTestUrl" /><datalist id="dl_speedTestUrl"></datalist></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_speedPingTestUrl" title="Speed ping test URL — endpoint used to measure latency during speed tests.">Speed ping test URL</label>
+                <label data-i18n="settings.speedPingUrl" data-i18n-title="settings.speedPingUrlTip" class="settings-label" for="st_speedPingTestUrl" title="Speed ping test URL — endpoint used to measure latency during speed tests.">Speed ping test URL</label>
                 <div><input id="st_speedPingTestUrl" data-settings="speedPingTestUrl" type="text" class="settings-input" list="dl_speedPingTestUrl" /><datalist id="dl_speedPingTestUrl"></datalist></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_udpTestTarget" title="UDP test target — target used to verify UDP connectivity (e.g. ntp:pool.ntp.org or stun:stun.cloudflare.com).">UDP test target</label>
+                <label data-i18n="settings.udpTarget" data-i18n-title="settings.udpTargetTip" class="settings-label" for="st_udpTestTarget" title="UDP test target — target used to verify UDP connectivity (e.g. ntp:pool.ntp.org or stun:stun.cloudflare.com).">UDP test target</label>
                 <div><input id="st_udpTestTarget" data-settings="udpTestTarget" type="text" class="settings-input" list="dl_udpTestTarget" /><datalist id="dl_udpTestTarget"></datalist></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_ipapiUrl" title="IP-API URL — service used to look up the public IP and location of a node.">IP-API URL</label>
+                <label data-i18n="settings.ipapiUrl" data-i18n-title="settings.ipapiUrlTip" class="settings-label" for="st_ipapiUrl" title="IP-API URL — service used to look up the public IP and location of a node.">IP-API URL</label>
                 <div><input id="st_ipapiUrl" data-settings="ipapiUrl" type="text" class="settings-input" list="dl_ipapiUrl" /><datalist id="dl_ipapiUrl"></datalist></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_subConvertUrl" title="Subscription convert URL — external converter service; {0} is replaced with the subscription URL.">Subscription convert URL</label>
+                <label data-i18n="settings.subConvertUrl" data-i18n-title="settings.subConvertUrlTip" class="settings-label" for="st_subConvertUrl" title="Subscription convert URL — external converter service; {0} is replaced with the subscription URL.">Subscription convert URL</label>
                 <div><input id="st_subConvertUrl" data-settings="subConvertUrl" type="text" class="settings-input" list="dl_subConvertUrl" /><datalist id="dl_subConvertUrl"></datalist></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_geoFileSourceUrl" title="Geo files source URL — download source for geoip/geosite .dat files; {0} is the file name.">Geo files source URL</label>
+                <label data-i18n="settings.geoUrl" data-i18n-title="settings.geoUrlTip" class="settings-label" for="st_geoFileSourceUrl" title="Geo files source URL — download source for geoip/geosite .dat files; {0} is the file name.">Geo files source URL</label>
                 <div><input id="st_geoFileSourceUrl" data-settings="geoFileSourceUrl" type="text" class="settings-input" list="dl_geoFileSourceUrl" /><datalist id="dl_geoFileSourceUrl"></datalist></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_srsFileSourceUrl" title="SRS files source URL — download source for sing-box rule-set .srs files.">SRS files source URL</label>
+                <label data-i18n="settings.srsUrl" data-i18n-title="settings.srsUrlTip" class="settings-label" for="st_srsFileSourceUrl" title="SRS files source URL — download source for sing-box rule-set .srs files.">SRS files source URL</label>
                 <div><input id="st_srsFileSourceUrl" data-settings="srsFileSourceUrl" type="text" class="settings-input" list="dl_srsFileSourceUrl" /><datalist id="dl_srsFileSourceUrl"></datalist></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_routingRulesSourceUrl" title="Routing rules source URL — source for the custom routing template (json).">Routing rules source URL</label>
+                <label data-i18n="settings.routingRulesUrl" data-i18n-title="settings.routingRulesUrlTip" class="settings-label" for="st_routingRulesSourceUrl" title="Routing rules source URL — source for the custom routing template (json).">Routing rules source URL</label>
                 <div><input id="st_routingRulesSourceUrl" data-settings="routingRulesSourceUrl" type="text" class="settings-input" list="dl_routingRulesSourceUrl" /><datalist id="dl_routingRulesSourceUrl"></datalist></div>
               </div>
             </div>
@@ -3724,60 +3526,60 @@ body.effects-hidden *::after {
             <!-- ============ TUN MODE ============ -->
             <div data-settings-panel="tun" class="hidden relative">
               <div class="settings-row">
-                <label class="settings-label">Enable TUN mode</label>
-                <div><label class="switch"><input data-settings="enableTun" type="checkbox" /><span class="slider"></span></label><p class="settings-hint" id="st_tunAdminHint">TUN captures traffic at the network layer. On Windows it requires administrator privileges. The Dashboard's Capture selector (Proxy / TUN) mirrors this switch.</p></div>
+                <label data-i18n="settings.enableTun" class="settings-label">Enable TUN mode</label>
+                <div><label class="switch"><input data-settings="enableTun" type="checkbox" /><span class="slider"></span></label><p class="settings-hint" id="st_tunAdminHint" data-i18n="settings.tunAdminHint">TUN captures traffic at the network layer. On Windows it requires administrator privileges. The Dashboard's Capture selector (Proxy / TUN) mirrors this switch.</p></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Auto route — let the TUN stack manage routing automatically; recommended on Windows.">Auto route</label>
+                <label data-i18n="settings.autoRoute" data-i18n-title="settings.autoRouteTip" class="settings-label" title="Auto route — let the TUN stack manage routing automatically; recommended on Windows.">Auto route</label>
                 <label class="switch" title="Auto route — let the TUN stack manage routing automatically; recommended on Windows."><input data-settings="tunAutoRoute" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Strict route — drop traffic that does not match an explicit route rule.">Strict route</label>
+                <label data-i18n="settings.strictRoute" data-i18n-title="settings.strictRouteTip" class="settings-label" title="Strict route — drop traffic that does not match an explicit route rule.">Strict route</label>
                 <label class="switch" title="Strict route — drop traffic that does not match an explicit route rule."><input data-settings="tunStrictRoute" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_tunStack" title="Stack — TUN network stack: gvisor (user-space, most compatible) or system (kernel, faster)." data-i18n="settings.stack">Stack</label>
+                <label class="settings-label" for="st_tunStack" title="Stack — TUN network stack: gvisor (user-space, most compatible) or system (kernel, faster)." data-i18n="settings.stack" data-i18n-title="settings.stackTip">Stack</label>
                 <div><select id="st_tunStack" data-settings="tunStack" data-settings-options="tunStacks" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_tunMtu" title="MTU — maximum transmission unit for the TUN interface (default 1500).">MTU</label>
+                <label data-i18n="settings.mtu" data-i18n-title="settings.mtuTip" class="settings-label" for="st_tunMtu" title="MTU — maximum transmission unit for the TUN interface (default 1500).">MTU</label>
                 <div><input id="st_tunMtu" data-settings="tunMtu" type="text" class="settings-input" list="dl_tunMtu" /><datalist id="dl_tunMtu"></datalist></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_tunIcmpRouting" title="ICMP routing policy — how the TUN stack treats ICMP (ping) traffic: rule, direct, unreachable, drop or reply.">ICMP routing policy</label>
+                <label data-i18n="settings.icmpPolicy" data-i18n-title="settings.icmpPolicyTip" class="settings-label" for="st_tunIcmpRouting" title="ICMP routing policy — how the TUN stack treats ICMP (ping) traffic: rule, direct, unreachable, drop or reply.">ICMP routing policy</label>
                 <div><select id="st_tunIcmpRouting" data-settings="tunIcmpRouting" data-settings-options="tunIcmpRoutingPolicies" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Enable IPv6 address — assign an IPv6 address to the TUN interface.">Enable IPv6 address</label>
+                <label data-i18n="settings.ipv6Enable" data-i18n-title="settings.ipv6EnableTip" class="settings-label" title="Enable IPv6 address — assign an IPv6 address to the TUN interface.">Enable IPv6 address</label>
                 <label class="switch" title="Enable IPv6 address — assign an IPv6 address to the TUN interface."><input data-settings="tunEnableIPv6Address" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" title="Legacy protect — use the legacy Windows network-protection helper; needed on some systems.">Legacy protect</label>
+                <label data-i18n="settings.legacyProtect" data-i18n-title="settings.legacyProtectTip" class="settings-label" title="Legacy protect — use the legacy Windows network-protection helper; needed on some systems.">Legacy protect</label>
                 <label class="switch" title="Legacy protect — use the legacy Windows network-protection helper; needed on some systems."><input data-settings="tunEnableLegacyProtect" type="checkbox" /><span class="slider"></span></label>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_tunRouteExcludeAddress" title="Route exclude addresses — comma-separated CIDRs that bypass the TUN interface.">Route exclude addresses</label>
-                <div><textarea id="st_tunRouteExcludeAddress" data-settings="tunRouteExcludeAddress" class="settings-input settings-textarea" placeholder="Comma-separated CIDRs routed outside TUN"></textarea></div>
+                <label data-i18n="settings.routeExclude" data-i18n-title="settings.routeExcludeTip" class="settings-label" for="st_tunRouteExcludeAddress" title="Route exclude addresses — comma-separated CIDRs that bypass the TUN interface.">Route exclude addresses</label>
+                <div><textarea id="st_tunRouteExcludeAddress" data-settings="tunRouteExcludeAddress" class="settings-input settings-textarea" placeholder="Comma-separated CIDRs routed outside TUN" data-i18n-placeholder="settings.routeExcludePh"></textarea></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_tunIPv4Address" title="IPv4 address — local address assigned to the TUN interface (CIDR).">IPv4 address</label>
+                <label data-i18n="settings.ipv4Addr" data-i18n-title="settings.ipv4AddrTip" class="settings-label" for="st_tunIPv4Address" title="IPv4 address — local address assigned to the TUN interface (CIDR).">IPv4 address</label>
                 <div><select id="st_tunIPv4Address" data-settings="tunIPv4Address" data-settings-options="tunIPv4Addresses" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_tunIPv6Address" title="IPv6 address — local IPv6 address assigned to the TUN interface (CIDR).">IPv6 address</label>
+                <label data-i18n="settings.ipv6Addr" data-i18n-title="settings.ipv6AddrTip" class="settings-label" for="st_tunIPv6Address" title="IPv6 address — local IPv6 address assigned to the TUN interface (CIDR).">IPv6 address</label>
                 <div><select id="st_tunIPv6Address" data-settings="tunIPv6Address" data-settings-options="tunIPv6Addresses" class="settings-select"></select></div>
               </div>
             </div>
 
             <!-- ============ CORE TYPE ============ -->
             <div data-settings-panel="coretype" class="hidden relative">
-              <p class="text-[11px] text-[#8A94A6] mb-3">Choose which core handles each protocol. Applies on the next connection.</p>
+              <p data-i18n="settings.coreTypeIntro" class="text-[11px] text-[#8A94A6] mb-3">Choose which core handles each protocol. Applies on the next connection.</p>
               <div class="settings-row">
                 <label class="settings-label" for="st_coreType1">VMess</label>
                 <div><select id="st_coreType1" data-settings="coreType1" data-settings-options="coreTypes" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="st_coreType2">Custom Pre</label>
+                <label data-i18n="settings.coreTypeCustomPre" class="settings-label" for="st_coreType2">Custom Pre</label>
                 <div><select id="st_coreType2" data-settings="coreType2" data-settings-options="coreTypes" class="settings-select"></select></div>
               </div>
               <div class="settings-row">
@@ -3809,8 +3611,8 @@ body.effects-hidden *::after {
             <!-- ============ APPEARANCE ============ -->
             <div data-settings-panel="appearance" class="hidden relative">
               <div class="settings-row !flex-col !items-stretch !gap-2">
-                <label class="settings-label" for="themePicker">Theme</label>
-                <p class="text-[10px] text-[#64748B] leading-relaxed">Pick the dashboard colour palette and signature effects — every theme keeps its own accents, cursor, sound and confetti engines. Applies instantly, no restart needed.</p>
+                <label data-i18n="settings.theme" class="settings-label" for="themePicker">Theme</label>
+                <p data-i18n="settings.themeDesc" class="text-[10px] text-[#64748B] leading-relaxed">Pick the dashboard colour palette and signature effects — every theme keeps its own accents, cursor, sound and confetti engines. Applies instantly, no restart needed.</p>
                 <!-- Populated by app.js (renderThemeDeck) from Temalar/themes.json;
                      applyTheme keeps the active card in sync on every switch. -->
                 <div id="themePicker" class="theme-deck-grid" role="group" aria-label="Dashboard theme"></div>
@@ -3818,6 +3620,207 @@ body.effects-hidden *::after {
             </div>
 
           </div>
+            <!-- ============ GPN (Advanced & Diagnostics — connection centre'dan taşındı) ============ -->
+            <div data-settings-panel="gpn" class="hidden relative">
+              <p data-i18n="settings.gpnIntro" class="text-[11px] text-[#8A94A6] mb-3">GPN server tuning, failover behaviour and live diagnostics — moved here from the connection centre so the main GPN flow stays clean.</p>
+              <!-- Best candidate card: shows WHICH server + mode GPN Connect will
+                   pick BEFORE the user connects — same pure DecideSelection logic
+                   as SelectBestServerAsync (GpnServerSelectionService.EvaluateSelection
+                   → setGpnSelectionPrediction). The dashboard never re-decides. -->
+              <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
+                <div class="flex items-center gap-2 mb-2 min-w-0">
+                  <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.candidate.title">Best candidate</p>
+                  <span id="gpnCandidateTs" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono"></span>
+                </div>
+                <div id="gpnCandidateBody" class="min-w-0">
+                  <p class="text-[#64748B]" data-i18n="gpn.candidate.empty">No measurement yet — run a server probe.</p>
+                </div>
+              </div>
+              <!-- PID pool card: live GpnTargetResolver pool fed from the
+                   SplitTunnelViewModel vpn-routed games (GpnTargetResolverBridge). -->
+              <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
+                <div class="flex items-center gap-2 mb-2 min-w-0">
+                  <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.pidpool.title">PID pool</p>
+                  <span id="gpnPidPoolState" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono" data-i18n="gpn.pidpool.idle">idle</span>
+                  <div class="ml-auto flex items-center gap-1.5 shrink-0">
+                    <button id="gpnPidPoolStart" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-emerald-400/10 text-emerald-300 border border-emerald-400/25 hover:bg-emerald-400/20 transition-colors" data-i18n="gpn.pidpool.start">Watch</button>
+                    <button id="gpnPidPoolStop" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.pidpool.stop">Stop</button>
+                    <button id="gpnPidPoolRefresh" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.pidpool.refresh">Refresh</button>
+                  </div>
+                </div>
+                <div id="gpnPidPoolTargets" class="flex flex-wrap gap-1.5 mb-2 min-w-0"></div>
+                <div id="gpnPidPoolList" class="font-mono text-[10px] leading-relaxed text-[#8A94A6] min-w-0">
+                  <p class="text-[#64748B]" data-i18n="gpn.pidpool.empty">No vpn-routed game yet — assign a game in Game Boost to build the pool.</p>
+                </div>
+              </div>
+              <!-- Captured traffic card: per-packet telemetry from GpnCaptureLoop
+                   (protocol/direction/bytes, top flows, per-PID via UDP port table). -->
+              <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
+                <div class="flex items-center gap-2 mb-2 min-w-0">
+                  <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.capture.title">Captured traffic</p>
+                  <span id="gpnCaptureTotal" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono">0</span>
+                </div>
+                <div id="gpnCaptureAgg" class="flex flex-wrap gap-1.5 font-mono text-[10px] mb-2 min-w-0"></div>
+                <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] mb-1" data-i18n="gpn.capture.flows">Top flows</p>
+                <div id="gpnCaptureFlows" class="font-mono text-[10px] leading-relaxed text-[#8A94A6] min-w-0"></div>
+                <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] mb-1 mt-2" data-i18n="gpn.capture.perPid">Per-PID</p>
+                <div id="gpnCapturePids" class="font-mono text-[10px] leading-relaxed text-[#8A94A6] min-w-0"></div>
+              </div>
+              <!-- Failover decision matrix: the SAME live measurement evaluated under
+                   default + strict policy side by side (GpnServerSelectionService.EvaluateFailoverMatrix
+                   → setGpnFailoverMatrix; the dashboard only renders, never re-decides). -->
+              <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
+                <div class="flex items-center gap-2 mb-2 min-w-0">
+                  <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.matrix.title">Failover matrix</p>
+                  <span id="gpnMatrixTs" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono"></span>
+                </div>
+                <div id="gpnMatrixBody" class="min-w-0">
+                  <p class="text-[#64748B]" data-i18n="gpn.matrix.empty">No measurement yet — run a server probe.</p>
+                </div>
+              </div>
+              <!-- GPN stable mode: when failover is OFF (default) the connection sticks
+                   to the chosen server — no auto server switching, no V2rayTCP fallback,
+                   no recovery. Toggle persisted in config (GuiItem.GpnEnableFailover). -->
+              <div class="glass-soft rounded-xl px-3.5 py-3 min-w-0 mt-4 flex items-center gap-3">
+                <div class="min-w-0 flex-1">
+                  <p class="text-xs font-semibold text-slate-100" data-i18n="gpn.failover.title">Stable connection (no auto switch)</p>
+                  <p class="text-[11px] text-[#8A94A6] mt-0.5" data-i18n="gpn.failover.sub">OFF = stick to the chosen server for the most stable, uninterrupted connection. ON = auto-switch/failover allowed.</p>
+                </div>
+                <!-- Simple toggle: posts set_gpn_failover -->
+                <button type="button" id="gpnFailoverToggle" role="switch" aria-checked="false"
+                        class="shrink-0 relative w-10 h-6 rounded-full transition-colors bg-white/15">
+                  <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform"></span>
+                </button>
+              </div>
+              <!-- GPN recovery watch: after a V2rayTCP fallback, auto-return to
+                   Tier 2 (WireGuard) once a healthy server is found. Toggle persisted
+                   in config (GuiItem.GpnEnableRecoveryWatch). -->
+              <div class="glass-soft rounded-xl px-3.5 py-3 min-w-0 mt-4 flex items-center gap-3">
+                <div class="min-w-0 flex-1">
+                  <p class="text-xs font-semibold text-slate-100" data-i18n="gpn.recovery.title">Auto-recover after V2ray</p>
+                  <p class="text-[11px] text-[#8A94A6] mt-0.5" data-i18n="gpn.recovery.sub">After a V2rayTCP fallback, watch for a healthy server and return to WireGuard automatically.</p>
+                </div>
+                <!-- Simple toggle: posts set_gpn_recovery_watch -->
+                <button type="button" id="gpnRecoveryWatchToggle" role="switch" aria-checked="true"
+                        class="shrink-0 relative w-10 h-6 rounded-full transition-colors bg-cyan-400/70">
+                  <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-4"></span>
+                </button>
+              </div>
+              <!-- GPN failover / recovery telemetry counters (lives updated by host) -->
+              <div id="gpnTelemetryCard" class="glass-soft rounded-xl px-3.5 py-3 min-w-0 mt-4">
+                <div class="flex items-center gap-2 mb-2 min-w-0">
+                  <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.telemetry.title">Failover telemetry</p>
+                  <span id="gpnTelemetryTotal" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono">0</span>
+                  <button id="gpnTelemetryReset" type="button" class="ml-auto shrink-0 text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.telemetry.reset">Reset</button>
+                </div>
+                <div class="flex flex-wrap gap-1.5 font-mono text-[10px]">
+                  <span class="px-2 py-0.5 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/20" data-i18n="gpn.telemetry.switchShort">switch</span>
+                  <span id="gpnTelSwitches" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
+                  <span class="px-2 py-0.5 rounded-md bg-red-400/10 text-red-300 border border-red-400/20" data-i18n="gpn.telemetry.deathShort">death</span>
+                  <span id="gpnTelDeaths" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
+                  <span class="px-2 py-0.5 rounded-md bg-amber-400/10 text-amber-300 border border-amber-400/20" data-i18n="gpn.telemetry.fallbackShort">fallback</span>
+                  <span id="gpnTelFallbacks" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
+                  <span class="px-2 py-0.5 rounded-md bg-emerald-400/10 text-emerald-300 border border-emerald-400/20" data-i18n="gpn.telemetry.recoverShort">recover</span>
+                  <span id="gpnTelRecovers" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
+                  <span class="px-2 py-0.5 rounded-md bg-violet-400/10 text-violet-300 border border-violet-400/20" data-i18n="gpn.telemetry.selectShort">select</span>
+                  <span id="gpnTelDecisions" class="px-1.5 py-0.5 rounded-md bg-white/5 text-slate-300 border border-white/10 font-semibold">0</span>
+                </div>
+              </div>
+              <!-- WinDivert queue settings: GpnCaptureItem → WinDivertOpenParams
+                   (queue len/time/size + layer/direction). Editable; the Apply button
+                   posts set_gpn_capture_settings, the host writes the config (next
+                   capture start applies the values). -->
+              <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
+                <div class="flex items-center gap-2 mb-2 min-w-0">
+                  <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.captureSet.title">WinDivert queue</p>
+                  <span id="gpnCaptureSetSlot" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono"></span>
+                  <button id="gpnCaptureSetSave" type="button" class="ml-auto shrink-0 text-[10px] font-semibold px-2.5 py-1 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors" data-i18n="gpn.captureSet.save">Apply</button>
+                </div>
+                <div class="grid grid-cols-3 gap-2 font-mono text-[10px] mb-2 min-w-0">
+                  <label class="flex flex-col gap-1 min-w-0">
+                    <span class="text-[#8A94A6]" data-i18n="gpn.captureSet.queueLen">Queue len</span>
+                    <input id="gpnCaptureSetQueueLen" type="number" min="1" step="64" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
+                  </label>
+                  <label class="flex flex-col gap-1 min-w-0">
+                    <span class="text-[#8A94A6]" data-i18n="gpn.captureSet.queueTime">Queue time (ms)</span>
+                    <input id="gpnCaptureSetQueueTime" type="number" min="1" step="100" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
+                  </label>
+                  <label class="flex flex-col gap-1 min-w-0">
+                    <span class="text-[#8A94A6]" data-i18n="gpn.captureSet.queueSize">Queue size (B)</span>
+                    <input id="gpnCaptureSetQueueSize" type="number" min="0" step="1024" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
+                  </label>
+                </div>
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-[10px] mb-2 min-w-0">
+                  <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0"><input id="gpnCaptureSetEnableLen" type="checkbox" class="accent-cyan-400"><span data-i18n="gpn.captureSet.enableLen">len</span></label>
+                  <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0"><input id="gpnCaptureSetEnableTime" type="checkbox" class="accent-cyan-400"><span data-i18n="gpn.captureSet.enableTime">time</span></label>
+                  <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0"><input id="gpnCaptureSetEnableSize" type="checkbox" class="accent-cyan-400"><span data-i18n="gpn.captureSet.enableSize">size</span></label>
+                  <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0 ml-auto">
+                    <span data-i18n="gpn.captureSet.layer">Layer</span>
+                    <select id="gpnCaptureSetLayer" class="bg-white/5 border border-white/10 rounded-md px-1.5 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
+                      <option value="0">Network</option>
+                      <option value="1">Forward</option>
+                    </select>
+                  </label>
+                  <label class="flex items-center gap-1.5 text-[#8A94A6] shrink-0">
+                    <span data-i18n="gpn.captureSet.direction">Direction</span>
+                    <select id="gpnCaptureSetDirection" class="bg-white/5 border border-white/10 rounded-md px-1.5 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
+                      <option value="0">Inbound</option>
+                      <option value="1">Outbound</option>
+                    </select>
+                  </label>
+                </div>
+                <p class="text-[9px] text-[#64748B]" data-i18n="gpn.captureSet.hint">Values apply to the next capture start; the running loop keeps its current parameters.</p>
+              </div>
+              <!-- Wintun adapter settings: GpnWintunItem → WireGuardTunnelService.Open
+                   (adapter name prefix + ring capacity). Editable; the Apply button
+                   posts set_gpn_wintun_settings, the host writes the config (next
+                   WireGuard connect applies the values). -->
+              <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
+                <div class="flex items-center gap-2 mb-2 min-w-0">
+                  <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.wintunSet.title">Wintun adapter</p>
+                  <span id="gpnWintunSetSlot" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono"></span>
+                  <button id="gpnWintunSetSave" type="button" class="ml-auto shrink-0 text-[10px] font-semibold px-2.5 py-1 rounded-md bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors" data-i18n="gpn.wintunSet.save">Apply</button>
+                </div>
+                <div class="grid grid-cols-2 gap-2 font-mono text-[10px] mb-2 min-w-0">
+                  <label class="flex flex-col gap-1 min-w-0">
+                    <span class="text-[#8A94A6]" data-i18n="gpn.wintunSet.adapter">Adapter name prefix</span>
+                    <input id="gpnWintunSetAdapterName" type="text" maxlength="32" spellcheck="false" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
+                  </label>
+                  <label class="flex flex-col gap-1 min-w-0">
+                    <span class="text-[#8A94A6]" data-i18n="gpn.wintunSet.ring">Ring capacity (B)</span>
+                    <input id="gpnWintunSetRingCapacity" type="number" min="131072" step="65536" class="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-slate-200 outline-none focus:border-cyan-400/50">
+                  </label>
+                </div>
+                <p class="text-[9px] text-[#64748B]" data-i18n="gpn.wintunSet.hint">Applies to the next WireGuard connect; the server id is appended to the adapter name (AoGPN-it). Ring capacity is clamped to 128 KiB–64 MiB and rounded to a power of two.</p>
+              </div>
+              <!-- GPN diagnostics feed: DiagLog "GPN_*" lines streamed live by the host -->
+              <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
+                <div class="flex items-center gap-2 mb-2 min-w-0">
+                  <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.diag.title">GPN diagnostics</p>
+                  <span id="gpnDiagCount" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono">0</span>
+                  <button id="gpnDiagClear" type="button" class="ml-auto shrink-0 text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.diag.clear">Clear</button>
+                </div>
+                <div id="gpnDiagFeed" class="max-h-36 overflow-y-auto font-mono text-[10px] leading-relaxed text-[#8A94A6] min-w-0">
+                  <p class="text-[#64748B]" data-i18n="gpn.diag.empty">No GPN diagnostics yet — connect to see the live pipeline.</p>
+                </div>
+              </div>
+              <!-- Last-50 decisions ring buffer (host GpnResilienceLog) for troubleshooting -->
+              <div class="glass-soft rounded-xl p-3.5 min-w-0 mt-4">
+                <div class="flex items-center gap-2 mb-2 min-w-0">
+                  <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="gpn.reslog.title">Last 50 decisions</p>
+                  <span id="gpnResLogCount" class="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#64748B] border border-white/10 font-mono">0</span>
+                  <div class="ml-auto flex items-center gap-1.5 shrink-0">
+                    <button id="gpnResLogRefresh" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.reslog.refresh">Refresh</button>
+                    <button id="gpnResLogClear" type="button" class="text-[10px] font-semibold px-2 py-1 rounded-md bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="gpn.reslog.clear">Clear</button>
+                  </div>
+                </div>
+                <div id="gpnResilienceLogList" class="max-h-44 overflow-y-auto text-[10px] leading-relaxed min-w-0 scroll-smooth">
+                  <p class="text-[#64748B]" data-i18n="gpn.reslog.empty">No decisions recorded yet.</p>
+                </div>
+                <p class="text-[9px] text-[#5B6472] mt-1.5 truncate"><span data-i18n="gpn.reslog.path">Mirrored to</span>&nbsp;<span id="gpnResLogPath" class="font-mono"></span></p>
+
+            </div>
+
         </section>
 
         <!-- ================= ABOUT & HELP VIEW ================= -->
@@ -3908,31 +3911,31 @@ body.effects-hidden *::after {
             <div class="relative flex flex-wrap items-start gap-3 mb-5 min-w-0">
               <div class="min-w-0">
                 <h2 class="font-display font-semibold text-xl tracking-wide"><span data-i18n="monitor.title">Connection Monitor</span></h2>
-                <p class="text-[11px] text-[#8A94A6] mt-1">GlassWire-style live view: see which program is connected, where it goes, and which route it uses.</p>
+                <p data-i18n="monitor.sub" class="text-[11px] text-[#8A94A6] mt-1">GlassWire-style live view: see which program is connected, where it goes, and which route it uses.</p>
               </div>
               <div class="ml-auto flex items-center gap-2 shrink-0">
-                <span id="monitorLiveBadge" class="text-[10px] uppercase tracking-[.16em] px-2.5 py-1 rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-400/20">Waiting for monitor</span>
-                <button id="monitorRefreshBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors">Refresh</button>
+                <span id="monitorLiveBadge" class="text-[10px] uppercase tracking-[.16em] px-2.5 py-1 rounded-full bg-cyan-400/10 text-cyan-300 border border-cyan-400/20" data-i18n="monitor.waiting">Waiting for monitor</span>
+                <button id="monitorRefreshBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="monitor.refresh">Refresh</button>
               </div>
             </div>
             <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
               <div class="glass-soft rounded-xl p-3.5"><p class="text-[10px] uppercase tracking-[.16em] text-[#8A94A6]" data-i18n="monitor.connections">Connections</p><p id="monitorConnectionsCount" class="font-display text-2xl font-bold mt-1 num-tabular">0</p><p id="monitorConnectionsSubtext" class="text-[10px] text-[#64748B] mt-1" data-i18n="monitor.activeSockets">active sockets</p></div>
-              <div class="glass-soft rounded-xl p-3.5"><p class="text-[10px] uppercase tracking-[.16em] text-[#8A94A6]">Applications</p><p id="monitorAppsCount" class="font-display text-2xl font-bold mt-1 num-tabular">0</p><p class="text-[10px] text-[#64748B] mt-1">visible processes</p></div>
-              <div class="glass-soft rounded-xl p-3.5"><p class="text-[10px] uppercase tracking-[.16em] text-[#8A94A6]">Download</p><p id="monitorDownload" class="font-display text-2xl font-bold mt-1 num-tabular">0.0 B</p><p class="text-[10px] text-[#64748B] mt-1">reported by core</p></div>
-              <div class="glass-soft rounded-xl p-3.5"><p class="text-[10px] uppercase tracking-[.16em] text-[#8A94A6]">Upload</p><p id="monitorUpload" class="font-display text-2xl font-bold mt-1 num-tabular">0.0 B</p><p class="text-[10px] text-[#64748B] mt-1">reported by core</p></div>
+              <div class="glass-soft rounded-xl p-3.5"><p class="text-[10px] uppercase tracking-[.16em] text-[#8A94A6]" data-i18n="monitor.apps">Applications</p><p id="monitorAppsCount" class="font-display text-2xl font-bold mt-1 num-tabular">0</p><p class="text-[10px] text-[#64748B] mt-1" data-i18n="monitor.visibleProcesses">visible processes</p></div>
+              <div class="glass-soft rounded-xl p-3.5"><p class="text-[10px] uppercase tracking-[.16em] text-[#8A94A6]" data-i18n="stat.download">Download</p><p id="monitorDownload" class="font-display text-2xl font-bold mt-1 num-tabular">0.0 B</p><p class="text-[10px] text-[#64748B] mt-1" data-i18n="monitor.reportedByCore">reported by core</p></div>
+              <div class="glass-soft rounded-xl p-3.5"><p class="text-[10px] uppercase tracking-[.16em] text-[#8A94A6]" data-i18n="stat.upload">Upload</p><p id="monitorUpload" class="font-display text-2xl font-bold mt-1 num-tabular">0.0 B</p><p class="text-[10px] text-[#64748B] mt-1" data-i18n="monitor.reportedByCore">reported by core</p></div>
             </div>
             <div class="flex flex-wrap items-center gap-2 mb-3">
-              <input id="monitorFilter" type="search" class="settings-input max-w-[320px]" placeholder="Filter app, address or country…" />
-              <label class="inline-flex items-center gap-2 text-[11px] text-[#A7B0BF] px-2.5 py-2 rounded-lg border border-white/10 bg-white/5"><input id="monitorHideListeners" type="checkbox" checked class="accent-cyan-400" /> Hide listeners</label>
-              <span id="monitorTrafficStatus" class="ml-auto text-[10px] text-[#64748B]">No core traffic sample yet.</span>
+              <input id="monitorFilter" type="search" class="settings-input max-w-[320px]" placeholder="Filter app, address or country…" data-i18n-placeholder="monitor.filter" />
+              <label class="inline-flex items-center gap-2 text-[11px] text-[#A7B0BF] px-2.5 py-2 rounded-lg border border-white/10 bg-white/5"><input id="monitorHideListeners" type="checkbox" checked class="accent-cyan-400" /> <span data-i18n="monitor.hideListeners">Hide listeners</span></label>
+              <span id="monitorTrafficStatus" class="ml-auto text-[10px] text-[#64748B]" data-i18n="monitor.noSample">No core traffic sample yet.</span>
             </div>
             <div class="overflow-x-auto rounded-xl border border-white/8 bg-black/10">
               <table class="w-full min-w-[760px] text-left text-xs">
-                <thead class="bg-white/5 text-[10px] uppercase tracking-[.14em] text-[#8A94A6]"><tr><th class="px-3 py-2.5">Application</th><th class="px-3 py-2.5">Route</th><th class="px-3 py-2.5">Protocol</th><th class="px-3 py-2.5">Remote</th><th class="px-3 py-2.5">Country / ASN</th><th class="px-3 py-2.5">State</th><th class="px-3 py-2.5">Assign</th></tr></thead>
+                <thead class="bg-white/5 text-[10px] uppercase tracking-[.14em] text-[#8A94A6]"><tr><th class="px-3 py-2.5" data-i18n="monitor.view.groupApp">Application</th><th class="px-3 py-2.5" data-i18n="monitor.view.groupRoute">Route</th><th class="px-3 py-2.5" data-i18n="monitor.view.groupProtocol">Protocol</th><th class="px-3 py-2.5" data-i18n="monitor.colRemote">Remote</th><th class="px-3 py-2.5" data-i18n="monitor.colCountry">Country / ASN</th><th class="px-3 py-2.5" data-i18n="monitor.view.groupState">State</th><th class="px-3 py-2.5" data-i18n="monitor.colAssign">Assign</th></tr></thead>
                 <tbody id="monitorConnectionsBody" class="divide-y divide-white/5"></tbody>
               </table>
             </div>
-            <p id="monitorEmpty" class="hidden text-center text-xs text-[#64748B] py-10">No visible connections. Start a core or disable the listener filter to inspect local sockets.</p>
+            <p id="monitorEmpty" data-i18n="monitor.empty" class="hidden text-center text-xs text-[#64748B] py-10">No visible connections. Start a core or disable the listener filter to inspect local sockets.</p>
           </div>
         </section>
 
@@ -3942,51 +3945,69 @@ body.effects-hidden *::after {
             <div class="pointer-events-none absolute -top-28 -right-24 w-80 h-80 rounded-full bg-[var(--violet-10)] blur-3xl"></div>
             <div class="relative flex flex-wrap items-start gap-3 mb-5 min-w-0">
               <div class="min-w-0">
-                <h2 class="font-display font-semibold text-xl tracking-wide">GPN <span class="bg-gradient-to-r from-[var(--violet)] to-[var(--cyan)] bg-clip-text text-transparent">Game Boost</span></h2>
-                <p class="text-[11px] text-[#8A94A6] mt-1">Assign VPN, proxy, direct or block per executable. Unlisted traffic follows the selected mode.</p>
+                <h2 class="font-display font-semibold text-xl tracking-wide" data-i18n="boost.title">Application Management Center</h2>
+                <p class="text-[11px] text-[#8A94A6] mt-1" data-i18n="boost.manageSub">Assign VPN, proxy, direct or block per executable. Unlisted traffic follows the selected mode.</p>
               </div>
               <div class="ml-auto flex items-center gap-2 shrink-0">
-                <button id="boostRefreshBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors">Refresh</button>
-                <button id="boostRunningAppsBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors" aria-expanded="false" aria-controls="boostProcessPicker">Running apps</button>
-                <button id="boostBszApiBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-purple-400/10 text-purple-300 border border-purple-400/25 hover:bg-purple-400/20 transition-colors" title="Adds the BSG API destination rule (escapefromtarkov.com → WARP) — the game's own client version check then exits through the clean WARP egress while raid-server IP traffic stays on your VPN path.">⚡ BSG API → WARP</button>
-                <button id="boostAddDomainBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors" aria-expanded="false" aria-controls="boostDomainPanel">＋ Domain</button>
-                <button id="boostAddAppBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg text-white bg-gradient-to-r from-[var(--violet)] to-[var(--cyan)] shadow-[0_0_12px_var(--violet-30)] hover:brightness-110 transition-all">＋ Add EXE</button>
+                <button id="boostRefreshBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="boost.refresh">Refresh</button>
+                <button id="boostRunningAppsBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors" aria-expanded="false" aria-controls="boostProcessPicker" data-i18n="boost.runningApps">Running apps</button>
+                <button id="boostBszApiBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-purple-400/10 text-purple-300 border border-purple-400/25 hover:bg-purple-400/20 transition-colors" data-tip-key="boost.bsgApiTip">⚡ BSG API → WARP</button>
+                <button id="boostAddDomainBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors" aria-expanded="false" aria-controls="boostDomainPanel" data-i18n="boost.addDomain">＋ Domain</button>
+                <button id="boostAddAppBtn" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg text-white bg-gradient-to-r from-[var(--violet)] to-[var(--cyan)] shadow-[0_0_12px_var(--violet-30)] hover:brightness-110 transition-all" data-i18n="boost.addExe">＋ Add EXE</button>
               </div>
             </div>
             <div id="boostDomainPanel" class="hidden glass-soft rounded-xl p-3.5 mb-4 border border-cyan-400/20 bg-cyan-400/5">
               <div class="flex items-center justify-between gap-2 mb-2">
                 <div>
-                  <p class="text-xs font-semibold text-slate-100">Add a destination rule</p>
-                  <p class="text-[10px] text-[#8A94A6] mt-1">A domain/IP rule matches only that destination, for every process. Rule order is top-down — use the ↑/↓ controls to place it above the process rules it should take precedence over.</p>
+                  <p class="text-xs font-semibold text-slate-100" data-i18n="boost.domainTitle">Add a destination rule</p>
+                  <p class="text-[10px] text-[#8A94A6] mt-1" data-i18n="boost.domainDesc">A domain/IP rule matches only that destination, for every process. Rule order is top-down — use the ↑/↓ controls to place it above the process rules it should take precedence over.</p>
                 </div>
-                <button id="boostDomainClose" type="button" class="w-7 h-7 rounded-md text-[#8A94A6] hover:text-slate-100 hover:bg-white/10" aria-label="Close domain add">×</button>
+                <button id="boostDomainClose" type="button" class="w-7 h-7 rounded-md text-[#8A94A6] hover:text-slate-100 hover:bg-white/10" aria-label="Close domain add" data-i18n="boost.closeDomainAdd">×</button>
               </div>
               <div class="flex flex-wrap items-center gap-2">
-                <input id="boostDomainValue" type="text" placeholder="example.com or 1.2.3.4 (optional :port)" spellcheck="false" class="flex-1 min-w-[220px] bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-slate-200 outline-none focus:border-cyan-400/50 placeholder:text-[#5B6472]" />
+                <input id="boostDomainValue" type="text" data-i18n-placeholder="boost.domainPlaceholder" placeholder="example.com or 1.2.3.4 (optional :port)" spellcheck="false" class="flex-1 min-w-[220px] bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-slate-200 outline-none focus:border-cyan-400/50 placeholder:text-[#5B6472]" />
                 <select id="boostDomainAction" class="bg-white/5 border border-white/10 rounded-md px-2 py-1.5 text-[11px] text-slate-200 outline-none focus:border-cyan-400/50"></select>
-                <button id="boostDomainSubmit" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors">Add rule</button>
+                <button id="boostDomainSubmit" type="button" class="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-cyan-400/10 text-cyan-300 border border-cyan-400/25 hover:bg-cyan-400/20 transition-colors" data-i18n="boost.addRule">Add rule</button>
               </div>
             </div>
             <div id="boostProcessPicker" class="hidden glass-soft rounded-xl p-3.5 mb-4 border border-cyan-400/20 bg-cyan-400/5">
               <div class="flex items-center justify-between gap-2 mb-2">
                 <div>
-                  <p class="text-xs font-semibold text-slate-100">Running applications</p>
-                  <p class="text-[10px] text-[#8A94A6] mt-1">Choose a currently running executable to add to Game Boost.</p>
+                  <p class="text-xs font-semibold text-slate-100" data-i18n="boost.runningAppsTitle">Running applications</p>
+                  <p class="text-[10px] text-[#8A94A6] mt-1" data-i18n="boost.runningAppsDesc">Choose a currently running executable to add to Game Boost.</p>
                 </div>
-                <button id="boostProcessPickerClose" type="button" class="w-7 h-7 rounded-md text-[#8A94A6] hover:text-slate-100 hover:bg-white/10" aria-label="Close running applications">×</button>
+                <button id="boostProcessPickerClose" type="button" class="w-7 h-7 rounded-md text-[#8A94A6] hover:text-slate-100 hover:bg-white/10" aria-label="Close running applications" data-i18n="boost.closeRunningApps">×</button>
               </div>
-              <input id="boostProcessFilter" type="search" placeholder="Filter running applications…" class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-slate-200 outline-none focus:border-cyan-400/50 placeholder:text-[#5B6472]" />
+              <input id="boostProcessFilter" type="search" data-i18n-placeholder="boost.filterRunning" placeholder="Filter running applications…" class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-slate-200 outline-none focus:border-cyan-400/50 placeholder:text-[#5B6472]" />
               <div id="boostProcessList" class="mt-2 max-h-52 overflow-y-auto divide-y divide-white/5"></div>
             </div>
             <div class="glass-soft rounded-xl p-3.5 mb-4 flex flex-wrap items-center gap-2">
-              <span class="text-[10px] uppercase tracking-[.16em] text-[#8A94A6] mr-1">Route mode</span>
-              <button type="button" data-split-mode="off" class="split-mode-pill rounded-lg px-3 py-1.5 text-[11px] font-semibold border border-white/10 text-[#A7B0BF]" title="Off — disconnected; no traffic is captured and your independent system proxy preference is untouched.">Off</button>
-              <button type="button" data-split-mode="vpn" class="split-mode-pill rounded-lg px-3 py-1.5 text-[11px] font-semibold border border-white/10 text-[#A7B0BF]" title="Global VPN — all traffic follows the selected VPN profile and TUN/proxy transport.">Global VPN</button>
-              <button type="button" data-split-mode="manual" class="split-mode-pill rounded-lg px-3 py-1.5 text-[11px] font-semibold border border-white/10 text-[#A7B0BF]" title="GPN Game Tunnel — only assigned games/apps are tunneled; unlisted traffic stays direct.">GPN Game Tunnel</button>
+              <span class="text-[10px] uppercase tracking-[.16em] text-[#8A94A6] mr-1" data-i18n="boost.routeMode">Route mode</span>
+              <button type="button" data-split-mode="off" class="split-mode-pill rounded-lg px-3 py-1.5 text-[11px] font-semibold border border-white/10 text-[#A7B0BF]" data-tip-key="boost.modeHintOff" data-i18n="boost.off">Off</button>
+              <button type="button" data-split-mode="vpn" class="split-mode-pill rounded-lg px-3 py-1.5 text-[11px] font-semibold border border-white/10 text-[#A7B0BF]" data-tip-key="boost.modeHintVpn" data-i18n="mode.globalVpn">VPN</button>
+              <button type="button" data-split-mode="manual" class="split-mode-pill rounded-lg px-3 py-1.5 text-[11px] font-semibold border border-white/10 text-[#A7B0BF]" data-tip-key="boost.modeHintGpn" data-i18n="mode.gpn">GPN Game Tunnel</button>
               <span id="boostModeHint" class="ml-auto text-[10px] text-[#64748B]">Same route mode as the Dashboard — Off releases the tunnel.</span>
             </div>
+            <!-- GPN routing direction: whitelist ↔ blacklist. Defines what the
+                 GPN Game Tunnel (manual) mode does with the apps assigned in the
+                 table below — whitelist tunnels only assigned apps, blacklist
+                 tunnels everything except assigned apps. -->
+            <div class="glass-soft rounded-xl p-3.5 mb-4 min-w-0">
+              <div class="flex flex-wrap items-center gap-2 min-w-0">
+                <p class="text-[10px] uppercase tracking-[0.18em] text-[#8A94A6] shrink-0" data-i18n="dir.title">Routing direction</p>
+                <div class="flex gap-1.5 ml-auto">
+                  <button type="button" class="dir-pill active rounded-lg px-3 py-1.5 text-[11px] font-semibold border text-cyan-300 border-cyan-400/40 bg-cyan-400/10" data-dir="whitelist" data-tip-key="tip.dirWhitelist">
+                    <span class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Zm-2 16-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8Z"/></svg><span data-i18n="dir.whitelist">Whitelist</span></span>
+                  </button>
+                  <button type="button" class="dir-pill rounded-lg px-3 py-1.5 text-[11px] font-semibold border border-white/10 text-[#A7B0BF] hover:border-white/25" data-dir="blacklist" data-tip-key="tip.dirBlacklist">
+                    <span class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Zm2 16H9v-2h5v2Z"/></svg><span data-i18n="dir.blacklist">Blacklist</span></span>
+                  </button>
+                </div>
+              </div>
+              <p id="dirHint" class="text-[10px] text-[#64748B] mt-1.5" data-i18n="dir.hintWhitelist">Whitelist — only assigned games/apps are tunneled; all other traffic stays direct.</p>
+            </div>
             <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-400/15 bg-cyan-400/5 px-3.5 py-3 mb-4">
-              <div><p class="text-xs font-semibold text-slate-100">Auto-connect when a game starts</p><p class="text-[10px] text-[#8A94A6] mt-1">When a listed VPN game launches, Smart Split is enabled; it returns to Off after the last game closes.</p></div>
+              <div><p class="text-xs font-semibold text-slate-100" data-i18n="boost.autoGame">Auto-connect when a game starts</p><p class="text-[10px] text-[#8A94A6] mt-1" data-i18n="boost.autoGameDesc">When a listed VPN game launches, Smart Split is enabled; it returns to Off after the last game closes.</p></div>
               <label class="switch"><input id="boostAutoGameConnect" type="checkbox" /><span class="slider"></span></label>
             </div>
             <div id="boostDirNotice" class="hidden mb-4 rounded-xl border border-amber-400/25 bg-amber-500/8 px-3.5 py-2.5 text-[11px] text-amber-200 flex items-start gap-2">
@@ -3997,61 +4018,65 @@ body.effects-hidden *::after {
               <svg class="w-4 h-4 shrink-0 mt-px" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm1 14h-2v2h2v-2Zm0-6h-2v4h2v-4Z"/></svg>
               <span id="warpFallbackNoticeText" class="min-w-0">WARP route needs a WireGuard node — the active connection is not WireGuard, so WARP apps are routed through VPN.</span>
             </div>
-            <div class="flex items-center justify-between gap-2 mb-3"><div><h3 class="font-display font-semibold text-base">Application routes</h3><p class="text-[10px] text-[#64748B] mt-1">Changing a route persists it and applies immediately while Smart Split is active.</p></div><span id="boostAppCount" class="text-[10px] text-[#8A94A6] num-tabular">0 entries</span></div>
+            <div id="boostUdpNotice" class="hidden mb-4 rounded-xl border border-amber-400/25 bg-amber-500/8 px-3.5 py-2.5 text-[11px] text-amber-200 flex items-start gap-2">
+              <svg class="w-4 h-4 shrink-0 mt-px" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm1 14h-2v2h2v-2Zm0-6h-2v4h2v-4Z"/></svg>
+              <span id="boostUdpNoticeText" class="min-w-0"></span>
+            </div>
+            <div class="flex items-center justify-between gap-2 mb-3"><div><h3 class="font-display font-semibold text-base" data-i18n="boost.appRoutes">Application routes</h3><p class="text-[10px] text-[#64748B] mt-1" data-i18n="boost.appRoutesDesc">Changing a route persists it and applies immediately while Smart Split is active.</p></div><span id="boostAppCount" class="text-[10px] text-[#8A94A6] num-tabular">0 entries</span></div>
             <div class="flex items-center gap-2 mb-3">
               <div class="relative flex-1 max-w-[340px]">
                 <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#5B6472]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>
-                <input id="boostAppFilter" type="search" placeholder="Filter by name or route…" class="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-1.5 text-[11px] text-slate-200 outline-none focus:border-cyan-400/50 placeholder:text-[#5B6472]" />
+                <input id="boostAppFilter" type="search" data-i18n-placeholder="boost.filterApps" placeholder="Filter by name or route…" class="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-1.5 text-[11px] text-slate-200 outline-none focus:border-cyan-400/50 placeholder:text-[#5B6472]" />
               </div>
             </div>
             <div class="overflow-x-auto rounded-xl border border-white/8 bg-black/10">
               <table class="w-full min-w-[780px] text-left text-xs">
-                <thead class="bg-white/5 text-[10px] uppercase tracking-[.14em] text-[#8A94A6]"><tr><th class="px-3 py-2.5">Program</th><th class="px-3 py-2.5">Route</th><th class="px-3 py-2.5">Live</th><th class="px-3 py-2.5">Status</th><th class="px-3 py-2.5">Real ping</th><th class="px-3 py-2.5">Target IP</th><th class="px-3 py-2.5">↓ Down</th><th class="px-3 py-2.5">↑ Up</th><th class="px-3 py-2.5">Change</th><th class="px-3 py-2.5 w-8"></th></tr></thead>
+                <thead class="bg-white/5 text-[10px] uppercase tracking-[.14em] text-[#8A94A6]"><tr><th class="px-3 py-2.5" data-i18n="boost.colProgram">Program</th><th class="px-3 py-2.5" data-i18n="boost.colRoute">Route</th><th class="px-3 py-2.5" data-i18n="boost.colLive">Live</th><th class="px-3 py-2.5" data-i18n="boost.colStatus">Status</th><th class="px-3 py-2.5" data-i18n="boost.colPing">Real ping</th><th class="px-3 py-2.5" data-i18n="boost.colTarget">Target IP</th><th class="px-3 py-2.5" data-i18n="boost.colDown">↓ Down</th><th class="px-3 py-2.5" data-i18n="boost.colUp">↑ Up</th><th class="px-3 py-2.5" data-i18n="boost.colChange">Change</th><th class="px-3 py-2.5 w-8"></th></tr></thead>
                 <tbody id="splitAppsBody" class="divide-y divide-white/5"></tbody>
               </table>
             </div>
-            <p id="boostEmpty" class="hidden text-center text-xs text-[#64748B] py-10">No applications are assigned yet. Use Add EXE or assign a route from Performance.</p>
+            <p id="boostEmpty" class="hidden text-center text-xs text-[#64748B] py-10" data-i18n="boost.empty">No applications are assigned yet. Use Add EXE or assign a route from Performance.</p>
           </div>
           <!-- Drag-drop overlay -->
           <div id="boostDropOverlay" class="hidden absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-2xl">
             <div class="glass rounded-2xl p-8 text-center border-2 border-dashed border-cyan-400/40">
               <svg class="w-10 h-10 text-cyan-300 mx-auto mb-3" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-6.621-4.066-1.72 2.756a.75.75 0 0 1-1.318 0l-1.72-2.756M12 2.25v12"/></svg>
-              <p class="font-display font-semibold text-lg text-slate-100">Drop EXE files here</p>
-              <p class="text-[11px] text-[#8A94A6] mt-1">Detected games get the recommended VPN route automatically</p>
+              <p class="font-display font-semibold text-lg text-slate-100" data-i18n="boost.dropHere">Drop EXE files here</p>
+              <p class="text-[11px] text-[#8A94A6] mt-1" data-i18n="boost.dropDesc">Detected games get the recommended VPN route automatically</p>
             </div>
           </div>
-          <div class="glass-soft rounded-xl p-4 mt-4 text-[11px] text-[#8A94A6] leading-relaxed"><span class="text-cyan-300 font-semibold">Tip:</span> VPN routes need TUN capture (apps that bypass the OS proxy). Proxy routes use the OS proxy setting (top-right badge); Direct bypasses the tunnel and Block rejects the destination. WARP routes exit through a clean egress on the server and need a WireGuard node with a WARP relay — on other nodes they fall back to VPN. A WARP-routed app can pick its own egress node from the node picker next to the route dropdown (İtalya, Almanya, Güney Afrika…) — its traffic then exits through that node instead of the active one. The dashboard never invents a protocol or changes server credentials.</div>
+          <div class="glass-soft rounded-xl p-4 mt-4 text-[11px] text-[#8A94A6] leading-relaxed"><span class="text-cyan-300 font-semibold" data-i18n="boost.tipTitle">Tip:</span> <span data-i18n="boost.tip">VPN routes need TUN capture (apps that bypass the OS proxy). Proxy routes use the OS proxy setting (top-right badge); Direct bypasses the tunnel and Block rejects the destination. WARP routes exit through a clean egress on the server and need a WireGuard node with a WARP relay — on other nodes they fall back to VPN. A WARP-routed app can pick its own egress node from the node picker next to the route dropdown (İtalya, Almanya, Güney Afrika…) — its traffic then exits through that node instead of the active one. The dashboard never invents a protocol or changes server credentials.</span></div>
         </section>
 
         <!-- ================= COMING SOON ================= -->
         <section id="viewComingSoon" class="hidden min-w-0">
           <div class="glass rounded-2xl p-10 md:p-16 flex flex-col items-center justify-center text-center min-w-0 mt-6">
             <svg class="w-12 h-12 text-[var(--violet)] mb-4" style="filter:drop-shadow(0 0 12px color-mix(in srgb, var(--violet) 70%, transparent))" fill="currentColor" viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
-            <h2 id="soonTitle" class="font-display font-semibold text-2xl tracking-wide">This section is empty</h2>
-            <p class="text-sm text-[#8A94A6] mt-2 max-w-md">No content is available for this view yet. Run the app with a subscription to populate nodes and telemetry.</p>
-            <button data-view="dashboard" class="nav-goto mt-6 px-5 py-2.5 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-[var(--violet)] to-[var(--cyan)] shadow-[0_0_16px_var(--violet-45)]">Back to Dashboard</button>
+            <h2 id="soonTitle" class="font-display font-semibold text-2xl tracking-wide" data-i18n="soon.title">This section is empty</h2>
+            <p class="text-sm text-[#8A94A6] mt-2 max-w-md" data-i18n="soon.desc">No content is available for this view yet. Run the app with a subscription to populate nodes and telemetry.</p>
+            <button data-view="dashboard" class="nav-goto mt-6 px-5 py-2.5 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-[var(--violet)] to-[var(--cyan)] shadow-[0_0_16px_var(--violet-45)]" data-i18n="soon.back">Back to Dashboard</button>
           </div>
         </section>
 
         <!-- Node right-click context menu (positioned via JS) -->
         <div id="nodeCtxMenu" class="hidden fixed z-[60] min-w-[190px] rounded-xl border border-white/10 bg-[#12182B]/95 backdrop-blur shadow-[0_18px_50px_rgba(0,0,0,.6)] p-1.5">
-          <button type="button" data-act="edit" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-cyan-300 hover:bg-cyan-500/15 transition-colors">
+          <button type="button" data-act="edit" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-cyan-300 hover:bg-cyan-500/15 transition-colors" data-i18n="nodes.edit">
             <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="m14.06 9.02.92.92L5.92 19H5v-.92l9.06-9.06ZM17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83a.996.996 0 0 0 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29Zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75Z"/></svg>
             Düzenle
           </button>
-          <button type="button" data-act="copy" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-200 hover:bg-white/8 transition-colors">
+          <button type="button" data-act="copy" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-200 hover:bg-white/8 transition-colors" data-i18n="nodes.copyShare">
             <svg class="w-3.5 h-3.5 text-cyan-300" fill="currentColor" viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1Zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H8V7h11v14Z"/></svg>
             Paylaşım bağlantısını kopyala
           </button>
-          <button type="button" data-act="ping" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-emerald-300 hover:bg-emerald-500/15 transition-colors">
+          <button type="button" data-act="ping" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-emerald-300 hover:bg-emerald-500/15 transition-colors" data-i18n="nodes.pingTest">
             <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
             Ping testi
           </button>
-          <button type="button" data-act="disable" class="ctx-edit flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-amber-300 hover:bg-amber-500/15 transition-colors">
+          <button type="button" data-act="disable" class="ctx-edit flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-amber-300 hover:bg-amber-500/15 transition-colors" data-i18n="nodes.disable">
             <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm4.2 14.2a1 1 0 0 1-1.4 0L12 13.41l-2.8 2.79a1 1 0 1 1-1.4-1.4l2.79-2.8-2.79-2.8a1 1 0 1 1 1.4-1.4l2.8 2.79 2.8-2.79a1 1 0 1 1 1.4 1.4l-2.79 2.8 2.79 2.8a1 1 0 0 1 0 1.4Z"/></svg>
             Devre dışı bırak
           </button>
-          <button type="button" data-act="delete" class="ctx-edit flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-red-300 hover:bg-red-500/15 transition-colors">
+          <button type="button" data-act="delete" class="ctx-edit flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-red-300 hover:bg-red-500/15 transition-colors" data-i18n="nodes.delete">
             <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM8 9h8v10H8V9Zm.5-5 1-1h5l1 1H19v2H5V4h3.5Z"/></svg>
             Sil
           </button>
@@ -4061,8 +4086,8 @@ body.effects-hidden *::after {
         <div id="fileDropOverlay" class="hidden fixed inset-0 z-[90] items-center justify-center bg-[#0B0F19]/85 backdrop-blur-sm pointer-events-none">
           <div class="rounded-2xl border-2 border-dashed border-cyan-400/50 bg-[#12182B]/95 px-10 py-8 text-center shadow-[0_0_40px_rgba(34,211,238,.15)]">
             <svg class="w-10 h-10 mx-auto text-cyan-300" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-            <p class="mt-3 text-sm font-semibold text-slate-100">WireGuard .conf bırakın</p>
-            <p class="mt-1 text-[11px] text-[#8A94A6]">Dosya adı sunucu adı olarak kaydedilir</p>
+            <p class="mt-3 text-sm font-semibold text-slate-100" data-i18n="nodes.dropConfTitle">WireGuard .conf bırakın</p>
+            <p class="mt-1 text-[11px] text-[#8A94A6]" data-i18n="nodes.dropConfDesc">Dosya adı sunucu adı olarak kaydedilir</p>
           </div>
         </div>
 
@@ -4074,19 +4099,31 @@ body.effects-hidden *::after {
                 <svg class="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2Zm1 14h-2v2h2v-2Zm0-6h-2v4h2v-4Z"/></svg>
               </span>
               <div class="min-w-0">
-                <h3 id="nodeConfirmTitle" class="font-display font-semibold text-sm text-slate-100">Delete node(s)</h3>
+                <h3 id="nodeConfirmTitle" class="font-display font-semibold text-sm text-slate-100" data-i18n="nodes.confirmDeleteTitle">Delete node(s)</h3>
                 <p id="nodeConfirmText" class="text-xs text-[#8A94A6] mt-0.5"></p>
               </div>
             </div>
             <div class="flex justify-end gap-2 mt-6">
-              <button id="nodeConfirmCancel" type="button" class="px-4 py-2 rounded-lg text-xs font-semibold bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors">Cancel</button>
-              <button id="nodeConfirmOk" type="button" class="px-4 py-2 rounded-lg text-xs font-semibold text-white bg-gradient-to-r from-red-500 to-red-600 shadow-[0_0_14px_rgba(239,68,68,.4)] hover:brightness-110 transition-all"><span id="nodeConfirmOkLabel">Delete</span></button>
+              <button id="nodeConfirmCancel" type="button" class="px-4 py-2 rounded-lg text-xs font-semibold bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10 transition-colors" data-i18n="nodes.confirmCancel">Cancel</button>
+              <button id="nodeConfirmOk" type="button" class="px-4 py-2 rounded-lg text-xs font-semibold text-white bg-gradient-to-r from-red-500 to-red-600 shadow-[0_0_14px_rgba(239,68,68,.4)] hover:brightness-110 transition-all"><span id="nodeConfirmOkLabel" data-i18n="nodes.delete">Delete</span></button>
             </div>
           </div>
         </div>
 
         <!-- Operation toast -->
         <div id="nodeToast" class="hidden" style="position:fixed;top:4rem;right:1rem;z-index:80;max-width:20rem;border-radius:0.75rem;border:1px solid;padding:0.75rem 1rem;font-size:0.75rem;font-weight:500;color:#e2e8f0;backdrop-filter:blur(12px);"></div>
+
+        <!-- Per-app quick settings: opens when a rail card icon is clicked
+             (route pills, per-app WARP egress node, remove) -->
+        <div id="appQuickSettings" class="hidden" style="position:fixed;z-index:90;width:232px;border-radius:0.85rem;background:rgba(15,17,22,.97);border:1px solid rgba(148,163,184,.16);box-shadow:0 18px 44px rgba(0,0,0,.6);backdrop-filter:blur(14px);padding:0.9rem;font-size:0.75rem;color:#e2e8f0;"></div>
+
+        <!-- Undo toast: one-click undo for the last app removal / route change
+             (host pushes window.setUndoAvailable; "Geri Al" posts undo_last_app_op) -->
+        <div id="undoToast" class="hidden" style="position:fixed;bottom:1.25rem;right:1.25rem;z-index:80;max-width:24rem;border-radius:0.75rem;border:1px solid rgba(34,211,238,.22);padding:0.65rem 0.8rem;font-size:0.75rem;font-weight:500;color:#e2e8f0;backdrop-filter:blur(12px);background:rgba(15,17,22,.94);box-shadow:0 12px 32px rgba(0,0,0,.5);">
+          <span id="undoToastText" style="line-height:1.35;"></span>
+          <button type="button" id="undoToastBtn" style="margin-left:0.9rem;padding:0.3rem 0.7rem;border-radius:0.5rem;font-weight:700;font-size:0.7rem;color:#67e8f9;background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.35);" data-i18n="undo.action">Geri Al</button>
+          <button type="button" id="undoToastClose" aria-label="Close" title="Close" style="margin-left:0.4rem;padding:0.25rem 0.45rem;border-radius:0.375rem;color:#64748b;background:transparent;border:none;font-size:0.7rem;">✕</button>
+        </div>
       </div>
     </main>
   </div>
@@ -4203,6 +4240,7 @@ body.effects-hidden *::after {
 <script src="Temalar/core/dom.js"></script>
 <script src="Temalar/core/bridge.js"></script>
 <script src="Temalar/core/i18n.js"></script>
+<script src="Temalar/core/flags.js"></script>
 <script src="Temalar/core/selects.js"></script>
 <script src="Temalar/core/theme.js"></script>
 <script src="Temalar/core/tooltips.js"></script>

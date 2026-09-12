@@ -92,6 +92,20 @@ public class ConnectionProtocolMatrixTests
     }
 
     [Fact]
+    public void MihomoGlobal_TunEnabled_ExcludesLoopbackFromRoute()
+    {
+        // Global TUN: uygulamanın kendi SOCKS'una (127.0.0.1:10808) giden trafik
+        // tünele düşmemeli — aksi halde auto-route /1 rotaları loopback'i de
+        // yakalar ve kendi proxy'sine bağlantı tünel içinde döner.
+        var node = CreateNode(EConfigType.VLESS, ECoreType.mihomo);
+        var yaml = MihomoGlobalConfigService.GenerateGlobalYaml(node,
+            new GpnMihomoOptions { MixedPort = 10808 }, tunEnabled: true);
+
+        yaml.Should().Contain("route-exclude-address");
+        yaml.Should().Contain("127.0.0.0/8");
+    }
+
+    [Fact]
     public void MihomoGlobal_ProxyTransport_TunDisabled_MixedPortOnly()
     {
         // Global + Proxy: TUN kapalı — mixed-port (HTTP+SOCKS5) dinler, tun.enable=false.

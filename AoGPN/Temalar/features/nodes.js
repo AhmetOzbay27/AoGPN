@@ -144,7 +144,7 @@
       if (nodeName) nodeName.textContent = selectedNode.name;
       if (nodeAddr) nodeAddr.textContent = selectedNode.addr + ' · ' + (['istanbul', 'frankfurt'].includes(selectedNode.key) ? 'VLESS' : 'VMess');
     }
-    $('selNodeFlag').textContent = selectedNode.code;
+    $('selNodeFlag').innerHTML = aogpn.flags.tileMarkup(selectedNode.code, selectedNode.code);
     $('selNodeSummary').textContent = selectedNode.name;
     document.querySelectorAll('.node-card').forEach(c => c.classList.toggle('selected', c.dataset.node === selectedNode.key));
     refreshSessionNode();
@@ -173,7 +173,7 @@
       <div class="node-card relative glass-soft rounded-xl p-4 min-w-0 ${sel ? 'selected' : ''} ${checked ? 'ring-1 ring-cyan-400/60' : ''} ${switching ? 'opacity-90' : ''}" data-index="${n.indexId}">
         <button type="button" data-check="${n.indexId}" title="${checked ? 'Deselect node' : 'Select node'}" aria-pressed="${checked}" class="node-check absolute top-2.5 left-2.5 w-5 h-5 rounded-md flex items-center justify-center text-[11px] font-bold transition-all duration-200 cursor-pointer ${checked ? 'bg-cyan-400 text-[#0B0F19] shadow-[0_0_10px_rgba(34,211,238,.6)] scale-100' : 'bg-white/5 text-transparent border border-white/10 hover:border-cyan-400/50 hover:text-cyan-300/70 scale-[.3]'}">✓</button>
         <div class="flex items-center gap-3 min-w-0">
-          <span class="w-10 h-10 rounded-lg bg-gradient-to-br from-[var(--violet-30)] to-[var(--cyan-20)] flex items-center justify-center font-display font-bold text-sm text-cyan-300 shrink-0 shadow-[0_0_10px_var(--violet-30)]">${code}</span>
+          ${aogpn.flags.tileMarkup(n.country, code)}
           <div class="min-w-0">
             <p class="text-sm font-semibold truncate">${escHtml(n.name)}</p>
             <p class="text-[11px] text-[#8A94A6] truncate">${escHtml(addr)}</p>
@@ -214,7 +214,7 @@
       <div class="node-card relative glass-soft rounded-xl p-4 min-w-0 opacity-90" data-index="${n.indexId}">
         <span class="absolute top-2.5 right-2.5 text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-400/25">Disabled</span>
         <div class="flex items-center gap-3 min-w-0">
-          <span class="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-500/20 to-[var(--cyan-10)] flex items-center justify-center font-display font-bold text-sm text-amber-300 shrink-0">${code}</span>
+          ${aogpn.flags.tileMarkup(n.country, code)}
           <div class="min-w-0">
             <p class="text-sm font-semibold truncate">${escHtml(n.name)}</p>
             <p class="text-[11px] text-[#8A94A6] truncate">${escHtml(addr)}</p>
@@ -233,7 +233,7 @@
     if (!node) {
       return;
     }
-    $('selNodeFlag').textContent = (node.sub || node.protocol || 'VPN').slice(0, 2).toUpperCase();
+    $('selNodeFlag').innerHTML = aogpn.flags.tileMarkup(node.country, (node.country || node.sub || node.protocol || 'VPN').slice(0, 2).toUpperCase());
     $('selNodeSummary').textContent = node.name;
   }
 
@@ -379,11 +379,17 @@
       grid.innerHTML = [...grouped.entries()].map(([country, nodes]) => {
         const groupKey = country;
         const collapsed = collapsedNodeGroups.has(groupKey);
+        // Ülke kodu gruplarında bayrak + yerelleştirilmiş ülke adı göster;
+        // bilinmeyen gruplar düz etiket kalır (anahtar her zaman ham koddur).
+        const isCode = /^[A-Za-z]{2}$/.test(country);
+        const flag = isCode ? aogpn.flags.flagMarkup(country, 'w-5 h-4') : null;
+        const displayName = isCode ? (aogpn.i18n.countryDisplayName(country) || country) : country;
         return `
         <div class="col-span-full flex items-center gap-2 mt-2 first:mt-0 route-group-header" data-group="${escHtml(groupKey)}">
           <button type="button" class="route-group-toggle flex items-center gap-2 min-w-0" data-group-toggle="${escHtml(groupKey)}" aria-expanded="${!collapsed}">
             <span class="text-cyan-300 text-xs">${collapsed ? '▶' : '▼'}</span>
-            <span class="text-[10px] uppercase tracking-[0.18em] text-cyan-300 font-semibold">${escHtml(country)}</span>
+            ${flag || ''}
+            <span class="text-[10px] uppercase tracking-[0.18em] text-cyan-300 font-semibold">${escHtml(displayName)}</span>
             <span class="text-[10px] text-[#64748B]">${nodes.length}</span>
           </button>
           <span class="h-px flex-1 bg-white/10"></span>
@@ -584,7 +590,7 @@
     if (count > 0 && !showingDisabled) {
       bar.classList.remove('hidden');
       bar.classList.add('flex');
-      $('nodeSelCount').textContent = count + (count === 1 ? ' düğüm seçildi' : ' düğüm seçildi');
+      $('nodeSelCount').textContent = t('nodes.selectedCount', { n: count });
     } else {
       bar.classList.add('hidden');
       bar.classList.remove('flex');
@@ -612,16 +618,16 @@
     }
     $('nodeTestAllBtn').classList.toggle('hidden', false);
     $('nodeTestAllBtn').classList.toggle('flex', true);
-    $('nodeTestAllLabel').textContent = nodeTestRunning ? 'Durdur' : 'Tümünü test et';
+    $('nodeTestAllLabel').textContent = nodeTestRunning ? t('nodes.stopPing') : t('nodes.pingAll');
     const nodeTestAllBtn = $('nodeTestAllBtn');
     if (nodeTestAllBtn) {
       nodeTestAllBtn.setAttribute('aria-busy', nodeTestRunning ? 'true' : 'false');
-      nodeTestAllBtn.title = nodeTestRunning ? 'Ping testini durdur' : 'Tüm düğümleri sırayla ping ile test et';
+      nodeTestAllBtn.title = nodeTestRunning ? t('nodes.stopPingTip') : t('nodes.pingAllTip');
     }
     $('nodeDisabledBtn').classList.toggle('hidden', disabledNodes.size === 0 && !showingDisabled);
     $('nodeDisabledBtn').classList.toggle('flex', disabledNodes.size > 0 || showingDisabled);
-    $('nodeDisabledLabel').textContent = `Disabled (${disabledNodes.size})`;
-    $('nodeDisabledBarText').textContent = `${disabledNodes.size} devre dışı düğüm gösteriliyor — geri yükle veya kalıcı olarak sil`;
+    $('nodeDisabledLabel').textContent = t('nodes.disabledLabel', { n: disabledNodes.size });
+    $('nodeDisabledBarText').textContent = t('nodes.disabledBar', { n: disabledNodes.size });
     $('nodeDisabledBar').classList.toggle('hidden', !showingDisabled);
     $('nodeDisabledBar').classList.toggle('flex', showingDisabled);
     // The Edit toggle only reveals the bulk-cleanup toolbar (dedupe, delete
@@ -692,7 +698,7 @@
   }
   function requestConfirm(title, text, action) {
     $('nodeConfirmTitle').textContent = title;
-    $('nodeConfirmOkLabel').textContent = 'Onayla';
+    $('nodeConfirmOkLabel').textContent = t('nodes.confirmApprove');
     $('nodeConfirmText').textContent = text;
     pendingConfirmAction = action;
     showNodeConfirm();
@@ -702,9 +708,9 @@
     if (ids.length === 0) {
       return;
     }
-    $('nodeConfirmTitle').textContent = 'Düğüm(ler)i sil';
-    $('nodeConfirmOkLabel').textContent = 'Sil';
-    $('nodeConfirmText').textContent = `Bu işlem aboneliğinizden ${ids.length} düğümü kaldırır. Geri alınamaz.`;
+    $('nodeConfirmTitle').textContent = t('nodes.confirmDeleteTitle');
+    $('nodeConfirmOkLabel').textContent = t('nodes.delete');
+    $('nodeConfirmText').textContent = t('nodes.confirmDeleteText', { n: ids.length });
     pendingConfirmAction = () => postToHost({ action: 'delete_nodes', indexIds: ids });
     showNodeConfirm();
   }
@@ -713,9 +719,9 @@
     if (ids.length === 0) {
       return;
     }
-    $('nodeConfirmTitle').textContent = 'Düğüm(ler)i devre dışı bırak';
-    $('nodeConfirmOkLabel').textContent = 'Devre dışı bırak';
-    $('nodeConfirmText').textContent = `${ids.length} düğüm Devre Dışı bölümüne taşınsın mı? Daha sonra geri yükleyebilirsiniz.`;
+    $('nodeConfirmTitle').textContent = t('nodes.confirmDisableTitle');
+    $('nodeConfirmOkLabel').textContent = t('nodes.disable');
+    $('nodeConfirmText').textContent = t('nodes.confirmDisableText', { n: ids.length });
     pendingConfirmAction = () => postToHost({ action: 'disable_nodes', indexIds: ids });
     showNodeConfirm();
   }
@@ -804,9 +810,9 @@
     if (ids.length === 0) {
       return;
     }
-    $('nodeConfirmTitle').textContent = 'Tüm devre dışı olanları sil';
-    $('nodeConfirmOkLabel').textContent = 'Sil';
-    $('nodeConfirmText').textContent = `Devre dışı bırakılmış ${ids.length} düğüm kalıcı olarak silinsin mi? Bu işlem geri alınamaz.`;
+    $('nodeConfirmTitle').textContent = t('nodes.confirmDeleteAllTitle');
+    $('nodeConfirmOkLabel').textContent = t('nodes.delete');
+    $('nodeConfirmText').textContent = t('nodes.confirmDeleteAllText', { n: ids.length });
     pendingConfirmAction = () => postToHost({ action: 'delete_nodes', indexIds: ids });
     showNodeConfirm();
   });
@@ -1299,6 +1305,7 @@
     getActiveRealNodeId: () => activeRealNodeId,
     getSelectedNode: () => selectedNode,
     setSelectedNode: (v) => { selectedNode = v; },
-    setUseRealNodes: (v) => { useRealNodes = !!v; }
+    setUseRealNodes: (v) => { useRealNodes = !!v; },
+    getNodePoolLinks: () => nodePoolLinks
   };
 })();

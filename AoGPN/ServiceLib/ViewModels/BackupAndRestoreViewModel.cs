@@ -142,10 +142,8 @@ public class BackupAndRestoreViewModel : MyReactiveObject
             }
             else
             {
-                if (Utils.UpgradeAppExists(out var upgradeFileName))
-                {
-                    _ = ProcUtils.ProcessStart(upgradeFileName, Global.RebootAs, Utils.StartupPath());
-                }
+                // Windows dışında yükseltme gerekmez: uygulama doğrudan yeniden başlatılır.
+                ProcUtils.RestartApplication();
             }
             AppManager.Instance.Shutdown(true);
         }

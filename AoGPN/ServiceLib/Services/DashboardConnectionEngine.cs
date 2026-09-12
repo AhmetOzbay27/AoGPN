@@ -459,7 +459,7 @@ public sealed class DashboardConnectionEngine
     }
     private static readonly HashSet<string> _excludeProcesses = new(StringComparer.OrdinalIgnoreCase)
     {
-        "AoGPN", "AoGPN", "xray", "mihomo", "AmazTool", "EnableLoopback"
+        "AoGPN", "AoGPN", "xray", "mihomo", "AoGPN.Updater", "EnableLoopback"
     };
     private static bool TryGetAppInfo(int pid, out (string name, string path, string display) info)
     {
@@ -485,14 +485,11 @@ public sealed class DashboardConnectionEngine
                 return false;
             }
 
-            var path = "";
-            try
-            {
-                path = p.MainModule?.FileName ?? "";
-            }
-            catch
-            {
-            }
+            // En az yetkiyle çöz. Eskiden MainModule kullanılıyordu; korumalı ve
+            // yükseltilmiş süreçlerde bu her yenilemede bir Win32Exception atışı
+            // üretiyordu (VS ilk şans gürültüsü). ProcessPathResolver önce
+            // PROCESS_QUERY_LIMITED_INFORMATION'ı dener.
+            var path = ProcessPathResolver.Resolve(pid) ?? "";
 
             var display = name;
             if (path.IsNotEmpty())

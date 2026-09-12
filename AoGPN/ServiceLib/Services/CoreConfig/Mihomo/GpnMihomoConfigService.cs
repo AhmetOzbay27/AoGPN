@@ -68,6 +68,17 @@ public sealed record GpnMihomoOptions
     /// oturumlarında WARP dial hataları buradan yakalanır.
     /// </summary>
     public string LogFilePath { get; init; } = "";
+
+    /// <summary>
+    /// İleri Düzey Gaming DNS — sniffing: TUN içinden geçen bağlantıların
+    /// gerçek hedefi (HTTP Host / TLS SNI) ilk paketten okunur ve hedef
+    /// yeniden yazılır (sing-box dest_override http/tls karşılığı mihomo
+    /// override-destination). Domain kuralları (launcher bypass vb.) ilk
+    /// pakette eşleşir; oyun istemcisi (LoL Client) ISP DNS'ine bağımlı
+    /// kalmaz. Varsayılan açık — oyun optimizasyonu; kullanıcı Ayarlar →
+    /// Core "Sniffing enabled" ile kapatabilir (CoreConfigHandler bağlar).
+    /// </summary>
+    public bool SniffingEnabled { get; init; } = true;
 }
 
 /// <summary>
@@ -89,6 +100,8 @@ public sealed record GpnMihomoOptions
 ///     - vless-launcher (Çift Bağlantı — bypass düğümü verildiğinde)
 ///                              → type: vless + reality-opts (launcher/auth egress)
 ///   rules:
+///     - IP-CIDR6,::/0,REJECT,no-resolve         (IPv6 kara deliği — ilk kural:
+///                                                 AAAA filtresi + anında ret)
 ///     - DOMAIN-SUFFIX,escapefromtarkov.com,…            (BSG launcher/API alan adları —
 ///       DOMAIN-SUFFIX,battlestategames.com,…            her zaman launcher-egress,
 ///       DOMAIN-SUFFIX,tarkov.com,…                      en üstte — UI'dan bağımsız;
@@ -115,6 +128,23 @@ public sealed class GpnMihomoConfigService
 
     /// <summary>WG proxy adı — rota "vpn" hedefleri buraya gider.</summary>
     public static string WireGuardProxyName(GpnServerProfile server) => $"wg-{server.ServerId}";
+
+    /// <summary>
+    /// IPv6 kara deliği (blackhole) kuralı — kural listesinin EN BAŞINA yazılır:
+    /// AAAA yanıtları dns.ipv6:false ile filtrelendiği için istemciler zaten
+    /// anında IPv4'e düşer; yine de TUN'a ulaşan her IPv6 hedefi (sabit IP'li
+    /// istemciler, önbellekte kalan AAAA kayıtları) first-match-wins ile ANINDA
+    /// REJECT edilir — zaman aşımı (timeout) yerine anında ret, dışarı çıkış yok.
+    /// </summary>
+    public const string Ipv6BlackholeRule = "IP-CIDR6,::/0,REJECT,no-resolve";
+
+    /// <summary>
+    /// Tünel dışı trafiğin yerel çözümü: bu alan adları sistem çözümleyicisine
+    /// (nameserver-policy → system) ve fake-ip havuzunun DIŞINA (fake-ip-filter)
+    /// gider — yerel ağ cihazları gerçek IP ile yanıtlanır, 198.18.x.x fake-ip'e
+    /// düşmez.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> LocalDnsDomains = ["localhost", "+.local", "+.lan"];
 
     /// <summary>WARP SOCKS5 proxy adı — rota "warp" hedefleri buraya gider (legacy).</summary>
     public const string WarpProxyName = "warp-socks";
@@ -295,7 +325,26 @@ public sealed class GpnMihomoConfigService
             ["mode"] = "rule",
             ["ipv6"] = false,
             ["allow-lan"] = false,
-            ["find-process-mode"] = "always",
+            // find-process-mode: "always" DEĞİL "strict" (oyun/gecikme optimizasyonu).
+            //
+            // "always" her bağlantı için sahibi süreci çözer (tam yol taraması +
+            // kernel süreç sorgusu) — oyun trafiğinde bağlantı başına ölçülebilir
+            // CPU ve ilk-paket gecikmesi ekler. "strict" ise süreci YALNIZCA bir
+            // PROCESS-NAME/PROCESS-PATH kuralı eşleşme için gerektirdiğinde çözer.
+            // Bu config'te süreç kuralları zaten var (oyun → wg-<id>, launcher →
+            // WARP/VLESS egress), yani ayırım davranışı BİREBİR aynı kalır; kural
+            // gerektirmeyen bağlantılarda ise süreç araması tamamen atlanır.
+            ["find-process-mode"] = "strict",
+            // tcp-concurrent: çok adresli hedeflerde (dual-stack / CDN) TCP
+            // bağlantısı adresleri sırayla değil BİRLİKTE dener ve ilk yanıt vereni
+            // kullanır — ölü bir adresin zaman aşımını beklemez. İlk paket
+            // gecikmesini düşürür; TUN + fake-ip yolunda davranışı değiştirmez.
+            ["tcp-concurrent"] = true,
+            // unified-delay: gecikme ölçümünü tam el sıkışma yerine ilk bayt
+            // üzerinden raporla. Arayüzdeki/dashboard'daki "ping" değeri gerçek
+            // UDP/TCP RTT'yi yansıtır — oyun odaklı karşılaştırmada yanıltıcı
+            // "el sıkışma süresi" gösterimini engeller. Yönlendirmeyi değiştirmez.
+            ["unified-delay"] = true,
             ["log-level"] = options.LogLevel,
         };
 
@@ -325,7 +374,12 @@ public sealed class GpnMihomoConfigService
             ["device"] = options.TunDevice,
             ["auto-route"] = options.AutoRoute,
             ["auto-detect-interface"] = false,
-            ["mtu"] = ResolveMtu(server, options),
+            ["mtu"] = ResolveTunMtu(options),
+            // Loopback TUN'a ASLA düşmesin: auto-route /1 rotaları 127.0.0.0/8'i de
+            // yakalar; uygulamanın kendi SOCKS'una (127.0.0.1:10808) bağlantısı o
+            // zaman tünel içine girip fake-ip'e çevrilir (loglarda
+            // "1.0.0.127:10808 i/o timeout" / SSL EOF) — indirmeler tıkanır.
+            ["route-exclude-address"] = new List<string> { "127.0.0.0/8" },
         };
 
         // Oturum sürekliliği: seçili düğüm (store-selected) ve fake-ip eşlemesi
@@ -338,8 +392,24 @@ public sealed class GpnMihomoConfigService
             ["store-fake-ip"] = true,
         };
 
+        // İleri Düzey Gaming DNS — sniffing: bağlantı hedefi anında çözülür
+        // (HTTP Host / TLS SNI ilk paketten okunur ve yeniden yazılır); domain
+        // kuralları (launcher bypass vb.) gecikmesiz eşleşir. Mihomo karşılığı
+        // sing-box'ın sniffing dest_override: [http, tls] ayarıdır.
+        if (options.SniffingEnabled)
+        {
+            root["sniffing"] = new Dictionary<string, object?>
+            {
+                ["enable"] = true,
+                ["override-destination"] = true,
+            };
+        }
+
         // DNS — fake-ip + hijack: TUN içinden geçen sorgular yakalanır, uygulamalar
         // ISP'ye domain sızdırmaz; PROCESS/DOMAIN kuralları bağlantı kurarken işler.
+        // İki yönlü ayrım: oyun/tünel trafiği uzak DNS'ten (saf IP'ler TCP'ye
+        // çevrilir — UDP parça kaybına duyarsız, MTU 1280'de büyük yanıtlar
+        // parçalanmaz), tünel dışı yerel ağ alan adları sistem çözümleyicisinden.
         if (options.DnsEnabled)
         {
             var ns = options.DnsNameservers.Count > 0 ? options.DnsNameservers : new[] { "1.1.1.1", "8.8.8.8" };
@@ -360,7 +430,11 @@ public sealed class GpnMihomoConfigService
                 ["enhanced-mode"] = options.DnsEnhancedMode,
                 ["fake-ip-range"] = options.FakeIpRange,
                 ["default-nameserver"] = new List<string>(defaultNs),
-                ["nameserver"] = new List<string>(ns),
+                ["nameserver"] = ns.Select(AsTcpNameserver).ToList(),
+                // Yerel ağ alan adları uzak çözüme GİTMEZ — sistem çözümleyicisi
+                // (tünel dışı trafik için Local DNS) ve gerçek IP yanıtı.
+                ["nameserver-policy"] = LocalDnsDomains.ToDictionary(d => d, _ => (object?)"system"),
+                ["fake-ip-filter"] = new List<string>(LocalDnsDomains),
             };
         }
         else
@@ -556,7 +630,14 @@ public sealed class GpnMihomoConfigService
         }
 
         // ── rules ──
-        var clashRules = new List<string>();
+        var clashRules = new List<string>
+        {
+            // IPv6 kara deliği — EN BAŞTA: dns.ipv6:false AAAA yanıtlarını filtreler
+            // (istemci anında IPv4'e düşer, LoL Client zaman aşımı biter); TUN'a
+            // ulaşan her IPv6 hedefi (sabit IP'li / önbellekli AAAA) anında REJECT
+            // edilir — timeout yok, dışarı çıkış yok.
+            Ipv6BlackholeRule,
+        };
         // Launcher bypass domainleri (Ayarlar → GPN paneli kaldırıldı ancak eski
         // kayıtlar çalışmaya devam eder) first-match-wins ile erken eşleşir:
         // launcher/auth trafiği süreç kuralından bağımsız olarak kendi egress'inden
@@ -932,6 +1013,16 @@ public sealed class GpnMihomoConfigService
         => IPAddress.TryParse(server.Trim(), out _);
 
     /// <summary>
+    /// nameserver girişini tünel-içi çözüm için TCP'ye çevirir: saf IP'ler
+    /// <c>tcp://&lt;ip&gt;</c> biçimine getirilir (UDP parçalanma/kayıp riski yok —
+    /// MTU 1280'de büyük DNS yanıtları güvenle taşınır), şema'lı girişler
+    /// (udp/tls/https/quic/system) olduğu gibi geçer. default-nameserver
+    /// (bootstrap) saf IP kalır — mihomo DoH/TLS sunucu adını onunla çözer.
+    /// </summary>
+    internal static string AsTcpNameserver(string entry)
+        => IsPlainIpAddress(entry) ? $"tcp://{entry.Trim()}" : entry;
+
+    /// <summary>
     /// Uygulamanın DNS alanlarını (RemoteDNS vb.) mihomo nameserver listesine
     /// çevirir: sing-box ile aynı ayırıcılar (',' veya ';'), mihomo tarafından
     /// desteklenen biçimler korunur (saf IP, udp/tcp/tls/quic/https/dhcp URL,
@@ -981,15 +1072,32 @@ public sealed class GpnMihomoConfigService
         return domain.TrimEnd('.');
     }
 
+    /// <summary>
+    /// TUN arayüzünün MTU'su: yalnızca kullanıcı TUN ayarından gelir (options.Mtu,
+    /// CoreConfigHandler tarafından GPN yol sınırına kırpılmıştır); sunucu profiline
+    /// bağlı değildir. 0/geçersiz → önerilen GpnRecommendedMtu.
+    /// </summary>
+    private static int ResolveTunMtu(GpnMihomoOptions options)
+        => options.Mtu is > 0 && options.Mtu.Value <= Global.GpnRecommendedMtu
+            ? options.Mtu.Value
+            : Global.GpnRecommendedMtu;
+
+    /// <summary>
+    /// WireGuard outbound'unun MTU'su: EN KORUMACI değer kazanır — kullanıcı TUN
+    /// ayarı (options.Mtu, yol sınırına kırpılmış) ile sunucu profili MTU'su
+    /// (GPN sunucu düzenleme penceresi) arasından küçük olanı kullanılır; ikisi de
+    /// yoksa önerilen değer. MTU'da düşük = daha az parçalanma riski (canlı ölçüm:
+    /// DF paketleri ~1400 bayta kadar geçiyor; üst sınır 1360).
+    /// </summary>
     private static int ResolveMtu(GpnServerProfile server, GpnMihomoOptions options)
     {
-        if (options.Mtu is > 0)
-        {
-            return options.Mtu.Value;
-        }
-        return server.Mtu > 0 && server.Mtu <= Global.GpnRecommendedMtu
+        var userMtu = options.Mtu is > 0 && options.Mtu.Value <= Global.GpnRecommendedMtu
+            ? options.Mtu.Value
+            : Global.GpnRecommendedMtu;
+        var serverMtu = server.Mtu > 0 && server.Mtu <= Global.GpnRecommendedMtu
             ? server.Mtu
             : Global.GpnRecommendedMtu;
+        return Math.Min(userMtu, serverMtu);
     }
 
     /// <summary>

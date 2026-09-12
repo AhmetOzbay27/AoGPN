@@ -1,0 +1,89 @@
+<Window
+    x:Class="AoGPN.Views.UpdateAvailableWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+    Width="620"
+    MaxHeight="620"
+    SizeToContent="Height"
+    Style="{StaticResource WindowGlobal}"
+    ResizeMode="NoResize"
+    ShowInTaskbar="True"
+    Topmost="True"
+    WindowStartupLocation="CenterScreen"
+    mc:Ignorable="d">
+
+    <DockPanel Margin="{StaticResource Margin8}">
+
+        <!--  Eylem düğmeleri: onay yalnızca indirme BİTİNCE etkinleşir.  -->
+        <StackPanel
+            Margin="{StaticResource Margin4}"
+            HorizontalAlignment="Right"
+            DockPanel.Dock="Bottom"
+            Orientation="Horizontal">
+            <Button
+                x:Name="btnLater"
+                MinWidth="120"
+                Margin="{StaticResource MarginLeftRight8}"
+                Click="OnLaterClick"
+                Content="Daha Sonra"
+                Style="{StaticResource DefButton}" />
+            <Button
+                x:Name="btnInstall"
+                MinWidth="160"
+                Click="OnInstallClick"
+                Content="Şimdi Güncelle"
+                IsDefault="True"
+                IsEnabled="False"
+                Style="{StaticResource DefButton}" />
+        </StackPanel>
+
+        <StackPanel>
+
+            <TextBlock
+                x:Name="txtTitle"
+                FontSize="20"
+                FontWeight="SemiBold"
+                Text="Yeni sürüm hazır" />
+
+            <TextBlock
+                x:Name="txtVersion"
+                Margin="0,6,0,0"
+                Opacity="0.85"
+                Text="—" />
+
+            <!--  Sürüm notları (release body; düz metin olarak gösterilir).  -->
+            <Border
+                Margin="0,12,0,0"
+                Padding="10"
+                Background="{DynamicResource MaterialDesignCardBackground}"
+                CornerRadius="6">
+                <ScrollViewer
+                    MaxHeight="260"
+                    VerticalScrollBarVisibility="Auto"
+                    materialDesign:ScrollViewerAssist.IsAutoHideEnabled="True">
+                    <TextBlock
+                        x:Name="txtNotes"
+                        TextWrapping="Wrap" />
+                </ScrollViewer>
+            </Border>
+
+            <ProgressBar
+                x:Name="progress"
+                Height="4"
+                Margin="0,14,0,0"
+                IsIndeterminate="True"
+                Value="0" />
+
+            <TextBlock
+                x:Name="txtStatus"
+                Margin="0,8,0,0"
+                Opacity="0.8"
+                Text="Yeni sürüm indiriliyor…"
+                TextWrapping="Wrap" />
+
+        </StackPanel>
+    </DockPanel>
+</Window>

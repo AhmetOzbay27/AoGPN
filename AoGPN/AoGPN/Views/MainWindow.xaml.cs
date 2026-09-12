@@ -40,9 +40,21 @@ public partial class MainWindow : IDashboardBridge
 
     private readonly CancellationTokenSource _webViewLifetime = new();
     private readonly SemaphoreSlim _connectionToggleGate = new(1, 1);
-    private Task? _connectionLifecycleTask;
+    // Bağlan/kes/mod değişimi komutlarının TEK kapısı (ConnectionCommandGate):
+    // kapı meşgulken tıklamalar asla sessizce düşmez — en yeni niyet saklanır,
+    // kapı boşalınca UI thread'de tam olarak bir kez işlenir. (System-proxy
+    // komutları eski _connectionToggleGate'i kullanmaya devam eder.)
+    private readonly ConnectionCommandGate _commandGate = null!;
+    private readonly ConnectionLifecycleSupervisor _lifecycleSupervisor;
     private TelemetryDashboardViewModel? _telemetryDashboard;
     private bool _webViewReady;
+
+    /// <summary>
+    /// WebView2 denetleyicisi kapandıktan sonra dokunmayı kesen kalıcı kilit (bkz.
+    /// <see cref="WebViewTouchLatch"/>). Denetleyici nesnesi null olmadığı için
+    /// tek başına null kontrolü yeterli değildir.
+    /// </summary>
+    private readonly WebViewTouchLatch _webViewLatch = new();
     private bool _connectionState;
     private bool _connectionStarting;
     // Otomatik çekirdek kurtarma (beklenmedik çıkış → yeniden başlatma) penceresinde
@@ -50,6 +62,17 @@ public partial class MainWindow : IDashboardBridge
     // kurtarmasının başladığını CoreHealthChanged üzerindeki Degraded+Recovering
     // olayı işaretler (bkz. OnMainCoreHealthChangedAsync). 0/1 Volatile bayrak.
     private int _autoRecovering;
+
+    // GPN WG oturumunun gerçekten çıktığı sunucu (koordinatör snapshot'ından).
+    // Çıkış-ülkesi doğrulamasında mihomo düğümü yerine BU kullanılır: WG tüneli
+    // birincil egress'tir, mihomo düğüm seçimi ayrı bir katmandır (bkz. CheckIpAsync).
+    private ServiceLib.Services.GpnServerProfile? _activeGpnServer;
+
+    // Bağlantı-SONRASI gerçek ping ölçümü oturum başına yalnızca BİR kez koşar.
+    // Yumuşak düğüm geçişi ve failover da "Connected" yayınlar; ağır ölçümü her
+    // düğüm değişiminde tekrarlamak taze tünelin ilk saniyelerini boşa meşgul eder
+    // (bkz. docs/gaming-connect-performance-plan.md A4). Kopmada sıfırlanır.
+    private bool _realPingAfterMeasured;
 
 
     // WARP egress otomatik kurtarma — WARP dial sağlığı faulted olunca aktif WG
@@ -145,6 +168,11 @@ public partial class MainWindow : IDashboardBridge
             });
         _dashboardHost = new DashboardHost(WebView, AppContext.BaseDirectory);
         _dashboardMessageDispatcher = new DashboardMessageDispatcher(this);
+        // Bağlantı komut kapısı: kuyruklanan komutlar UI thread'de koşar — WebView2
+        // ve ViewModel erişimi UI thread gerektirir (Task.Run ile yeniden dağıtım
+        // COMException/wrong-thread üretip kuyruklu tıklamayı sessizce düşürüyordu).
+        _commandGate = new ConnectionCommandGate(
+            action => Dispatcher.InvokeAsync(action, DispatcherPriority.Background).Task.Unwrap());
         _settingsService = new DashboardSettingsService(
             executeScript: ExecuteScriptSafelyAsync,
             isWebViewReady: () => _webViewReady,
@@ -174,6 +202,23 @@ public partial class MainWindow : IDashboardBridge
             getActiveView: () => _activeView,
             getWebViewToken: () => _webViewLifetime.Token,
             getBypassEgressController: () => _bypassEgressController);
+        _lifecycleSupervisor = new ConnectionLifecycleSupervisor(
+            runOnUiThread: action => Dispatcher.InvokeAsync(action, DispatcherPriority.Background).Task.Unwrap(),
+            readConnected: () => Volatile.Read(ref _connectionState),
+            readLastTunnelVerified: () => _lastTunnelVerified,
+            synchronizeConnectionState: () => SynchronizeConnectionStateAsync(),
+            pushRuleDrift: () => PushRuleDriftAsync(),
+            checkIp: CheckIpAsync,
+            suggestRealityCoreFallback: SuggestRealityCoreFallbackAsync,
+            updateTrayStatus: () =>
+            {
+                UpdateTrayStatus();
+                return Task.CompletedTask;
+            },
+            pushSystemProxyState: () => PushSystemProxyStateAsync(),
+            pushMonitorSnapshot: () => PushMonitorSnapshotAsync(),
+            pushNodeInfo: () => PushNodeInfoAsync(),
+            synchronizeWindowState: SynchronizeWindowStateAsync);
         _dashboardPublisher = new AoGPN.Services.DashboardPublisher(ExecuteScriptSafelyAsync);
         _connectionCoordinator.SnapshotChanged += snapshot =>
         {
@@ -862,6 +907,21 @@ public partial class MainWindow : IDashboardBridge
             // Ağ/DB ısınması için kısa bir gecikmeyle arka planda koşar (best-effort).
             _ = MeasureRealPingAsync(isBefore: true, delay: TimeSpan.FromSeconds(4));
 
+            // Yeni sürüm denetimi: arayüz göründükten SONRA, arka planda. Yeni sürüm
+            // varsa paket indirilir ve indirme bitince kullanıcıya onay sorulur.
+            // Bağlantı kurulumunu, yönlendirmeyi ve yakalama katmanını etkilemez.
+            _ = CheckForAppUpdateAsync();
+
+            // Faz 3 — açılış ön yüklemesi: GPN sunucu ölçümleri ısıtılır ve çekirdek
+            // ikilileri kontrol edilir. Pahalı ama bağlanmadan bağımsız işler burada
+            // yapılır; bağlanma anı yalnızca bağlantı işiyle meşgul kalır.
+            _ = new StartupPreflight(
+                shouldWarmGpnProbes: () => ViewModel?.IsGpnFlowConfigured() == true,
+                warmGpnProbeCache: ct => ViewModel?.WarmGpnProbeCacheAsync(ct) ?? Task.CompletedTask,
+                log: DiagLog.Write,
+                notify: message => NoticeManager.Instance.Enqueue(message))
+                .RunAsync(_webViewLifetime.Token);
+
         }
         catch (Exception ex)
         {
@@ -874,6 +934,85 @@ public partial class MainWindow : IDashboardBridge
             {
                 Logging.SaveLog("AoGPN dashboard startup script failed", ex);
             }
+        }
+    }
+
+    /// <summary>
+    /// Açılışta (arayüz göründükten sonra) GitHub Releases API'sinden yeni sürüm
+    /// denetler; yeni sürüm varsa paketi arka planda indirir ve indirme BİTİNCE
+    /// kullanıcıya onay sorar. Onay verilirse <c>AoGPN.Updater</c> başlatılır ve
+    /// uygulama DÜZENLİ kapanış yolundan (çekirdeği durdur → proxy temizle →
+    /// config flush) sonlandırılır; güncelleyici bu kapanışı bekleyip dosyaları
+    /// değiştirir ve uygulamayı yeniden başlatır.
+    ///
+    /// Hiçbir aşama bağlantıyı, yönlendirmeyi veya yakalama katmanını etkilemez:
+    /// yalnızca bir HTTPS GET, bir indirme ve bir süreç başlatmadır. Tüm hatalar
+    /// yutulur — güncelleme denetimi asla açılışı veya bağlantıyı bozmaz.
+    /// </summary>
+    private async Task CheckForAppUpdateAsync()
+    {
+        if (_isClosing)
+        {
+            return;
+        }
+
+        try
+        {
+            var update = await AppUpdateChecker.Instance.CheckAsync().ConfigureAwait(true);
+            if (update is null || !update.IsNewer)
+            {
+                return;
+            }
+
+            Logging.SaveLog($"[AppUpdate] Yeni sürüm bulundu: {update.Tag} (yüklü: {Utils.GetVersionInfo()})");
+
+            // Platforma uyan yayın varlığı (asset) yoksa indirilecek bir şey de
+            // yoktur: kullanıcıya tamamlanamayacak bir güncelleme sunmak yerine
+            // durumu yalnızca günlüğe yaz. Sürüm yayınlanırken beklenen dosya adı
+            // kullanılmalıdır (ör. AoGPN-windows-64.zip).
+            if (update.AssetUrl.IsNullOrEmpty())
+            {
+                Logging.SaveLog($"[AppUpdate] {update.Tag} sürümünde platforma uygun paket bulunamadı "
+                    + $"(beklenen: {AppUpdateChecker.ExpectedAssetName() ?? "desteklenmeyen platform"}) — "
+                    + "güncelleme sunulmuyor.");
+                return;
+            }
+
+            // Güncelleyici yan uygulaması kurulum klasöründe yoksa (ör. eski bir
+            // elle kurulum) güncelleme sunulmaz: dosyaları yerine koyacak bileşen
+            // olmadan indirme yapmak yalnızca boşa bant genişliği olurdu.
+            if (AppUpdateInstaller.ResolveUpdaterPath() is null)
+            {
+                Logging.SaveLog($"[AppUpdate] {Utils.GetExeName(AppUpdateInstaller.UpdaterExeName)} "
+                    + "bulunamadı — güncelleme kullanıcıya sunulmuyor.");
+                return;
+            }
+
+            var installer = new AppUpdateInstaller();
+            var window = new UpdateAvailableWindow(update, installer) { Owner = this };
+            window.StartDownload();
+            window.ShowDialog();
+
+            if (!window.InstallRequested || window.DownloadedZipPath is not { Length: > 0 } zipPath)
+            {
+                return;
+            }
+
+            if (!installer.TryLaunchUpdater(zipPath, Environment.ProcessId, out var error))
+            {
+                NoticeManager.Instance.Enqueue($"Güncelleme başlatılamadı: {error}");
+                return;
+            }
+
+            // Güncelleyici artık bu sürecin PID'sini bekliyor. Dosyaların üzerine
+            // yazılabilmesi için çekirdeği durduran ve proxy'yi temizleyen düzenli
+            // kapanış yolundan çık.
+            _allowClose = true;
+            await ExitApplicationSafelyAsync();
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("[AppUpdate] Güncelleme denetimi hatası", ex);
         }
     }
 
@@ -926,30 +1065,41 @@ public partial class MainWindow : IDashboardBridge
     /// <summary>
     /// Applies the same mode transition used by the native ConnectionView. The command
     /// is serialized so repeated clicks cannot overlap rule writes or core reloads.
+    /// Kapı meşgulse tıklama asla sessizce düşmez: <see cref="ConnectionCommandGate"/>
+    /// en yeni niyeti saklar ve kapı boşalınca tam bir kez, UI thread'de işler.
+    /// <paramref name="displayedConnected"/> isteği gönderen arayüzün ekranda
+    /// GÖSTERDİĞİ bağlantı durumudur (dashboard <c>toggle_connection</c> yükü):
+    /// verildiğinde bağlan/kes yönü canlı durumdan değil bu niyetten türetilir
+    /// (bkz. <see cref="ConnectionTogglePolicy"/>).
     /// </summary>
-    public async Task ToggleConnectionAsync(string requestedMode, string transport)
+    public Task ToggleConnectionAsync(
+        string requestedMode,
+        string transport,
+        bool? displayedConnected = null)
+        => _commandGate.RunAsync(
+            "toggle",
+            () => ToggleConnectionCoreAsync(requestedMode, transport, displayedConnected));
+
+    private async Task ToggleConnectionCoreAsync(
+        string requestedMode,
+        string transport,
+        bool? displayedConnected)
     {
-        if (!await _connectionToggleGate.WaitAsync(0))
-        {
-            return;
-        }
-
-        // Reject any connect/disconnect while the real exit path is running.
-        // Otherwise a connect clicked during the (multi-second) exit teardown
-        // launches a brand-new core that the exit immediately tears down again
-        // — observed live: exit began, user clicked connect, a fresh sing-box
-        // was launched and then killed, and the user saw "connected but no
-        // connectivity" with a ~2 minute unresponsive window.
-        if (_trayBehavior.IsExitInProgress)
-        {
-            Logging.SaveLog("ToggleConnection ignored: application exit already in progress.");
-            return;
-        }
-
-        DiagLog.Write($"STATE ui toggle requested mode={requestedMode} transport={transport} actualConnected={ReadActualConnectionState()} autoRecovering={Volatile.Read(ref _autoRecovering) == 1}");
-
         try
         {
+            // Reject any connect/disconnect while the real exit path is running.
+            // Otherwise a connect clicked during the (multi-second) exit teardown
+            // launches a brand-new core that the exit immediately tears down again
+            // — observed live: exit began, user clicked connect, a fresh sing-box
+            // was launched and then killed, and the user saw "connected but no
+            // connectivity" with a ~2 minute unresponsive window.
+            if (_trayBehavior.IsExitInProgress)
+            {
+                Logging.SaveLog("ToggleConnection ignored: application exit already in progress.");
+                return;
+            }
+
+            DiagLog.Write($"STATE ui toggle requested mode={requestedMode} transport={transport} actualConnected={ReadActualConnectionState()} autoRecovering={Volatile.Read(ref _autoRecovering) == 1} displayedConnected={displayedConnected?.ToString() ?? "-"}");
             // Otomatik kurtarma (çekirdek çökmesi → yeniden başlatma) penceresinde
             // gelen toggle, "Bağlan" isteği DEĞİL kullanıcının kurtarmayı iptal
             // edip temiz kesme isteğidir — recovery Ready dönmeden gerçek durumu
@@ -967,7 +1117,7 @@ public partial class MainWindow : IDashboardBridge
                     await ApplyConnectionModeAsync(cancelViewModel, SplitTunnelViewModel.ModeOff);
                 }
                 DiagLog.Write("STATE ui disconnect (auto-recovery cancelled by user)");
-                return; // finally kapıyı bırakır
+                return;
             }
 
             var connectionViewModel = ViewModel?.ConnectionViewModel;
@@ -976,19 +1126,83 @@ public partial class MainWindow : IDashboardBridge
                 return;
             }
 
-            if (ReadActualConnectionState())
+            // Kullanıcının EKRANDA GÖRDÜĞÜ durum (dashboard yükü) bildirilmişse
+            // niyet ondan türetilir ve canlı durum bu niyeti EZEMEZ: açılışta tünel
+            // arka planda kurulurken arayüz hâlâ "Bağlan" gösterirken gelen tıklama
+            // eskiden "kes"e dönüşüp taze tüneli yıkıyordu (canlı gözlenen
+            // "bağlandı → Bağlan'a döndü → tekrar basınca bağlandı").
+            var intent = ConnectionTogglePolicy.IntentFromDisplayedState(displayedConnected);
+            var effectiveConnected = ReadEffectiveConnectionState();
+            var connectionStarting = Volatile.Read(ref _connectionStarting);
+            if (intent is { } knownIntent)
+            {
+                var toggleAction = ConnectionTogglePolicy.Decide(knownIntent, effectiveConnected, connectionStarting);
+                if (toggleAction == ConnectionToggleAction.NoOp)
+                {
+                    // Niyet zaten karşılanmış: yeni bir geçiş başlatma ve kullanıcının
+                    // gördüğü durumu bozacak bir yayın yapma (süren geçiş akışı kendi
+                    // durumunu yayınlar).
+                    DiagLog.Write($"STATE ui toggle no-op (intent={knownIntent} displayed={displayedConnected} effective={effectiveConnected} starting={connectionStarting})");
+                    return;
+                }
+                effectiveConnected = toggleAction == ConnectionToggleAction.Disconnect;
+            }
+
+            // Bağlantı hâlâ kurulurken gelen yeni toggle (niyet BİLDİRİLMEMİŞ — eski
+            // gönderen, tepsi, iç yeniden bağlanma): kullanıcı vazgeçti. Üst üste
+            // ikinci bir bağlanma SIRALAMAK yerine süregiden denemeyi iptal edip
+            // temiz kesme uygula — "tıkladım ama olmuyor" hissinin ve üst üste
+            // ConnectAsync yarışının ana kaynağıydı. Niyet bildirilmişse bu dal
+            // devre dışıdır: "bağlan" isteği uçuştaki bağlanmayı iptal etmez,
+            // "kes" isteği aşağıdaki deterministik kesme dalından yürür.
+            if (intent is null && connectionStarting)
             {
                 _connectionStarting = false;
+                Volatile.Write(ref _connectionState, false);
+                await SendConnectionStateAsync();
+                connectionViewModel.Transport = "";
+                await PersistConnectionModeAsync(connectionViewModel, SplitTunnelViewModel.ModeOff);
+                await ApplyConnectionModeAsync(connectionViewModel, SplitTunnelViewModel.ModeOff);
+                VpnSessionLog.EndSession("VPN disconnect");
+                DiagLog.Write("STATE ui cancel in-flight connect + disconnect (user toggle)");
+                return;
+            }
+
+            // Niyet bildirilmemişse (yukarıdaki dal atlandı) karar canlı duruma
+            // dayanır ve yalnızca çekirdek sağlığına bakmaz: GPN koordinatörü canlı
+            // (soft geçiş) veya son yayınlanan durum "bağlı" ise gerçek bir kesme
+            // isteğidir — aksi halde bayat görünüm kesmeyi "bağlan"a çevirirdi.
+            if (effectiveConnected)
+            {
+                // Deterministik kesme: önce kullanıcının niyetini YAYINLA (buton
+                // tıklamayla birlikte "Bağlan"a döner), sonra teardown'ı yürüt.
+                // _connectionStarting geçiş bayrağı teardown BOYUNCA set kalır —
+                // 2 sn'lik supervisor, çekirdek hâlâ kapanırken "bağlı" yeniden
+                // yayınlayamaz (BAĞLANDI→Bağlan→BAĞLANDI titremesi ve "tıklama
+                // yok sayıldı" hissi bu yüzden oluşuyordu; aradaki tıklamalar da
+                // kesme yerine YENİDEN BAĞLANMA tetikliyordu).
+                _connectionStarting = true;
+                Volatile.Write(ref _connectionState, false);
                 // Disconnect: release capture and clear any transport override so
                 // ModeOff maps to the clean (no TUN, no system proxy) default.
                 connectionViewModel.Transport = "";
                 DiagLog.Write("STATE ui disconnect (user toggle)");
+                await SendConnectionStateAsync();
+                // Kullanıcı kararını ÖNCE kalıcılaştır — ApplyCmd doğrulama/izin
+                // kapısında düşse bile kalıcı mod bayat "GPN" olarak geri dönmesin.
+                await PersistConnectionModeAsync(connectionViewModel, SplitTunnelViewModel.ModeOff);
                 await ApplyConnectionModeAsync(connectionViewModel, SplitTunnelViewModel.ModeOff);
 
                 // VPN oturum günlüğünü kapat (aktif değilse no-op — GPN bağlantı
                 // kesmesi VPN bloğunu etkilemez).
                 VpnSessionLog.EndSession("VPN disconnect");
                 DiagLog.Write("VPN_LOG disconnect");
+
+                // Teardown tamamlandı: geçiş bayrağını kapat ve GERÇEK durumu yayınla.
+                // Supervisor artık "bağlı" yayınlayabilir — ama teardown bittiği için
+                // gerçek durum zaten kesiktir (tutarlı, tek yönlü geçiş).
+                _connectionStarting = false;
+                await SynchronizeConnectionStateAsync(forcePublish: true);
             }
             else
             {
@@ -1009,6 +1223,11 @@ public partial class MainWindow : IDashboardBridge
                     VpnSessionLog.BeginSession("VPN connect");
                     DiagLog.Write($"VPN_LOG connect start transport={effectiveTransport}");
                 }
+
+                // Kullanıcı kararı önce kalıcılaşır ve yayınlanır: geçiş sürerken
+                // bile eski mod echoları ("GPN'e geri dönüyor" algısı) yeni seçimi
+                // ezemez; sonraki Reload'lar da aynı kararla akışı sürdürür.
+                await PersistConnectionModeAsync(connectionViewModel, targetMode);
 
                 // The protocol strategy is a real preference: if the active node
                 // cannot speak the chosen protocol, switch to the best matching node
@@ -1045,7 +1264,6 @@ public partial class MainWindow : IDashboardBridge
         finally
         {
             _connectionStarting = false;
-            _connectionToggleGate.Release();
         }
     }
 
@@ -1056,17 +1274,15 @@ public partial class MainWindow : IDashboardBridge
     /// ViewModel koordinatörünü kullanır). Bağlantı kesme, çekirdek geçişini
     /// temizler.
     /// </summary>
-    public async Task RunGpnConnectAsync()
+    public Task RunGpnConnectAsync()
+        => _commandGate.RunAsync("gpn_connect", RunGpnConnectCoreAsync);
+
+    private async Task RunGpnConnectCoreAsync()
     {
-        if (!await _connectionToggleGate.WaitAsync(0))
-        {
-            return;
-        }
-
-        DiagLog.Write($"STATE ui GPN connect requested actualConnected={ReadActualConnectionState()}");
-
         try
         {
+            DiagLog.Write($"STATE ui GPN connect requested actualConnected={ReadActualConnectionState()}");
+
             // Kurtarma penceresinde yeni bağlantı isteği görmezden gelinir (buton
             // zaten kilitli — tray/hotkey için koruma).
             if (Volatile.Read(ref _autoRecovering) == 1)
@@ -1086,7 +1302,20 @@ public partial class MainWindow : IDashboardBridge
                 _connectionStarting = true;
                 await SendConnectionStateAsync();
                 await viewModel.GpnConnectCmd.Execute().ToTask();
-                await WaitForCoreLeavingStartingAsync();
+                // GPN butonu bağlıyken ikinci basış = toggle-kesme: koordinatör
+                // Disconnected'a geçti, çekirdek durduruldu — "çekirdek Ready olana
+                // dek bekle" burada anlamsız (Stopped durumuna asla Ready demez ve
+                // 20 sn boşa dönerdi). Mod değişimi/bağlanma akışlarında koordinatör
+                // Disconnected'a GEÇMEZ, bu yüzden bu erken-çıkış yalnızca kesmeyi
+                // etkiler; GPN→VPN geçişi beklemesini bozmaz.
+                if (ViewModel?.GpnCoordinatorSnapshot is { State: GpnConnectionState.Disconnected })
+                {
+                    DiagLog.Write("STATE ui GPN toggle-disconnect settled — core wait skipped");
+                }
+                else
+                {
+                    await WaitForCoreLeavingStartingAsync();
+                }
             }
             _connectionStarting = false;
             await SynchronizeConnectionStateAsync(forcePublish: true);
@@ -1098,7 +1327,6 @@ public partial class MainWindow : IDashboardBridge
         finally
         {
             _connectionStarting = false;
-            _connectionToggleGate.Release();
         }
     }
 
@@ -1240,17 +1468,15 @@ public partial class MainWindow : IDashboardBridge
     /// Changes between the real VPN and GPN routing modes while already connected.
     /// When disconnected, the frontend keeps the selected mode locally for the next connect.
     /// </summary>
-    public async Task SetConnectionModeAsync(string mode)
-    {
-        if (!await _connectionToggleGate.WaitAsync(0))
-        {
-            return;
-        }
+    public Task SetConnectionModeAsync(string mode)
+        => _commandGate.RunAsync("set_mode", () => SetConnectionModeCoreAsync(mode));
 
+    private async Task SetConnectionModeCoreAsync(string mode)
+    {
         try
         {
             var connectionViewModel = ViewModel?.ConnectionViewModel;
-            if (connectionViewModel is null || !ReadActualConnectionState())
+            if (connectionViewModel is null || !ReadEffectiveConnectionState())
             {
                 return;
             }
@@ -1264,11 +1490,23 @@ public partial class MainWindow : IDashboardBridge
             var targetMode = mode == "gpn"
                 ? SplitTunnelViewModel.ModeManual
                 : SplitTunnelViewModel.ModeVpn;
+
+            // Karar ÖNCE kalıcılaşır ve yayınlanır: geçiş sürerken bile bayat eski
+            // mod echoları ("sürekli GPN'e geri dönüyor" algısı) kullanıcı seçimini
+            // ezemez; ApplyCmd doğrulama/izin kapısında düşse bile kalıcı mod doğrudur.
+            _connectionStarting = true;
+            await PersistConnectionModeAsync(connectionViewModel, targetMode);
             await ApplyConnectionModeAsync(connectionViewModel, targetMode);
+            // Geçişi çekirdek oturana dek "bağlanıyor"da tut; sonra gerçek durumu yayınla.
+            await WaitForCoreLeavingStartingAsync();
+            _connectionStarting = false;
+            await SynchronizeConnectionStateAsync(forcePublish: true);
+            // Geçiş başarısızsa (GPN seçim/launcher hatası, çekirdek yok) neden kartı.
+            await TryPushConnectionFailureAsync();
         }
         finally
         {
-            _connectionToggleGate.Release();
+            _connectionStarting = false;
         }
     }
 
@@ -1277,29 +1515,25 @@ public partial class MainWindow : IDashboardBridge
     /// Unlike the legacy mode switch, this also accepts "off" while disconnected so
     /// the dashboard can stage a complete routing policy before connecting.
     /// </summary>
-    public async Task SetDashboardModeAsync(string mode)
+    public Task SetDashboardModeAsync(string mode)
+        => mode is not ("off" or "vpn" or "manual")
+            ? Task.CompletedTask
+            : _commandGate.RunAsync("set_split_mode", () => SetDashboardModeCoreAsync(mode));
+
+    private async Task SetDashboardModeCoreAsync(string mode)
     {
-        if (mode is not ("off" or "vpn" or "manual"))
+        var connectionViewModel = ViewModel?.ConnectionViewModel;
+        if (connectionViewModel is null)
         {
             return;
         }
-
-        if (!await _connectionToggleGate.WaitAsync(0))
-        {
-            return;
-        }
-
-        try
-        {
-            var connectionViewModel = ViewModel?.ConnectionViewModel;
-            if (connectionViewModel is null)
-            {
-                return;
-            }
 
             if (mode == "off")
             {
                 connectionViewModel.Transport = "";
+                // Karar önce kalıcılaşır — bağlıyken "kesme" isteği, bağlantısızken
+                // "başlamadan hazırla" aynı yoldan döner ve bayat mod birikmez.
+                await PersistConnectionModeAsync(connectionViewModel, SplitTunnelViewModel.ModeOff);
                 await ApplyConnectionModeAsync(connectionViewModel, SplitTunnelViewModel.ModeOff);
             }
             else
@@ -1319,15 +1553,11 @@ public partial class MainWindow : IDashboardBridge
                 var targetMode = mode == "manual"
                     ? SplitTunnelViewModel.ModeManual
                     : SplitTunnelViewModel.ModeVpn;
+                await PersistConnectionModeAsync(connectionViewModel, targetMode);
                 await ApplyConnectionModeAsync(connectionViewModel, targetMode);
             }
 
-            await PushMonitorSnapshotAsync(force: true);
-        }
-        finally
-        {
-            _connectionToggleGate.Release();
-        }
+        await PushMonitorSnapshotAsync(force: true);
     }
 
     /// <summary>
@@ -1335,20 +1565,16 @@ public partial class MainWindow : IDashboardBridge
     /// native status bar's EnableTun + SysProxyType toggles. While connected the change
     /// is applied immediately; while disconnected it is remembered for the next connect.
     /// </summary>
-    public async Task SetTransportAsync(string transport)
+    public Task SetTransportAsync(string transport)
+        => _commandGate.RunAsync("set_transport", () => SetTransportCoreAsync(transport));
+
+    private async Task SetTransportCoreAsync(string transport)
     {
-        if (!await _connectionToggleGate.WaitAsync(0))
+        var connectionViewModel = ViewModel?.ConnectionViewModel;
+        if (connectionViewModel is null)
         {
             return;
         }
-
-        try
-        {
-            var connectionViewModel = ViewModel?.ConnectionViewModel;
-            if (connectionViewModel is null)
-            {
-                return;
-            }
 
             if (transport == "tun" && !DashboardSettingsService.AllowEnableTun())
             {
@@ -1377,13 +1603,8 @@ public partial class MainWindow : IDashboardBridge
                 await PushSettingsAsync();
             }
 
-            await SynchronizeConnectionStateAsync(forcePublish: true);
-            await PushSystemProxyStateAsync(force: true);
-        }
-        finally
-        {
-            _connectionToggleGate.Release();
-        }
+        await SynchronizeConnectionStateAsync(forcePublish: true);
+        await PushSystemProxyStateAsync(force: true);
     }
 
     /// <summary>
@@ -1852,12 +2073,51 @@ public partial class MainWindow : IDashboardBridge
         await SetSystemProxyModeAsync(SystemProxyPolicy.Toggle(current));
     }
 
+    /// <summary>
+    /// GPN koordinatörü canlıyken (soft geçiş sonrası — koordinatör Connected) veya
+    /// zaten "bağlı" olarak yayınlanmış bir durum varken gerçek bir bağlantı vardır.
+    /// Kesme kararı bu üç kaynağı birden okur; yalnızca çekirdek sağlığına dayanmak,
+    /// 2 sn'lik poll'un bayat "bağlı değil" görüşünün kesmeyi "bağlan"a çevirmesine
+    /// yol açardı (bağlantı kesme butonunun yanıt vermemesi).
+    /// </summary>
+    private bool ReadEffectiveConnectionState()
+        => ReadActualConnectionState() || IsGpnTunnelActive() || Volatile.Read(ref _connectionState);
+
+    /// <summary>
+    /// Kullanıcının bağlantı modu kararını ÖNCE kalıcılaştırır, ViewModel bayrağını
+    /// sessizce eşitler ve gerçek durumu yayınlar. Amaç: ApplyCmd doğrulama/izin
+    /// kapısında düşse bile (kural kaydı hatası, TUN yüksekliği vb.) kalıcı mod bayat
+    /// "eski seçim"de kalmasın — dashboard sonraki poll/echo'da kullanıcının yaptığı
+    /// seçimi gösterir ("sürekli GPN'e geri dönüyor" algısının kaynağı budur).
+    /// </summary>
+    private async Task PersistConnectionModeAsync(
+        SplitTunnelViewModel connectionViewModel,
+        int targetMode)
+    {
+        var config = AppManager.Instance.Config;
+        config.ConnectionItem ??= new();
+        config.ConnectionItem.Mode = targetMode;
+        config.ConnectionItem.Transport = targetMode == SplitTunnelViewModel.ModeOff
+            ? ""
+            : connectionViewModel.Transport is "tun" or "proxy" ? connectionViewModel.Transport : "";
+        await ConfigSaveQueue.SaveAndWaitAsync(config);
+        // VM bayrağı sessizce eşitle — ApplyCmd aşağıda hemen uygulayacağı için
+        // mod-değişim aboneliğinin gecikmeli otomatik uygulamasını tetikleme.
+        connectionViewModel.SetModeSilently(targetMode);
+        await SendConnectionStateAsync();
+    }
+
     private async Task ApplyConnectionModeAsync(
         SplitTunnelViewModel connectionViewModel,
         int targetMode)
     {
         WarnOnForeignTunnelBeforeConnect(targetMode);
-        connectionViewModel.Mode = targetMode;
+        // Modu SESSİZCE eşitle, ardından ApplyCmd hemen uygular. Doğrudan `Mode =`
+        // atanırsa mod aboneliği +800ms'lik debounce'lu İKİNCİ bir auto-apply planlar;
+        // o ikinci apply, az önce kurulan tüneli tekrar yıkabilen fazladan bir
+        // ReloadRequested yayınlardı (VPN→GPN "bazen geçiyor bazen geçmiyor" +
+        // çift ConnectAsync yarışının kaynağı).
+        connectionViewModel.SetModeSilently(targetMode);
         // A real connection is taking over the core; the reload (LoadCore) stops the
         // previous process, including a running proxy-only core. Release ownership so
         // this service never stops the connection's core afterwards.
@@ -1882,15 +2142,27 @@ public partial class MainWindow : IDashboardBridge
                 "TUN mode requires administrator privileges. Relaunch as administrator to enable TUN.");
         }
 
+        // Kullanıcı bağlantıyı KESTİ (ModeOff): GPN tüneli "sıcak" kalmamalı.
+        // Yumuşak uygulayıcı Off vektörünü canlı mihomo'ya yazar (trafik DIRECT)
+        // ama Wintun/TUN adaptörünü, failover izleyicisini ve superset oturumu
+        // yerinde bırakır — "Bağlantıyı Kes" gerçek bir teardown olmalı. Aşağıdaki
+        // proxy-only reconcile, tünel gerçekten inince devreye girer (aynı porta
+        // ikinci çekirdek çakışması olmaz).
+        if (targetMode == SplitTunnelViewModel.ModeOff && ViewModel is { } gpnTeardownVm)
+        {
+            await gpnTeardownVm.StopGpnTunnelIfActiveAsync();
+        }
+
         // Publish the effective state after ApplyCmd has completed. If validation or
         // elevation rejected the change, the persisted mode/core state remains unchanged.
         await SynchronizeConnectionStateAsync(forcePublish: true);
 
         // After a disconnect (or a rejected mode change back to Off) the proxy-only
-        // core may need to come back up so the system proxy keeps working. KESİNTİSİZ
-        // (soft) mod geçişinde — örn. bağlıyken Off'a geçişte — GPN tüneli durmaz ve
-        // hâlâ yerel SOCKS portunu dinler; bu durumda proxy-only çekirdek başlatılmaz
-        // (aynı porta ikinci çekirdek çakışırdı).
+        // core may need to come back up so the system proxy keeps working. Kullanıcı
+        // kesmesinde GPN tüneli yukarıda (StopGpnTunnelIfActiveAsync) gerçekten
+        // indirilir; yumuşak mod geçişleri (örn. GPN↔VPN) çekirdeği reload ile
+        // değiştirir. Tünel canlıysa proxy-only çekirdek başlatılmaz (aynı porta
+        // ikinci çekirdek çakışırdı).
         if (!IsGpnTunnelActive())
         {
             try
@@ -2633,22 +2905,40 @@ public partial class MainWindow : IDashboardBridge
                 break;
             case GpnConnectionState.Connected:
                 Volatile.Write(ref _connectionState, true);
+                _activeGpnServer = snapshot.Server;
                 DiagLog.Write($"STATE ui gpn snapshot Connected (server={snapshot.Server?.Name ?? "-"} summary={snapshot.ProfileSummary})");
                 await SendConnectionStateAsync();
 
                 // Gerçek ping "sonra" ölçümü: tünel kurulunca aynı uç noktalara
                 // tünel yolundan ping atılır ve açılıştaki "önce" değeriyle
-                // karşılaştırılır (öncesi/sonrası). Tünel oturana kadar kısa
-                // gecikmeyle arka planda koşar (best-effort).
-                _ = MeasureRealPingAsync(isBefore: false, delay: TimeSpan.FromSeconds(3));
+                // karşılaştırılır (öncesi/sonrası).
+                //
+                // A4: yalnızca oturum başına BİR kez ve tünel oturduktan SONRA
+                // koşar — adaptör/rota yerleşirken ve yumuşak geçişte tekrar
+                // tetiklenmez; aksi halde her düğüm değişiminde oyun uç noktalarına
+                // ping yağar (il ölçümün "önce" değeriyle karşılaştırması da bozulur).
+                if (!_realPingAfterMeasured)
+                {
+                    _realPingAfterMeasured = true;
+                    _ = MeasureRealPingAsync(isBefore: false, delay: TimeSpan.FromSeconds(10));
+                }
                 break;
             case GpnConnectionState.Disconnected:
                 Volatile.Write(ref _connectionState, false);
+                _activeGpnServer = null;
+                _realPingAfterMeasured = false;
                 DiagLog.Write("STATE ui gpn snapshot Disconnected");
-                // GPN Bağlan butonu bağlıyken ikinci basışta (toggle) koordinatör
-                // Disconnected'a geçer; bekleyen WaitForCoreLeavingStartingAsync 20 sn
-                // beklemesin diye bağlanma bayrağını da kapat (disconnect sonu).
-                Volatile.Write(ref _connectionStarting, false);
+                // Geçiş (kesme / mod değişimi) SIRASINDA koordinatör teardown'u
+                // "koptu" yayınlamasın ve geçiş akışının bayrağını bozmasın:
+                // GPN→VPN geçişinde StopGpnCoordinatorWhenNotConnectedAsync
+                // koordinatörü Disconnected yapar; o anda yayınlanan kesik durum
+                // bağlandı→koptu→bağlandı titremesi üretiyordu. Yerleşik durumu
+                // geçiş akışı yayınlar; bekleyen WaitForCoreLeavingStartingAsync
+                // koordinatör durumunu kendisi izler ve erken döner.
+                if (Volatile.Read(ref _connectionStarting))
+                {
+                    break;
+                }
                 await SendConnectionStateAsync();
                 break;
             case GpnConnectionState.Failed:
@@ -2724,8 +3014,16 @@ public partial class MainWindow : IDashboardBridge
         var connectingJson = JsonSerializer.Serialize(_connectionStarting
             || Volatile.Read(ref _autoRecovering) == 1);
         var configuredMode = AppManager.Instance.Config.ConnectionItem?.Mode;
-        var modeJson = JsonSerializer.Serialize(
-            configuredMode == SplitTunnelViewModel.ModeManual ? "gpn" : "vpn");
+        // Push only a real routing mode. When the persisted mode is Off (or never
+        // configured), send "off" so the dashboard keeps its own remembered
+        // gpn/vpn choice (localStorage) instead of being forced to VPN — the
+        // first-run default stays GPN.
+        var modeJson = JsonSerializer.Serialize(configuredMode switch
+        {
+            SplitTunnelViewModel.ModeManual => "gpn",
+            SplitTunnelViewModel.ModeVpn => "vpn",
+            _ => "off",
+        });
         await ExecuteScriptSafelyAsync(
             $"window.setConnectionState({connectedJson}, {modeJson}, {connectingJson});");
         await ExecuteScriptSafelyAsync(
@@ -2996,11 +3294,46 @@ public partial class MainWindow : IDashboardBridge
 
             _lastTunnelVerified = tunnelVerified;
 
+            // Düğüm ülkesi vs çıkış ülkesi: seçili düğümün ülkesi (remark/GeoIP)
+            // ile tünel egress ülkesi karşılaştırılır. Farklıysa (örn. düğüm
+            // Almanya, egress İtalya) köprüleme YOKTUR — sunucunun çıkış ağı
+            // farklı ülkede görünüyor; dashboard bunu amber uyarıyla gösterir.
+            // Önce oturum düğümü (launcher'ın gerçekten yüklediği WG profili),
+            // yoksa varsayılan düğüm kullanılır.
+            string? nodeCountry = null;
+            if (connected)
+            {
+                // WireGuard oturumunda beklenen çıkış ülkesi, tünelin SONLANDIĞI
+                // sunucunun uç noktasıdır; mihomo'nun seçili düğümü (GPN-Nodes
+                // grubu) AYRI bir katmandır. Eskiden düğüm ülkesi karşılaştırılıyordu
+                // ve yumuşak geçiş sonrası / grup üzerinden gitmeyen rotalarda her
+                // oturumda yanlış "ülke uyuşmuyor" uyarısı çıkıyordu (canlı log:
+                // düğüm Almanya, çıkış İtalya). Artık uyarı yalnızca GERÇEK bir
+                // anomali — çıkış IP'si tünel sunucusundan farklı ülkede — görünür.
+                if (_activeGpnServer is { } gpnServer && gpnServer.EndpointHost.IsNotEmpty())
+                {
+                    nodeCountry = DashboardMessageDispatcher.ResolveNodeCountry(null, gpnServer.EndpointHost);
+                }
+                else
+                {
+                    var sessionNode = ServiceLib.Services.Gpn.GpnSoftSession.Node;
+                    sessionNode ??= await ServiceLib.Handler.ConfigHandler.GetDefaultServer(AppManager.Instance.Config);
+                    if (sessionNode is not null)
+                    {
+                        nodeCountry = DashboardMessageDispatcher.ResolveNodeCountry(sessionNode.Remarks, sessionNode.Address);
+                    }
+                }
+            }
+            var exitMismatch = nodeCountry.IsNotEmpty()
+                && tunnelCountry.IsNotEmpty()
+                && !string.Equals(nodeCountry, tunnelCountry, StringComparison.OrdinalIgnoreCase);
+
             // Ölçümü oturum günlüğüne de yaz — "IP değişmedi / sızıntı" belirtileri
             // canlı oturumda görülemeden gpn-session.log'dan tanımlanabilsin.
             DiagLog.Write($"GPN_IPVERIFY connected={connected} transport={transport} "
                 + $"direct={directIp} tunnel={tunnelIp ?? ""} isp={_realIspIp ?? ""} "
-                + $"verified={tunnelVerified} ispCached={_ispIpCached}");
+                + $"verified={tunnelVerified} ispCached={_ispIpCached} "
+                + $"nodeCountry={nodeCountry ?? ""} exitMismatch={exitMismatch}");
 
             await ExecuteScriptSafelyAsync(
                 $"window.setRealIpState({JsonSerializer.Serialize(new {
@@ -3014,6 +3347,8 @@ public partial class MainWindow : IDashboardBridge
                     tunnelVerified,
                     transport,
                     ispCached = _ispIpCached,
+                    nodeCountry = nodeCountry ?? "",
+                    exitMismatch,
                     measuredAt = DateTimeOffset.Now.ToString("o"),
                 })});");
         }
@@ -3275,6 +3610,20 @@ public partial class MainWindow : IDashboardBridge
         await ExecuteScriptSafelyAsync($"window.notifyNodes({JsonSerializer.Serialize(message)});");
     }
 
+    /// <summary>
+    /// Host-composed undo-toast push: the dispatcher serializes the payload
+    /// (window.setUndoAvailable({ kind, processName, displayName }) or null)
+    /// and this member only executes it on the ready WebView.
+    /// </summary>
+    public async Task PushUndoStateAsync(string script)
+    {
+        if (!_webViewReady)
+        {
+            return;
+        }
+        await ExecuteScriptSafelyAsync(script);
+    }
+
     /// <summary>Wave 3: <see cref="DashboardNodeService"/> delegasyonu — gövde servise taşındı.</summary>
     private Task PushNodeListAsync() => _nodeService.PushNodeListAsync();
 
@@ -3286,136 +3635,8 @@ public partial class MainWindow : IDashboardBridge
     /// Polls the effective routing/core state away from the UI thread. Real ping and
     /// packet-loss samples come from TelemetryDashboardViewModel, not this loop.
     /// </summary>
-    private void StartTelemetryLoop()
-    {
-        if (_connectionLifecycleTask is not null)
-        {
-            return;
-        }
-
-        _connectionLifecycleTask = Task.Run(
-            () => ConnectionLifecycleLoopAsync(_webViewLifetime.Token),
-            _webViewLifetime.Token);
-    }
-
-    private async Task ConnectionLifecycleLoopAsync(CancellationToken cancellationToken)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
-        var ipCheckCounter = 0;
-        var driftCheckCounter = 0;
-        var lastPublishedConnectionState = false;
-
-        try
-        {
-            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-            {
-                // Polling also catches mode changes made by the game-trigger/native
-                // flows, which do not originate in the WebView2 message bridge.
-                var stateOperation = Dispatcher.InvokeAsync(
-                    () => SynchronizeConnectionStateAsync(),
-                    DispatcherPriority.Background);
-                await stateOperation.Task.Unwrap().ConfigureAwait(false);
-
-                // Stale-rule health check: run immediately when the tunnel comes up
-                // (so a connect that skipped the reload cannot hide drift) and then
-                // every ~30 s (15 × 2 s ticks) while the app is alive, so rules edited
-                // in the routing settings without a reload are surfaced before they
-                // cause failures.
-                var connectedNow = Volatile.Read(ref _connectionState);
-                if (connectedNow != lastPublishedConnectionState || ++driftCheckCounter >= 15)
-                {
-                    driftCheckCounter = 0;
-                    var driftOperation = Dispatcher.InvokeAsync(
-                        () => PushRuleDriftAsync(),
-                        DispatcherPriority.Background);
-                    await driftOperation.Task.Unwrap().ConfigureAwait(false);
-                }
-
-                // Bağlantı anı: tünel daha hazır değilken alınmış bayat IP ölçümünü
-                // ("sızıntı" yanlış uyarısı) bir sonraki tick'te (≈2 sn) yeniden ölç.
-                if (connectedNow && !lastPublishedConnectionState)
-                {
-                    ipCheckCounter = 3; // hızlı aralığı tetikle
-                    var ipNowOperation = Dispatcher.InvokeAsync(
-                        () => CheckIpAsync(),
-                        DispatcherPriority.Background);
-                    await ipNowOperation.Task.Unwrap().ConfigureAwait(false);
-                }
-                lastPublishedConnectionState = connectedNow;
-
-                // REALITY nodes that fail on the sing-box core (its hardcoded 1.8.1
-                // handshake claim is rejected by modern 3x-ui servers) fall back to
-                // the Xray core automatically when TUN is off, or get an explanatory
-                // notice when TUN blocks the switch.
-                var fallbackOperation = Dispatcher.InvokeAsync(
-                    () => SuggestRealityCoreFallbackAsync(),
-                    DispatcherPriority.Background);
-                await fallbackOperation.Task.Unwrap().ConfigureAwait(false);
-
-                // Keep the tray status line (connection / proxy-only / idle) live even
-                // when the window is hidden to the tray.
-                var trayStatusOperation = Dispatcher.InvokeAsync(
-                    () => UpdateTrayStatus(),
-                    DispatcherPriority.Background);
-                await trayStatusOperation.Task.ConfigureAwait(false);
-
-                // Surface server switches and proxy changes made outside the WebView2
-                // bridge (native lists, tray flows, hotkeys) while the app is alive.
-                var proxyOperation = Dispatcher.InvokeAsync(
-                    () => PushSystemProxyStateAsync(),
-                    DispatcherPriority.Background);
-                await proxyOperation.Task.Unwrap().ConfigureAwait(false);
-
-                var monitorOperation = Dispatcher.InvokeAsync(
-                    () => PushMonitorSnapshotAsync(),
-                    DispatcherPriority.Background);
-                await monitorOperation.Task.Unwrap().ConfigureAwait(false);
-
-                if (Volatile.Read(ref _connectionState))
-                {
-                    var nodeOperation = Dispatcher.InvokeAsync(
-                        () => PushNodeInfoAsync(),
-                        DispatcherPriority.Background);
-                    await nodeOperation.Task.Unwrap().ConfigureAwait(false);
-
-                    // IP panelini periyodik YENİDEN ölç: doğrulanana dek hızlı
-                    // (3 tick ≈ 6 sn — bağlanma anındaki bayat ölçümün "sızıntı"
-                    // uyarısı saniyeler içinde düzeltilir), doğrulama kesinleşince
-                    // 30 sn'ye seyrel. Orta oturum sızıntılarını da yakalar: çöken
-                    // TUN sürücüsü, sessizce yeniden başlayan proxy, core çıkışı.
-                    ipCheckCounter++;
-                    var ipFastTicks = _lastTunnelVerified ? 15 : 3;
-                    if (ipCheckCounter >= ipFastTicks)
-                    {
-                        ipCheckCounter = 0;
-                        var ipCheckOperation = Dispatcher.InvokeAsync(
-                            () => CheckIpAsync(),
-                            DispatcherPriority.Background);
-                        await ipCheckOperation.Task.Unwrap().ConfigureAwait(false);
-                    }
-                }
-                else
-                {
-                    ipCheckCounter = 0;
-                }
-
-                // Keep the title bar maximize/restore icon in sync with the real
-                // window state (Win+Up/Down, snap, drag-to-top maximize).
-                var windowStateOperation = Dispatcher.InvokeAsync(
-                    () => SynchronizeWindowStateAsync(),
-                    DispatcherPriority.Background);
-                await windowStateOperation.Task.Unwrap().ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Normal shutdown path.
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("AoGPN connection lifecycle poll stopped unexpectedly", ex);
-        }
-    }
+    /// <summary>W4-A: <see cref="ConnectionLifecycleSupervisor"/> delegasyonu — döngü gövdesi servise taşındı.</summary>
+    private void StartTelemetryLoop() => _lifecycleSupervisor.Start(_webViewLifetime.Token);
 
     /// <summary>
     /// Activates the existing AoGPN telemetry sampler and forwards its real samples to
@@ -3524,21 +3745,25 @@ public partial class MainWindow : IDashboardBridge
             return;
         }
 
-        if (!_webViewReady || WebView.CoreWebView2 is null)
+        // ShouldTouch: kapanmış denetleyicide CoreWebView2 null OLMAZ, yalnızca
+        // üyeleri InvalidOperationException atar; bu yüzden yıkım bir kez
+        // gözlendiğinde kilit kalıcı olarak kapanır ve 2 sn'lik poll aynı hatayı
+        // her turda yeniden üretmeyi bırakır.
+        if (!_webViewLatch.ShouldTouch(_isClosing, _webViewReady, WebView.CoreWebView2 is not null))
         {
-            return;
-        }
-
-        if (WebView.CoreWebView2.IsSuspended)
-        {
-            // The dashboard is frozen (window minimized to the tray); nothing to
-            // push until Resume() runs, and script execution is not allowed
-            // while suspended.
             return;
         }
 
         try
         {
+            if (WebView.CoreWebView2.IsSuspended)
+            {
+                // The dashboard is frozen (window minimized to the tray); nothing to
+                // push until Resume() runs, and script execution is not allowed
+                // while suspended.
+                return;
+            }
+
             await _dashboardHost.ExecuteScriptAsync(script);
         }
         catch (Exception ex) when (
@@ -3547,6 +3772,8 @@ public partial class MainWindow : IDashboardBridge
             or ObjectDisposedException)
         {
             // WebView2 can be torn down concurrently with a timer tick during close.
+            // Yıkım hatası gözlendi: kalıcı kilidi kapat (dg. "controller was closed").
+            _webViewLatch.CloseOnDestruction();
         }
     }
 
@@ -3577,9 +3804,39 @@ public partial class MainWindow : IDashboardBridge
 
         _webViewLifetime.Cancel();
 
+        // Son çare ağı: hangi yoldan kapanırsa kapansın (reboot-as-admin,
+        // AppExitAsync doğrudan çağrısı vb.) GPN koordinatörü best-effort durdurulur.
+        // ExitApplicationSafelyAsync / SessionEnding zaten bekleyerek kapatır; bu yol
+        // yalnızca kaçış yollarını kapsar — OnExit'in 6 sn'lik tırmanıcısı asılı
+        // kalırsa süreci sonlandırır.
+        if (ViewModel is { } closedVm)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await closedVm.StopGpnTunnelIfActiveAsync();
+                }
+                catch (Exception ex)
+                {
+                    Logging.SaveLog("GPN coordinator stop on close failed", ex);
+                }
+            });
+        }
+
         _dashboardHost.WebMessageReceived -= _dashboardMessageDispatcher.HandleWebMessageReceived;
         _dashboardHost.NavigationCompleted -= CoreWebView2_NavigationCompleted;
-        _dashboardHost.DisposeAsync().GetAwaiter().GetResult();
+        try
+        {
+            _dashboardHost.DisposeAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            // WebView2 teardown COMException'leri (0x8007139F vb.) kapatma
+            // yolundan çıkıp WPF'i unhandled-exception ile çökertmesin
+            // (debugger'da exit code 0xffffffff olarak görünür).
+            Logging.SaveLog("AoGPN dashboard host dispose on close failed", ex);
+        }
         _webViewLifetime.Dispose();
     }
 
@@ -3808,7 +4065,7 @@ public partial class MainWindow : IDashboardBridge
     /// </summary>
     private async Task SyncWebViewSuspensionAsync(bool shouldSuspend)
     {
-        if (_isClosing || !_webViewReady || WebView.CoreWebView2 is null)
+        if (!_webViewLatch.ShouldTouch(_isClosing, _webViewReady, WebView.CoreWebView2 is not null))
         {
             return;
         }
@@ -3833,6 +4090,8 @@ public partial class MainWindow : IDashboardBridge
             or ObjectDisposedException)
         {
             // WebView2 can be torn down concurrently with a hide/show during close.
+            // Yıkım hatası gözlendi: kalıcı kilidi kapat.
+            _webViewLatch.CloseOnDestruction();
         }
     }
 
@@ -3861,7 +4120,30 @@ public partial class MainWindow : IDashboardBridge
     {
         try
         {
+            // GPN koordinatörü düzenli kapanmadan çıkılmamalı: izleyici görevi,
+            // yakalama köprüsü ve superset oturum kaydı ancak launcher teardown'ında
+            // temizlenir. Aksi halde çıkış sırasında arka planda kalan görevler ve
+            // Wintun/TUN durumu kararsız kapanışa (asılı OnExit, gizli tünel) yol açar.
+            if (ViewModel is { } exitVm)
+            {
+                await exitVm.StopGpnTunnelIfActiveAsync();
+            }
             await _trayBehavior.ExitApplicationAsync();
+
+            // Kapanış kancası — hayalet Wintun adaptör süpürmesi: çekirdek artık
+            // durdu (TrayWindowCoordinator "core stop" adımı). Teardown sırasında
+            // silinememiş sahipsiz adaptörler (ör. mihomo kapanışı yarım kaldıysa)
+            // burada son bir tur temizlenir — bu örneğin kendi adaptörü zaten
+            // kapanmış olduğundan canlı adaptör silme riski yoktur. Best-effort:
+            // yönetici yetkisi yoksa / wintun.dll yoksa kayıt düşülür, çıkış etkilenmez.
+            try
+            {
+                await WintunOrphanSweeper.SweepOrphanedAsync(AppManager.Instance.Config?.GpnWintunItem);
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog("AoGPN exit Wintun orphan sweep failed", ex);
+            }
         }
         catch (Exception ex)
         {
@@ -3873,6 +4155,13 @@ public partial class MainWindow : IDashboardBridge
     {
         Logging.SaveLog("Current_SessionEnding");
         StorageUI();
+        // Oturum kapanışında da GPN tüneli düzenli teardown edilir — StopCoreAsync
+        // yalnızca çekirdeği durdurur; koordinatör (izleyici + superset oturum +
+        // yakalama köprüsü) bu çağrıyla temizlenir.
+        if (ViewModel is { } sessionEndVm)
+        {
+            await sessionEndVm.StopGpnTunnelIfActiveAsync();
+        }
         await AppManager.Instance.AppExitAsync(false);
     }
 

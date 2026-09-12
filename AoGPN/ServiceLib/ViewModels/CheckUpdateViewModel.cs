@@ -3,7 +3,6 @@ namespace ServiceLib.ViewModels;
 public class CheckUpdateViewModel : MyReactiveObject
 {
     private const string _geo = "GeoFiles";
-    private readonly ECoreType _AoGPN = ECoreType.AoGPN;
     private List<CheckUpdateModel> _lstUpdated = [];
     private static readonly string _tag = "CheckUpdateViewModel";
 
@@ -22,14 +21,14 @@ public class CheckUpdateViewModel : MyReactiveObject
         CheckUpdateCmd.ThrownExceptions.Subscribe(ex =>
         {
             Logging.SaveLog(_tag, ex);
-            _ = UpdateView(_AoGPN, ex.Message);
+            NoticeManager.Instance.SendMessageAndEnqueue(ex.Message);
         });
 
         CheckOnlyCmd = ReactiveCommand.CreateFromTask(CheckOnly);
         CheckOnlyCmd.ThrownExceptions.Subscribe(ex =>
         {
             Logging.SaveLog(_tag, ex);
-            _ = UpdateView(_AoGPN, ex.Message);
+            NoticeManager.Instance.SendMessageAndEnqueue(ex.Message);
         });
 
         EnableCheckPreReleaseUpdate = _config.CheckUpdateItem.CheckPreReleaseUpdate;
@@ -44,10 +43,11 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     private void RefreshCheckUpdateItems()
     {
-        // AoGPN is a rebranded fork: exclude the app itself from update checks so it
-        // never offers to download the upstream AoGPN release (which would replace branding).
+        // Çekirdek güncelleme listesi bilerek YALNIZCA yönlendirme çekirdeklerini
+        // (xray/mihomo) içerir; uygulamanın kendisi ayrı ve TEK yoldan güncellenir
+        // (AppUpdateChecker + AoGPN.Updater). Uygulamayı bu listeden uzak tutmak
+        // "tek güncelleme yolu" kuralını korur.
         var models = CoreInfoManager.Instance.GetCheckUpdateCoreTypes()
-                        .Where(t => t != _AoGPN)
                         .Select(t => GetCheckUpdateModel(t))
                         .ToList();
 
@@ -59,17 +59,6 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     private CheckUpdateModel GetCheckUpdateModel(ECoreType coreType)
     {
-        if (coreType == _AoGPN && Utils.IsPackagedInstall())
-        {
-            return new()
-            {
-                IsSelected = false,
-                CoreType = coreType,
-                IsGeoFile = false,
-                Remarks = ResUI.menuCheckUpdate + $" ({ResUI.MsgNotSupport})",
-            };
-        }
-
         AppManager.Instance.LastCheckUpdateResults.TryGetValue(coreType, out var lastResult);
         return new()
         {
@@ -187,15 +176,6 @@ public class CheckUpdateViewModel : MyReactiveObject
             {
                 await CheckUpdateGeo();
             }
-            else if (item.CoreType == _AoGPN)
-            {
-                if (Utils.IsPackagedInstall())
-                {
-                    await UpdateView(_AoGPN, ResUI.MsgNotSupport);
-                    continue;
-                }
-                await CheckUpdateN(EnableCheckPreReleaseUpdate);
-            }
             else if (item.CoreType == ECoreType.Xray)
             {
                 await CheckUpdateCore(item, EnableCheckPreReleaseUpdate);
@@ -237,21 +217,6 @@ public class CheckUpdateViewModel : MyReactiveObject
             .ContinueWith(t => UpdatedPlusPlus(null, ""));
     }
 
-    private async Task CheckUpdateN(bool preRelease)
-    {
-        async Task _updateUI(bool success, string msg)
-        {
-            await UpdateView(_AoGPN, msg);
-            if (success)
-            {
-                await UpdateView(_AoGPN, ResUI.OperationSuccess);
-                UpdatedPlusPlus(_AoGPN, msg);
-            }
-        }
-        await new UpdateService(_config, _updateUI).CheckUpdateGuiN(preRelease)
-            .ContinueWith(t => UpdatedPlusPlus(_AoGPN, ""));
-    }
-
     private async Task CheckUpdateCore(CheckUpdateModel model, bool preRelease)
     {
         async Task _updateUI(bool success, string msg)
@@ -279,11 +244,6 @@ public class CheckUpdateViewModel : MyReactiveObject
             await Task.Delay(2000);
             await UpgradeCore();
 
-            if (_lstUpdated.Any(x => x.CoreType == _AoGPN && x.IsFinished == true))
-            {
-                await Task.Delay(1000);
-                await UpgradeN();
-            }
             await Task.Delay(1000);
             await UpdateFinishedSub(true);
         }
@@ -308,35 +268,6 @@ public class CheckUpdateViewModel : MyReactiveObject
         else
         {
             await AppManager.Instance.StopCoreAsync();
-        }
-    }
-
-    private async Task UpgradeN()
-    {
-        try
-        {
-            var fileName = _lstUpdated.FirstOrDefault(x => x.CoreType == _AoGPN)?.FileName;
-            if (fileName.IsNullOrEmpty())
-            {
-                return;
-            }
-            if (!Utils.UpgradeAppExists(out var upgradeFileName))
-            {
-                await UpdateView(_AoGPN, ResUI.UpgradeAppNotExistTip);
-                NoticeManager.Instance.SendMessageAndEnqueue(ResUI.UpgradeAppNotExistTip);
-                Logging.SaveLog("UpgradeApp does not exist");
-                return;
-            }
-
-            var id = ProcUtils.ProcessStart(upgradeFileName, fileName, Utils.StartupPath());
-            if (id > 0)
-            {
-                await AppManager.Instance.AppExitAsync(true);
-            }
-        }
-        catch (Exception ex)
-        {
-            await UpdateView(_AoGPN, ex.Message);
         }
     }
 

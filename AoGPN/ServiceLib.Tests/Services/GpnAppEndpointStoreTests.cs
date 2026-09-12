@@ -118,6 +118,26 @@ public class GpnAppEndpointStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MeasureRealPingAsync_UnspecifiedEndpoint_DoesNotThrow()
+    {
+        // Gerçek (varsayılan) probe yoluyla 0.0.0.0 kayıtlı uç nokta: SendPingAsync
+        // hedef olarak belirsiz adres kabul etmez (ArgumentException) — guard bu
+        // durumu fırlatmadan "ölçülemedi" (-1) olarak işaretler.
+        var store = new GpnAppEndpointStore();
+        await store.EnsureSchemaAsync();
+        store.Observe("Game.exe", "0.0.0.0:51820", "UDP");
+        await store.FlushAsync(TestContext.Current.CancellationToken);
+
+        var results = await store.MeasureRealPingAsync(
+            ["Game.exe"], maxEndpointsPerApp: 4, ct: TestContext.Current.CancellationToken);
+
+        var game = Assert.Single(results, r => r.AppName == "Game.exe");
+        Assert.Equal(-1, game.BestMs);
+        Assert.Equal(0, game.OkEndpoints);
+        Assert.Equal(1, game.TotalEndpoints);
+    }
+
+    [Fact]
     public async Task MeasureRealPingAsync_RespectsMaxEndpointsPerApp()
     {
         var probeCalls = 0;

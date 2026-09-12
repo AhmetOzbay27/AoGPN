@@ -48,6 +48,25 @@ public class GpnMihomoConfigServiceTests
         => new GpnMihomoConfigService().GenerateYaml(nodes, active, rules, options ?? new GpnMihomoOptions(), bypass, launcherBypasses);
 
     [Fact]
+    public void Root_UsesGamingLatencySettings()
+    {
+        // Oyun/gecikme sözleşmesi (bkz. docs/gaming-connect-performance-plan.md D1/D3/D4):
+        //   * find-process-mode "strict": süreç yalnızca bir PROCESS-NAME kuralı
+        //     eşleşme gerektirdiğinde çözülür — "always" bağlantı başına tam süreç
+        //     taraması yapıp ilk-paket gecikmesi ve CPU ekliyordu.
+        //   * tcp-concurrent: çok adresli hedeflerde adresleri BİRLİKTE dener,
+        //     ölü adresin zaman aşımını beklemez.
+        //   * unified-delay: gecikmeyi tam el sıkışma yerine ilk bayt üzerinden
+        //     raporlar (arayüzdeki ping gerçek RTT'yi yansıtır).
+        var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, process: ["game.exe"]) });
+
+        yaml.Should().Contain("find-process-mode: strict");
+        yaml.Should().NotContain("find-process-mode: always");
+        yaml.Should().Contain("tcp-concurrent: true");
+        yaml.Should().Contain("unified-delay: true");
+    }
+
+    [Fact]
     public void MultiNode_EmitsEveryNodePlusSelectGroup_AndRulesTargetGroup()
     {
         var nodes = new[] { Italya, Almanya };
@@ -317,6 +336,123 @@ public class GpnMihomoConfigServiceTests
         yaml.Should().Contain("enable: false");
         yaml.Should().NotContain("fake-ip-range");
         yaml.Should().NotContain("enhanced-mode");
+    }
+
+    [Fact]
+    public void TunBlock_ExcludesLoopbackFromRoute()
+    {
+        // Uygulamanın kendi SOCKS'una (127.0.0.1:10808) giden trafik TUN'a
+        // DÜŞMEMELİ: auto-route /1 rotaları loopback'i de yakalar; o zaman kendi
+        // proxy'sine bağlantı tünel içine girip fake-ip'e çevrilir (loglarda
+        // "1.0.0.127:10808 i/o timeout" / SSL EOF) — indirmeler tıkanır.
+        var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, port: "0-65535") });
+
+        yaml.Should().Contain("route-exclude-address");
+        yaml.Should().Contain("127.0.0.0/8");
+    }
+
+    // ── İleri Düzey Gaming DNS: sniffing + DNS ayrımı + IPv6 blackhole ────
+
+    [Fact]
+    public void Sniffing_EnabledByDefault_EmitsMihomoBlock()
+    {
+        // Oyun optimizasyonu: TUN içinden geçen bağlantı hedefi ilk pakette
+        // çözülür (HTTP Host / TLS SNI) — domain kuralları gecikmesiz eşleşir.
+        var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, port: "0-65535") });
+
+        yaml.Should().Contain("sniffing:");
+        yaml.Should().Contain("override-destination: true");
+    }
+
+    [Fact]
+    public void Sniffing_Disabled_OmitsBlock()
+    {
+        // Kullanıcı Ayarlar → Core "Sniffing enabled" seçimini kapattıysa
+        // mihomo bloğu üretilmez (GpnMihomoOptions üzerinden bağlanır).
+        var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, port: "0-65535") },
+            new GpnMihomoOptions { SniffingEnabled = false });
+
+        yaml.Should().NotContain("sniffing:");
+        yaml.Should().NotContain("override-destination");
+    }
+
+    [Fact]
+    public void DnsEnabled_RemoteNameserversGoTcp_LocalDomainsToSystem()
+    {
+        // İki yönlü DNS ayrımı: oyun/tünel trafiği uzak DNS'ten çözülür (saf
+        // IP'ler tcp:// — UDP parçalanma riski yok, MTU 1280 dostu); tünel dışı
+        // yerel ağ alan adları (.local/.lan/localhost) sistem çözümleyicisine
+        // gider ve fake-ip havuzunun dışında kalır (gerçek IP döner).
+        var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, port: "0-65535") },
+            new GpnMihomoOptions { DnsEnabled = true });
+
+        yaml.Should().Contain("tcp://1.1.1.1");
+        yaml.Should().Contain("tcp://8.8.8.8");
+        // Bootstrap (default-nameserver) saf IP kalır — mihomo şartı.
+        yaml.Should().Contain("default-nameserver:");
+        yaml.Should().Contain("nameserver-policy:");
+        yaml.Should().Contain("system");
+        yaml.Should().Contain("+.local");
+        yaml.Should().Contain("+.lan");
+        yaml.Should().Contain("fake-ip-filter:");
+    }
+
+    [Fact]
+    public void DnsEnabled_SchemedUserEntries_AreNotRewritten()
+    {
+        // Kullanıcının kendi şema'lı DNS girdileri (DoH, system) aynen korunur;
+        // yalnızca saf IP'ler tcp:// biçimine çevrilir.
+        var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, port: "0-65535") },
+            new GpnMihomoOptions
+            {
+                DnsEnabled = true,
+                DnsNameservers = ["https://cloudflare-dns.com/dns-query", "system", "9.9.9.9"],
+            });
+
+        yaml.Should().Contain("https://cloudflare-dns.com/dns-query");
+        yaml.Should().Contain("system");
+        yaml.Should().Contain("tcp://9.9.9.9");
+        yaml.Should().NotContain("tcp://https://");
+        yaml.Should().NotContain("tcp://system");
+    }
+
+    [Fact]
+    public void Ipv6Blackhole_IsAlwaysFirstRule()
+    {
+        // IPv6 kara deliği kural listesinin EN BAŞINDAdır: AAAA yanıtları
+        // dns.ipv6:false ile filtrelenir (istemci anında IPv4'e düşer — LoL
+        // Client 5-10 sn zaman aşımı biter); TUN'a ulaşan her IPv6 hedefi
+        // anında REJECT edilir, asla dışarı çıkmaz ve timeout beklemez.
+        var yaml = Generate(Almanya, new[]
+        {
+            Rule("1", Global.ProxyTag, process: ["EscapeFromTarkov.exe"]),
+            Rule("2", Global.DirectTag, port: "0-65535"),
+        });
+
+        yaml.Should().Contain(GpnMihomoConfigService.Ipv6BlackholeRule);
+        var blackholeIdx = yaml.IndexOf(GpnMihomoConfigService.Ipv6BlackholeRule, StringComparison.Ordinal);
+        blackholeIdx.Should().BeGreaterThanOrEqualTo(0);
+        yaml.IndexOf("PROCESS-NAME,EscapeFromTarkov.exe,wg-de", StringComparison.Ordinal)
+            .Should().BeGreaterThan(blackholeIdx, "blackhole ilk kuraldır — hiçbir IPv6 hedefi sonraya düşmez");
+        yaml.IndexOf("MATCH,DIRECT", StringComparison.Ordinal)
+            .Should().BeGreaterThan(blackholeIdx);
+    }
+
+    [Fact]
+    public void Ipv6Blackhole_AlsoLeadsSupersetRules()
+    {
+        // Superset (kesintisiz rota) biçiminde de blackhole IP doğrulama/GPN-CHECK
+        // satırlarından bile ÖNCE gelir — IPv6 hedefe düşen istek anında ret alır.
+        var policy = new GpnSoftRoutingPolicy(
+            GameTriggerModes.Manual,
+            InvertManualRouting: false,
+            new[] { AppEntry("chrome.exe", "vpn") });
+        var yaml = GenerateSuperset(Almanya, policy);
+
+        yaml.Should().Contain(GpnMihomoConfigService.Ipv6BlackholeRule);
+        yaml.IndexOf(GpnMihomoConfigService.Ipv6BlackholeRule, StringComparison.Ordinal)
+            .Should().BeLessThan(yaml.IndexOf("DOMAIN-SUFFIX,ip.sb,GPN-CHECK", StringComparison.Ordinal),
+                "blackhole superset'te de ilk kuraldır");
     }
 
     [Fact]
@@ -596,6 +732,108 @@ public class GpnMihomoConfigServiceTests
         var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, port: "0-65535") });
 
         yaml.Should().Contain($"mtu: {Global.GpnRecommendedMtu}");
+    }
+
+    [Fact]
+    public void UserTunMtu_IsAppliedToTunBlock()
+    {
+        // Kullanıcının TUN MTU ayarı (ör. 1280) yalnızca config'de kalmaz —
+        // üretilen mihomo YAML'ine (TUN bloğu + WG outbound) GERÇEKTEN işlenir.
+        var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, port: "0-65535") },
+            new GpnMihomoOptions { Mtu = 1280 });
+
+        yaml.Should().Contain("mtu: 1280");
+        yaml.Should().NotContain($"mtu: {Global.GpnRecommendedMtu}");
+    }
+
+    [Fact]
+    public void UserTunMtu_AboveGpnLimit_IsClamped()
+    {
+        // Yol sınırını aşan kullanıcı değeri (1420) 1360'a kırpılır — parçalanmayı
+        // önleyen kanıtlanmış üst sınır.
+        var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, port: "0-65535") },
+            new GpnMihomoOptions { Mtu = 1420 });
+
+        yaml.Should().Contain($"mtu: {Global.GpnRecommendedMtu}");
+    }
+
+    [Fact]
+    public void ServerMtu_Priority_OverUserTun_ForWgOutbound()
+    {
+        // WG outbound'unda daha spesifik ayar (sunucu profili MTU'su) kazanır;
+        // TUN bloğu kullanıcı TUN ayarını kullanır (1280). Her ikisi de YAML'de
+        // aynı anahtarla basılır — ayrı satırların ikisi de doğrulanır.
+        var serverWithMtu = Almanya with { Mtu = 1280 };
+        var yaml = Generate(serverWithMtu, new[] { Rule("1", Global.ProxyTag, port: "0-65535") },
+            new GpnMihomoOptions { Mtu = 1360 });
+
+        yaml.Should().Contain("mtu: 1280");
+        yaml.Should().Contain("mtu: 1360");
+    }
+
+    [Fact]
+    public void ResolveGpnMtu_RespectsUserValue_AndClampsAboveLimit()
+    {
+        // CoreConfigHandler'ın GPN MTU çözücüsü: kullanıcının düşük değeri korunur,
+        // yol sınırını aşan değer 1360'a kırpılır, 0/geçersiz önerilene döner.
+        CoreConfigHandler.ResolveGpnMtu(ConfigWithMtu(1280))
+            .Should().Be(1280, "kullanıcının düşük MTU'su korunur");
+        CoreConfigHandler.ResolveGpnMtu(ConfigWithMtu(Global.GpnRecommendedMtu))
+            .Should().Be(Global.GpnRecommendedMtu, "önerilen değer aynen kalır");
+        CoreConfigHandler.ResolveGpnMtu(ConfigWithMtu(1420))
+            .Should().Be(Global.GpnRecommendedMtu, "yol sınırını aşan değer 1360'a kırpılır");
+        CoreConfigHandler.ResolveGpnMtu(ConfigWithMtu(0))
+            .Should().Be(Global.GpnRecommendedMtu, "0/geçersiz değer önerilene döner");
+        CoreConfigHandler.ResolveGpnMtu(new Config())
+            .Should().Be(Global.GpnRecommendedMtu, "TunModeItem yoksa önerilen değer");
+    }
+
+    private static Config ConfigWithMtu(int mtu)
+    {
+        var config = new Config();
+        config.TunModeItem = new TunModeItem { Mtu = mtu };
+        return config;
+    }
+
+    // ── Sabit adaptör adı (static naming) ──
+
+    [Fact]
+    public void TunDevice_DefaultsToAoGPN_WhenNoUserPrefix()
+    {
+        CoreConfigHandler.ResolveTunDevice(new Config())
+            .Should().Be(Global.MihomoTunInterfaceName, "ayar yoksa sabit AoGPN kullanılır");
+        CoreConfigHandler.ResolveTunDevice(ConfigWithWintunName(null))
+            .Should().Be(Global.MihomoTunInterfaceName);
+    }
+
+    [Fact]
+    public void TunDevice_FollowsUserWintunPrefix_Sanitized()
+    {
+        // Kullanıcının Wintun ad ön eki (Ayarlar → GPN → Wintun kartı) mihomo TUN
+        // cihaz adına işlenir — Windows rastgele "Yerel Ağ Bağlantısı N" üretmez.
+        CoreConfigHandler.ResolveTunDevice(ConfigWithWintunName("AO GPN Tun"))
+            .Should().Be("AOGPNTun", "boşluklar wintun kuralına göre atılır ([A-Za-z0-9_-])");
+        CoreConfigHandler.ResolveTunDevice(ConfigWithWintunName("MyTun"))
+            .Should().Be("MyTun");
+    }
+
+    [Fact]
+    public void UserTunDevice_IsWrittenToYamlTunBlock()
+    {
+        // Çözücü yalnızca bellekte kalmaz — üretilen mihomo YAML'indeki tun device
+        // anahtarına GERÇEKTEN işlenir (süpürücünün yakaladığı adla birebir aynı).
+        var yaml = Generate(Almanya, new[] { Rule("1", Global.ProxyTag, port: "0-65535") },
+            new GpnMihomoOptions { TunDevice = "MyTun" });
+
+        yaml.Should().Contain("device: MyTun");
+        yaml.Should().NotContain("device: AoGPN");
+    }
+
+    private static Config ConfigWithWintunName(string? adapterName)
+    {
+        var config = new Config();
+        config.GpnWintunItem = new GpnWintunItem { AdapterName = adapterName };
+        return config;
     }
 
     [Fact]

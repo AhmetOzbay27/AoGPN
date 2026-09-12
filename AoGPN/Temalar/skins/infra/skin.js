@@ -58,11 +58,11 @@
     'sub.tun': 'TUN',
     'sub.proxy': 'PROXY',
     'mode.gpn': 'GPN',
-    'mode.globalVpn': 'GLOBAL VPN',
+    'mode.globalVpn': 'VPN',
     'transport.proxy': 'PROXY',
     'transport.tun': 'TUN',
     'split.off': 'OFF',
-    'split.global': 'GLOBAL',
+    'split.global': 'VPN',
     'split.gpn': 'GPN',
     'dir.whitelist': 'WHITELIST',
     'dir.blacklist': 'BLACKLIST',
@@ -105,7 +105,61 @@
     'log.off': 'OFF',
     'lang': 'LANG',
     'connectAria': 'Connect',
-    'stdTitle': 'Standard dashboard'
+    'stdTitle': 'Standard dashboard',
+    // Console tabs (dashboard module parity).
+    'tabs.terminal': 'TERMINAL',
+    'tabs.nodes': 'NODES',
+    'tabs.gpn': 'GPN',
+    'tabs.monitor': 'MONITOR',
+    'tabs.about': 'ABOUT',
+    // Extended settings (dashboard parity).
+    'ctl.tunStack': 'TUN STACK',
+    'ctl.effects': 'EFFECTS',
+    'ctl.autoGame': 'AUTO-GAME',
+    'ctl.recovery': 'RECOVERY',
+    'ctl.failover': 'FAILOVER',
+    'ctl.proxyTest': 'PROXY TEST',
+    'test.idle': 'TEST',
+    'test.ok': 'OK',
+    'test.fail': 'FAIL',
+    'test.running': 'TESTING…',
+    'autoGameTitle': 'Auto-connect when a listed game starts',
+    'recoveryTitle': 'Auto-return to WireGuard after a V2ray fallback',
+    'failoverTitle': 'Allow automatic server switching on failure',
+    'log.tunStack': 'TUN STACK: {stack}',
+    'log.effects': 'EFFECTS: {effects}',
+    'log.autoGame': 'AUTO-GAME CONNECT: {state}',
+    'log.recovery': 'RECOVERY WATCH: {state}',
+    'log.failover': 'FAILOVER: {state}',
+    'log.proxyTest': 'PROXY TEST INITIATED.',
+    // GPN tab.
+    'gpn.servers': 'GPN SERVERS',
+    'gpn.measure': 'MEASURE',
+    'gpn.jackin': 'JACK IN',
+    'gpn.none': 'NO GPN SERVERS IMPORTED.',
+    'gpn.noneSub': 'IMPORT ITALY / GERMANY WIREGUARD SERVERS IN THE DASHBOARD.',
+    'gpn.telTitle': 'FAILOVER TELEMETRY',
+    'gpn.resTitle': 'LAST 50 DECISIONS',
+    'gpn.resRefresh': 'REFRESH',
+    'gpn.resClear': 'CLEAR',
+    'gpn.resEmpty': 'NO DECISIONS RECORDED YET.',
+    'gpn.resPath': 'MIRRORED TO',
+    'gpn.ev.switch': 'SERVER SWITCH',
+    'gpn.ev.udpDeath': 'UDP DEATH',
+    'gpn.ev.fallback': 'MODE FALLBACK',
+    'gpn.ev.recover': 'RECOVER',
+    'gpn.ev.select': 'SELECTION',
+    // Monitor tab.
+    'node.colProgram': 'PROGRAM',
+    'mon.noMatch': 'NO CONNECTIONS MATCH THE FILTER.',
+    'mon.none': 'NO VISIBLE CONNECTIONS.',
+    // About tab.
+    'about.title': 'ABOUT // INFRA SHELL',
+    'about.version': 'VERSION',
+    'about.skin': 'SKIN',
+    'about.session': 'SESSION',
+    'about.hint': 'ALL DASHBOARD MODULES ARE LIVE IN THIS CONSOLE: NODES, GPN SERVERS, CONNECTION MONITOR AND SETTINGS.',
+    'about.hint2': 'SWITCH TO THE STANDARD DASHBOARD ANYTIME FOR THE FULL MODULE MATRIX.'
   };
   function ifT(key, params) {
     let val = null;
@@ -181,7 +235,14 @@
       sessionTime: G('sessionTime') || '00:00:00', exitIp: G('exitIp') || '—',
       telemetry: G('telemetry') || [null, null, null, null],
       nodes: G('nodes') || [], monitorSnapshot: G('monitorSnapshot') || { apps: [] },
-      routeLabels: G('routeLabels') || {}, language: G('language') || 'en'
+      routeLabels: G('routeLabels') || {}, language: G('language') || 'en',
+      // Extended settings + dashboard modules (skinBridge parity).
+      tunStack: G('tunStack') || 'mixed', effectsTier: G('effectsTier') || 'full',
+      gpnRecoveryWatch: G('gpnRecoveryWatch'), gpnFailover: G('gpnFailover'),
+      proxyTestResult: G('proxyTestResult') || null,
+      gpnServers: G('gpnServers') || [], gpnServerProbes: G('gpnServerProbes') || [],
+      activeGpnServer: G('activeGpnServer') || '', appInfo: G('appInfo') || null,
+      gpnTelemetry: G('gpnTelemetry') || null, gpnResilienceLog: G('gpnResilienceLog') || null
     };
   }
 
@@ -206,6 +267,14 @@
         if (key === 'ArrowRight') return isTunneled(currentAction) ? null : 'vpn';
         if (key === 'ArrowLeft') return isTunneled(currentAction) ? 'direct' : null;
         return null;
+      };
+  const ifRouteCycle = (typeof AoGPNRouteKeys !== 'undefined' && AoGPNRouteKeys.routeCycle)
+    ? AoGPNRouteKeys.routeCycle
+    : function (action) {
+        const order = ['vpn', 'direct', 'block', 'warp'];
+        const cur = isTunneled(action) ? 'vpn' : action;
+        const idx = order.indexOf(cur);
+        return order[(idx + 1) % order.length];
       };
 
   function isTunneled(action) { return action === 'vpn' || action === 'vpn+proxy' || action === 'proxy'; }
@@ -388,6 +457,329 @@
     if (pm) pm.value = String(Number(S.systemProxyMode) || 0);
     const pp = $('ifProtocol');
     if (pp) pp.value = S.protocolPreference || 'auto';
+    // Extended settings (dashboard parity): TUN stack, effects tier, auto-game
+    // connect, GPN recovery watch / failover and the system-proxy test button.
+    const ts = $('ifTunStack');
+    if (ts) ts.value = S.tunStack || 'mixed';
+    const ef = $('ifEffects');
+    if (ef) ef.value = S.effectsTier || 'full';
+    const autoGame = $('ifAutoGame');
+    if (autoGame) {
+      const on = !!(S.monitorSnapshot && S.monitorSnapshot.autoConnectOnGameStart === true);
+      autoGame.classList.toggle('on', on); autoGame.setAttribute('aria-checked', String(on));
+    }
+    const rec = $('ifRecovery');
+    if (rec) {
+      const on = S.gpnRecoveryWatch === true;
+      rec.classList.toggle('on', on); rec.setAttribute('aria-checked', String(on));
+    }
+    const fo = $('ifFailover');
+    if (fo) {
+      const on = S.gpnFailover === true;
+      fo.classList.toggle('on', on); fo.setAttribute('aria-checked', String(on));
+    }
+    const ptest = $('ifProxyTest');
+    if (ptest) {
+      const r = S.proxyTestResult;
+      const ok = !!(r && r.ok === true);
+      const bad = !!(r && r.ok === false);
+      ptest.classList.toggle('ok', ok); ptest.classList.toggle('fail', bad); ptest.classList.toggle('running', false);
+      ptest.textContent = ok ? (Number.isFinite(r.ms) ? r.ms + ' ms' : ifT('test.ok')) : bad ? ifT('test.fail') : ifT('test.idle');
+    }
+  }
+
+  // ---- console tabs (dashboard module parity) ----
+  // The bottom terminal becomes a tabbed console: TERMINAL keeps the live log,
+  // NODES lists route nodes (click to select), GPN shows the managed servers
+  // with live probes, MONITOR mirrors the dashboard Connection Monitor and
+  // ABOUT shows program info — same module set as CYBER/NEXUS.
+  let _ifTab = 'terminal';
+  let _ifMonFilter = '';
+  let _ifMonHideListeners = true;
+  let _ifMonGroup = 'none';
+  const _ifMonCollapsed = new Set();
+  try {
+    const saved = JSON.parse(localStorage.getItem('aogpn.infraMon.v1') || '{}');
+    if (typeof saved.hideListeners === 'boolean') _ifMonHideListeners = saved.hideListeners;
+    if (['none', 'route', 'protocol', 'state', 'country', 'app'].includes(saved.group)) _ifMonGroup = saved.group;
+  } catch (e) { /* no localStorage */ }
+  function _ifMonPersist() {
+    try { localStorage.setItem('aogpn.infraMon.v1', JSON.stringify({ hideListeners: _ifMonHideListeners, group: _ifMonGroup })); } catch (e) { /* ignore */ }
+  }
+  const IF_MON_GROUP_KEYS = [
+    ['none', 'monitor.view.groupNone'], ['route', 'monitor.view.groupRoute'], ['protocol', 'monitor.view.groupProtocol'],
+    ['state', 'monitor.view.groupState'], ['country', 'monitor.view.groupCountry'], ['app', 'monitor.view.groupApp']
+  ];
+
+  function ifSwitchTab(name) {
+    _ifTab = name;
+    document.querySelectorAll('[data-if-tab]').forEach(b => b.classList.toggle('active', b.getAttribute('data-if-tab') === name));
+    document.querySelectorAll('[data-if-panel]').forEach(p => {
+      const on = p.getAttribute('data-if-panel') === name;
+      p.hidden = !on;
+      p.classList.toggle('active', on);
+    });
+    ifRenderTab();
+  }
+
+  function ifRenderTab() {
+    const S = state();
+    if (_ifTab === 'nodes') ifRenderTabNodes(S);
+    else if (_ifTab === 'gpn') ifRenderTabGpn(S);
+    else if (_ifTab === 'monitor') ifRenderTabMonitor(S);
+    else if (_ifTab === 'about') ifRenderTabAbout(S);
+  }
+
+  function ifRenderTabNodes(S) {
+    const root = $('ifTabNodes');
+    if (!root) return;
+    const nodes = S.nodes || [];
+    if (nodes.length === 0) {
+      root.innerHTML = '<div class="if-tabHead"><span>' + esc(ifT('tabs.nodes')) + '</span></div><div class="if-tabMsg">' + esc(ifT('noNodes')) + '</div>';
+      return;
+    }
+    const act = activeNode(S);
+    const actKey = act ? String(nodeKey(act, S.useRealNodes)) : '';
+    root.innerHTML =
+      '<div class="if-tabHead"><span>' + esc(ifT('tabs.nodes')) + '</span><em>' + nodes.length + '</em></div>'
+      + nodes.map(n => {
+        const key = String(nodeKey(n, S.useRealNodes));
+        const active = key === actKey;
+        return '<div class="if-node-row' + (active ? ' active' : '') + '" data-if-tabnode="' + esc(key) + '">'
+          + '<code>' + esc(nodeCode(n, S.useRealNodes)) + '</code>'
+          + '<b>' + esc(nodeLabel(n, S.useRealNodes)) + '</b>'
+          + '<em>' + esc(nodeMs(n, S.useRealNodes)) + '</em>'
+          + '</div>';
+      }).join('');
+    root.querySelectorAll('[data-if-tabnode]').forEach(row => {
+      row.addEventListener('click', () => {
+        const key = row.getAttribute('data-if-tabnode');
+        const S2 = state();
+        const n = S2.nodes.find(node => String(nodeKey(node, S2.useRealNodes)) === key);
+        const name = n ? String(nodeLabel(n, S2.useRealNodes)).toUpperCase() : key;
+        switchNode(key);
+        logLine(ifT('log.node', { node: name }), 'sys');
+      });
+    });
+  }
+
+  function ifRenderTabGpn(S) {
+    const root = $('ifTabGpn');
+    if (!root) return;
+    const servers = S.gpnServers || [];
+    const probes = {};
+    (S.gpnServerProbes || []).forEach(p => { probes[p.serverId] = p; });
+    const rows = servers.map(s => {
+      const probe = probes[s.serverId];
+      const badge = probe && s.isEnabled
+        ? (probe.isSuccess
+          ? '<span class="if-gpnProbe ok">' + (Number.isFinite(probe.delayMs) && probe.delayMs >= 0 ? Math.round(probe.delayMs) + ' ms' : '—') + ' · ' + (Number.isFinite(probe.lossPercent) ? probe.lossPercent + '%' : '—') + ' · ' + esc(String(probe.udpStatus || '?').toUpperCase()) + '</span>'
+          : '<span class="if-gpnProbe fail">✕</span>')
+        : '<span class="if-gpnProbe">?</span>';
+      const active = S.activeGpnServer === s.serverId;
+      return '<div class="if-gpnRow' + (active ? ' active' : '') + '">'
+        + '<div class="if-gpnMain"><b>' + esc(s.serverName || s.serverId || '—') + '</b>' + badge + '</div>'
+        + '<div class="if-gpnActs">'
+        + '<button type="button" class="if-gpnBtn' + (s.isEnabled ? ' on' : '') + '" data-if-gpn-toggle="' + esc(s.serverId) + '">' + (s.isEnabled ? esc(ifT('gpn.servers.disable')) : esc(ifT('gpn.servers.enable'))) + '</button>'
+        + (active ? '<span class="if-gpnLive">● ' + esc(ifT('gpn.servers.active')) + '</span>' : '')
+        + '</div></div>';
+    }).join('');
+    // ---- failover telemetry + resilience log (dashboard parity) ----
+    // Same host contract as the dashboard GPN section: five live counters from
+    // skinBridge.gpnTelemetry (reset via reset_gpn_telemetry) and the last-50
+    // decisions ring buffer from skinBridge.gpnResilienceLog (refresh/clear via
+    // get_gpn_resilience_log / clear_gpn_resilience_log).
+    const snap = S.gpnTelemetry || {};
+    const num = (v) => String(Number.isFinite(v) ? v : 0);
+    const telItem = (label, cls, v) => '<span class="if-gpnTelItem ' + cls + '"><b>' + num(v) + '</b><i>' + esc(label) + '</i></span>';
+    const rlog = S.gpnResilienceLog || {};
+    const entries = (rlog && Array.isArray(rlog.entries)) ? rlog.entries : [];
+    const evMeta = (action) => ({
+      ServerSwitch: ['ok', 'gpn.ev.switch'],
+      UdpDeath: ['bad', 'gpn.ev.udpDeath'],
+      ModeFallback: ['warn', 'gpn.ev.fallback'],
+      Recover: ['ok', 'gpn.ev.recover'],
+      ModeDecision: ['sel', 'gpn.ev.select']
+    }[action] || ['dim', null]);
+    const resBody = entries.length
+      ? entries.map(e => {
+          const [cls, key] = evMeta(e && e.action);
+          const time = (e && Number.isFinite(e.timestampMs)) ? new Date(e.timestampMs).toLocaleTimeString() : '';
+          const label = key ? ifT(key) : (e && e.action) || '';
+          const mode = e && e.toMode === 'V2rayTCP' ? 'V2rayTCP' : 'WireGuard';
+          const target = e && (e.targetServerName || e.targetServerId || '');
+          const parts = [e && (e.serverName || e.serverId || ''), (target ? '→ ' + target : ''), e && e.reason ? e.reason : ''].filter(Boolean).join('  ·  ');
+          return '<div class="if-ev ' + cls + '"><i class="if-evDot"></i><div class="if-evMain"><div class="if-evLine"><span class="if-evBadge">' + esc(label) + '</span><em class="dim">' + esc(mode) + '</em><span class="if-evTime">' + esc(time) + '</span></div>'
+            + (parts ? '<p class="if-evDetail">' + esc(parts) + '</p>' : '') + '</div></div>';
+        }).join('')
+      : '<div class="if-tabMsg">' + esc(ifT('gpn.resEmpty')) + '</div>';
+    // One innerHTML pass — appending after wiring would destroy the listeners.
+    root.innerHTML =
+      '<div class="if-tabHead"><span>' + esc(ifT('gpn.servers')) + '</span><em>' + servers.length + '</em></div>'
+      + (servers.length === 0
+        ? '<div class="if-tabMsg">' + esc(ifT('gpn.none')) + '<br><small>' + esc(ifT('gpn.noneSub')) + '</small></div>'
+        : rows)
+      + '<div class="if-gpnFooter">'
+      + '<button type="button" class="if-gpnBtn" data-if-gpn-measure>⟳ ' + esc(ifT('gpn.measure')) + '</button>'
+      + '<button type="button" class="if-gpnBtn primary" data-if-gpn-connect>⚡ ' + esc(ifT('gpn.jackin')) + '</button>'
+      + '</div>'
+      + '<div class="if-gpnTel">'
+      + '<div class="if-tabHead"><span>' + esc(ifT('gpn.telTitle')) + '</span><em>' + num(snap.totalEvents) + '</em>'
+      + '<button type="button" class="if-gpnBtn ml-auto" data-if-telreset>' + esc(ifT('gpn.telemetry.reset')) + '</button></div>'
+      + '<div class="if-gpnTelWrap">'
+      + telItem(ifT('gpn.telemetry.switchShort'), 'ok', snap.serverSwitches)
+      + telItem(ifT('gpn.telemetry.deathShort'), 'bad', snap.udpDeaths)
+      + telItem(ifT('gpn.telemetry.fallbackShort'), 'warn', snap.modeFallbacks)
+      + telItem(ifT('gpn.telemetry.recoverShort'), 'ok', snap.recoveries)
+      + telItem(ifT('gpn.telemetry.selectShort'), 'sel', snap.modeDecisions)
+      + '</div></div>'
+      + '<div class="if-gpnRes">'
+      + '<div class="if-tabHead"><span>' + esc(ifT('gpn.resTitle')) + '</span><em>' + entries.length + '</em>'
+      + '<span class="if-gpnResActs"><button type="button" class="if-gpnBtn" data-if-resrefresh>⟳ ' + esc(ifT('gpn.resRefresh')) + '</button>'
+      + '<button type="button" class="if-gpnBtn" data-if-resclear>' + esc(ifT('gpn.resClear')) + '</button></span></div>'
+      + '<div class="if-resFeed">' + resBody + '</div>'
+      + (rlog && rlog.path ? '<p class="if-resPath"><span>' + esc(ifT('gpn.resPath')) + '</span> <b>' + esc(rlog.path) + '</b></p>' : '')
+      + '</div>';
+    root.querySelector('[data-if-gpn-measure]')?.addEventListener('click', () => {
+      if (B) B.postToHost({ action: 'gpn_servers_probe' });
+      logLine(ifT('gpn.measure').toUpperCase() + ' → ' + ifT('gpn.servers'), 'sys');
+    });
+    root.querySelector('[data-if-gpn-connect]')?.addEventListener('click', () => {
+      if (B) B.postToHost({ action: 'gpn_connect' });
+      logLine(ifT('gpn.jackin') + ' → GPN', 'ok');
+    });
+    root.querySelectorAll('[data-if-gpn-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (B) B.postToHost({ action: 'gpn_server_toggle', serverId: btn.getAttribute('data-if-gpn-toggle'), enabled: !btn.classList.contains('on') });
+      });
+    });
+    root.querySelector('[data-if-telreset]')?.addEventListener('click', () => {
+      if (B) B.postToHost({ action: 'reset_gpn_telemetry' });
+      logLine(ifT('gpn.telTitle') + ' → ' + ifT('gpn.telemetry.reset').toUpperCase(), 'sys');
+    });
+    root.querySelector('[data-if-resrefresh]')?.addEventListener('click', () => {
+      if (B) B.postToHost({ action: 'get_gpn_resilience_log' });
+      logLine(ifT('gpn.resTitle') + ' → ' + ifT('gpn.resRefresh').toUpperCase(), 'sys');
+    });
+    root.querySelector('[data-if-resclear]')?.addEventListener('click', () => {
+      if (B) B.postToHost({ action: 'clear_gpn_resilience_log' });
+      logLine(ifT('gpn.resTitle') + ' → ' + ifT('gpn.resClear').toUpperCase(), 'sys');
+    });
+  }
+
+  function ifRenderTabMonitor(S) {
+    const root = $('ifTabMonitor');
+    if (!root) return;
+    const snap = S.monitorSnapshot || {};
+    const conns = snap.connections || [];
+    const filter = _ifMonFilter.trim().toLowerCase();
+    const rows = conns.filter(it => {
+      if (_ifMonHideListeners && it.protocol === 'TCP' && it.state === 'Listen') return false;
+      if (!filter) return true;
+      return [it.displayName, it.processName, it.remoteAddress, it.countryText, it.asnText, it.protocol, it.state]
+        .filter(Boolean).join(' ').toLowerCase().includes(filter);
+    });
+    // One row div; the hidden class is applied when its group is collapsed.
+    const monRow = (it, hidden) => {
+      const route = it.routeTag || '';
+      const label = it.routeText || (S.routeLabels && S.routeLabels[route]) || route || '—';
+      const cls = ['proxy', 'direct', 'block', 'warp'].includes(route) ? route : 'unknown';
+      const pname = it.processName || '';
+      const display = it.displayName || pname || 'Unknown';
+      const opts = [['', ifT('route.assign')], ['vpn', ifT('route.vpn')], ['direct', ifT('route.direct')], ['block', ifT('route.block')], ['warp', ifT('route.warp')]]
+        .map(o => '<option value="' + o[0] + '"' + (o[0] === (it.action || '') ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('');
+      const country = [it.countryText, it.asnText].filter(Boolean).join(' · ') || '—';
+      return '<div class="if-monRow' + (hidden ? ' hidden' : '') + '">'
+        + '<div class="if-monProg"><b>' + esc(display) + '</b><span>' + esc(pname) + (it.pid ? ' · ' + esc(String(it.pid)) : '') + '</span></div>'
+        + '<span class="if-routeBadge ' + cls + '">' + esc(label) + '</span>'
+        + '<span>' + esc(it.protocol || '—') + '</span>'
+        + '<span class="addr" title="' + esc(it.remoteAddress || '') + '">' + esc(it.remoteAddress || '—') + '</span>'
+        + '<span class="addr" title="' + esc(country) + '">' + esc(country) + '</span>'
+        + '<span>' + esc(it.state || '—') + '</span>'
+        + '<select class="if-routeSel" data-if-monroute="' + esc(pname) + '" data-if-mondisplay="' + esc(display) + '">' + opts + '</select>'
+        + '</div>';
+    };
+    const groupHead = (k, count) => {
+      const collapsed = _ifMonCollapsed.has(k);
+      return '<div class="if-mgroup' + (collapsed ? ' collapsed' : '') + '" data-if-mongroup="' + esc(k) + '" role="button" tabindex="0" aria-expanded="' + !collapsed + '"><span class="if-mchev">' + (collapsed ? '▸' : '▾') + '</span><b>' + esc(k) + '</b><em>' + count + '</em></div>';
+    };
+    // Grouping mirrors NEXUS/dashboard: route / protocol / state / country / app
+    // with collapsible headers; groups are built from the FILTERED rows.
+    const groupKey = (it) => {
+      if (_ifMonGroup === 'route') return it.routeText || it.routeTag || '—';
+      if (_ifMonGroup === 'protocol') return it.protocol || '—';
+      if (_ifMonGroup === 'state') return it.state || '—';
+      if (_ifMonGroup === 'country') return [it.countryText, it.asnText].filter(Boolean).join(' · ') || '—';
+      return it.displayName || it.processName || 'Unknown';
+    };
+    const groupOpts = IF_MON_GROUP_KEYS.map(o => '<option value="' + o[0] + '"' + (o[0] === _ifMonGroup ? ' selected' : '') + '>' + esc(ifT(o[1])) + '</option>').join('');
+    const headRow = '<div class="if-monHead"><span>' + esc(ifT('node.colProgram')) + '</span><span>ROUTE</span><span>PROTOCOL</span><span>ADDRESS</span><span>COUNTRY</span><span>STATE</span><span></span></div>';
+    let body;
+    if (rows.length === 0) {
+      body = '<div class="if-tabMsg">' + esc(filter ? ifT('mon.noMatch') : ifT('mon.none')) + '</div>';
+    } else if (_ifMonGroup === 'none') {
+      body = headRow + rows.map(it => monRow(it, false)).join('');
+    } else {
+      const order = [];
+      const grouped = new Map();
+      rows.forEach(it => {
+        const k = groupKey(it);
+        if (!grouped.has(k)) { order.push(k); grouped.set(k, []); }
+        grouped.get(k).push(it);
+      });
+      body = headRow + order.map(k => {
+        const list = grouped.get(k);
+        const collapsed = _ifMonCollapsed.has(k);
+        return groupHead(k, list.length) + list.map(it => monRow(it, collapsed)).join('');
+      }).join('');
+    }
+    root.innerHTML =
+      '<div class="if-tabHead"><span>' + esc(ifT('monitor.title')) + '</span><em>' + rows.length + ' / ' + conns.length + '</em></div>'
+      + '<div class="if-monTools">'
+      + '<input type="search" class="if-monFilter" data-if-monfilter placeholder="' + esc(ifT('monitor.filter')) + '" value="' + esc(_ifMonFilter) + '">'
+      + '<label class="if-monHide"><input type="checkbox" data-if-monhide' + (_ifMonHideListeners ? ' checked' : '') + '> ' + esc(ifT('monitor.hideListeners')) + '</label>'
+      + '<select class="if-routeSel if-monGroup" data-if-mongroup-sel aria-label="' + esc(ifT('monitor.view.groupBy')) + '">' + groupOpts + '</select>'
+      + '</div>'
+      + body;
+    const f = root.querySelector('[data-if-monfilter]');
+    if (f) f.addEventListener('input', () => { _ifMonFilter = f.value; ifRenderTabMonitor(state()); });
+    const hide = root.querySelector('[data-if-monhide]');
+    if (hide) hide.addEventListener('change', () => { _ifMonHideListeners = hide.checked; _ifMonPersist(); ifRenderTabMonitor(state()); });
+    const gsel = root.querySelector('[data-if-mongroup-sel]');
+    if (gsel) gsel.addEventListener('change', () => { _ifMonGroup = gsel.value; _ifMonPersist(); ifRenderTabMonitor(state()); });
+    root.querySelectorAll('[data-if-mongroup]').forEach(h => {
+      const toggle = () => {
+        const k = h.getAttribute('data-if-mongroup');
+        if (_ifMonCollapsed.has(k)) _ifMonCollapsed.delete(k); else _ifMonCollapsed.add(k);
+        ifRenderTabMonitor(state());
+      };
+      h.addEventListener('click', toggle);
+      h.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    });
+    root.querySelectorAll('[data-if-monroute]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        if (!sel.value) return;
+        if (B) B.postToHost({ action: 'set_app_route', processName: sel.getAttribute('data-if-monroute'), displayName: sel.getAttribute('data-if-mondisplay'), route: sel.value });
+        logLine(ifT('log.routeSet', { route: sel.value.toUpperCase(), app: sel.getAttribute('data-if-mondisplay').toUpperCase() }), 'sys');
+      });
+    });
+  }
+
+  function ifRenderTabAbout(S) {
+    const root = $('ifTabAbout');
+    if (!root) return;
+    const info = S.appInfo || {};
+    root.innerHTML =
+      '<div class="if-tabHead"><span>' + esc(ifT('about.title')) + '</span></div>'
+      + '<div class="if-aboutLines">'
+      + '<div class="if-console-line sys">> INFRA SHELL ACTIVE.</div>'
+      + '<div class="if-console-line">> ' + esc(ifT('about.version')) + ': ' + esc(info.version || '—') + '</div>'
+      + '<div class="if-console-line">> ' + esc(ifT('about.skin')) + ': INFRA TERMINAL</div>'
+      + '<div class="if-console-line">> ' + esc(ifT('about.session')) + ': ' + esc(S.sessionTime || '00:00:00') + '</div>'
+      + '<div class="if-console-line">> ' + esc(ifT('node')) + ': ' + esc((activeNode(S) || {}).name || '—') + '</div>'
+      + '<div class="if-console-line ok">> ' + esc(ifT('about.hint')) + '</div>'
+      + '<div class="if-console-line ok">> ' + esc(ifT('about.hint2')) + '</div>'
+      + '</div>';
   }
 
   function logLine(text, cls) {
@@ -431,6 +823,9 @@
     renderNodes();
     renderTelemetry();
     renderControls();
+    ifRenderTab();
+    const sessEl = $('ifSessionConsole');
+    if (sessEl) sessEl.textContent = S.sessionTime || '00:00:00';
   }
 
   // ---- Host push handler: the authoritative snapshot wins once it echoes a
@@ -460,7 +855,9 @@
         const S = state();
         if (S.connecting) return;
         const ok = B && typeof B.postToHost === 'function'
-          ? B.postToHost({ action: 'toggle_connection', mode: S.mode, transport: S.transport, protocol: S.protocolPreference })
+          // `connected` = bastığı anda ekranda görünen durum → host yönü bu
+          // niyetten türetir (bkz. features/gpn.js).
+          ? B.postToHost({ action: 'toggle_connection', mode: S.mode, transport: S.transport, protocol: S.protocolPreference, connected: S.connected === true })
           : false;
         if (!ok && B && typeof B.setConnected === 'function') B.setConnected(!S.connected, false);
         if (!B) { DEMO.connected = !DEMO.connected; logLine(DEMO.connected ? ifT('console.tunnelUp') : ifT('console.tunnelDown'), DEMO.connected ? 'ok' : 'sys'); }
@@ -570,6 +967,63 @@
       });
     }
 
+    // ---- console tabs ----
+    document.querySelectorAll('[data-if-tab]').forEach(b => b.addEventListener('click', () => ifSwitchTab(b.getAttribute('data-if-tab'))));
+
+    // ---- extended settings (dashboard parity) ----
+    const tunStack = $('ifTunStack');
+    if (tunStack) tunStack.addEventListener('change', () => {
+      const next = String(tunStack.value || 'mixed');
+      if (B) B.postToHost({ action: 'set_tun_stack', stack: next });
+      SET('tunStack', next);
+      logLine(ifT('log.tunStack', { stack: String(next).toUpperCase() }), 'sys');
+      render();
+    });
+    const effects = $('ifEffects');
+    if (effects) effects.addEventListener('change', () => {
+      const next = String(effects.value || 'full');
+      if (B) B.postToHost({ action: 'set_effects_tier', tier: next });
+      SET('effectsTier', next);
+      logLine(ifT('log.effects', { effects: String(next).toUpperCase() }), 'sys');
+      render();
+    });
+    const autoGame = $('ifAutoGame');
+    if (autoGame) autoGame.addEventListener('click', () => {
+      const next = !(autoGame.classList.contains('on'));
+      autoGame.classList.toggle('on', next); autoGame.setAttribute('aria-checked', String(next));
+      if (B) B.postToHost({ action: 'set_auto_game_connect', enabled: next });
+      logLine(ifT('log.autoGame', { state: ifT(next ? 'log.on' : 'log.off') }), 'sys');
+    });
+    const recovery = $('ifRecovery');
+    if (recovery) recovery.addEventListener('click', () => {
+      const next = !(recovery.classList.contains('on'));
+      recovery.classList.toggle('on', next); recovery.setAttribute('aria-checked', String(next));
+      if (B) B.postToHost({ action: 'set_gpn_recovery_watch', enabled: next });
+      logLine(ifT('log.recovery', { state: ifT(next ? 'log.on' : 'log.off') }), 'sys');
+    });
+    const failover = $('ifFailover');
+    if (failover) failover.addEventListener('click', () => {
+      const next = !(failover.classList.contains('on'));
+      failover.classList.toggle('on', next); failover.setAttribute('aria-checked', String(next));
+      if (B) B.postToHost({ action: 'set_gpn_failover', enabled: next });
+      logLine(ifT('log.failover', { state: ifT(next ? 'log.on' : 'log.off') }), 'sys');
+    });
+    const proxyTest = $('ifProxyTest');
+    if (proxyTest) proxyTest.addEventListener('click', () => {
+      if (proxyTest.classList.contains('running')) return;
+      proxyTest.classList.add('running'); proxyTest.classList.remove('ok', 'fail');
+      proxyTest.textContent = ifT('test.running');
+      if (B) B.postToHost({ action: 'test_proxy' });
+      logLine(ifT('log.proxyTest'), 'sys');
+      // Safety: if the host never answers, drop back to idle after 6 s.
+      setTimeout(() => {
+        if (proxyTest.classList.contains('running')) {
+          proxyTest.classList.remove('running'); proxyTest.classList.add('fail');
+          proxyTest.textContent = ifT('test.fail');
+        }
+      }, 6000);
+    });
+
     const connectBtn2 = $('ifConnect');
     if (connectBtn2) connectBtn2.setAttribute('aria-label', ifT('connectAria'));
   }
@@ -580,7 +1034,51 @@
     wire(); render(); start();
   }
 
+  // ---- global keyboard shortcuts (shared across all skins) ----
+  //   Ctrl+Enter -> CONNECT / disconnect (same toggle as the CONNECT button)
+  //   Alt+1..5   -> console tabs (terminal / nodes / gpn / monitor / about)
+  //   R          -> cycle the focused boost app's route (vpn/direct/block/warp)
+  // The exact same set exists in NEXUS (Alt+1..8 for its views) and CYBER.
+  const IF_TAB_KEYS = ['terminal', 'nodes', 'gpn', 'monitor', 'about'];
+  let _ifShortcutsBound = false;
+  function ifBindShortcuts() {
+    if (_ifShortcutsBound) return;
+    _ifShortcutsBound = true;
+    document.addEventListener('keydown', (e) => {
+      // Connect / disconnect — safe in every context, including inputs.
+      if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'Enter' || e.key === 'NumpadEnter')) {
+        e.preventDefault();
+        const connectBtn = $('ifConnect');
+        if (connectBtn) connectBtn.click();
+        return;
+      }
+      const typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
+      // Tab switching.
+      if (e.altKey && !e.ctrlKey && !e.metaKey && !typing && /^[1-5]$/.test(e.key)) {
+        e.preventDefault();
+        ifSwitchTab(IF_TAB_KEYS[Number(e.key) - 1]);
+        return;
+      }
+      // Route cycle on the focused boost app row (row or its switch).
+      if (!typing && !e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'r' || e.key === 'R')) {
+        const row = document.activeElement && document.activeElement.closest
+          ? document.activeElement.closest('[data-if-pname]')
+          : null;
+        if (row && row.getAttribute && row.getAttribute('data-if-pname')) {
+          const pname = row.getAttribute('data-if-pname');
+          const S = state();
+          const app = (S.monitorSnapshot.apps || []).find(a => (a.processName || a.value) === pname);
+          const cur = actionFor(app || { processName: pname });
+          const next = ifRouteCycle(cur);
+          e.preventDefault();
+          setAppRoute(pname, next);
+        }
+      }
+    });
+  }
+
   function start() {
+    ifBindShortcuts();
     if (B && typeof B.subscribe === 'function') B.subscribe(onHostPush);
     if (!PREVIEW) setInterval(() => { if (document.visibilityState !== 'hidden') render(); }, 1000); // session-clock tick
   }

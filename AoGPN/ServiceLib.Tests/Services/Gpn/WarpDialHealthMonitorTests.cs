@@ -67,6 +67,36 @@ public class WarpDialHealthMonitorTests
     }
 
     [Fact]
+    public void TryOpenTailFile_MissingFile_ReturnsFalse_NoThrow()
+    {
+        // Çekirdek hiç başlamadıysa log dosyası yoktur — her poll döngüsünde
+        // FileNotFoundException fırlatmak yerine sessizce false dönmeli.
+        var missing = Path.Combine(Path.GetTempPath(), $"ao_missing_{Guid.NewGuid():N}.log");
+        WarpDialHealthMonitor.TryOpenTailFile(missing, out var stream).Should().BeFalse();
+        stream.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryOpenTailFile_ExistingFile_ReturnsReadableStream()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ao_tail_{Guid.NewGuid():N}.log");
+        try
+        {
+            File.WriteAllText(path, "line1\n");
+            WarpDialHealthMonitor.TryOpenTailFile(path, out var stream).Should().BeTrue();
+            using (stream)
+            {
+                stream.Should().NotBeNull();
+                stream!.CanRead.Should().BeTrue();
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ExtractError_ReturnsSuffix_ForMihomoLine()
     {
         WarpDialHealthMonitor.ExtractError(

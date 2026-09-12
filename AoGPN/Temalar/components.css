@@ -338,6 +338,49 @@
     letter-spacing: .02em;
   }
   .app-icon img { width: 100%; height: 100%; object-fit: contain; }
+  /* Gaming-style rail cards (frameless): the icon is the hero — a neon-glow
+     spotlight (cyan when the app is running, neutral when idle), zero borders
+     or boxes — and every text stays a micro detail. The letter-tile
+     placeholder scales with the icon so the layout stays stable while the
+     host resolves the real shell icon. */
+  .app-icon-glow {
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 20px;
+    padding: 6px;
+    background: radial-gradient(120% 120% at 50% 30%, rgba(148,163,184,.14), rgba(148,163,184,0) 70%);
+    transition: transform .2s ease;
+  }
+  .boost-card:hover .app-icon-glow { transform: scale(1.07); }
+  .app-icon-glow-alive {
+    background: radial-gradient(120% 120% at 50% 30%, rgba(34,211,238,.24), rgba(34,211,238,0) 72%);
+    box-shadow: 0 0 24px rgba(34,211,238,.16), 0 0 8px rgba(34,211,238,.10);
+  }
+  .app-icon-glow .app-icon { border-radius: 14px; font-size: 18px; }
+  /* Route micro-dot on the frameless cards (mirrors the route-badge palette). */
+  .route-dot { width: 5px; height: 5px; border-radius: 9999px; flex-shrink: 0; }
+  /* Per-app quick-settings popover: active route pill (gaming neon chip, dark
+     text on the route colour; inactive pills stay ghosted). */
+  .route-pill-on { color: #0B0F17; }
+  .route-pill-on.route-pill-proxy { background: rgba(34,211,238,.88); box-shadow: 0 0 12px rgba(34,211,238,.35); }
+  .route-pill-on.route-pill-direct { background: rgba(52,211,153,.88); box-shadow: 0 0 12px rgba(52,211,153,.35); }
+  .route-pill-on.route-pill-block { background: rgba(248,113,113,.88); box-shadow: 0 0 12px rgba(248,113,113,.35); }
+  .route-pill-on.route-pill-warp { background: rgba(167,139,250,.88); box-shadow: 0 0 12px rgba(167,139,250,.35); }
+  .route-pill-on.route-pill-unknown { background: rgba(148,163,184,.88); }
+  .route-dot.proxy { background: #22D3EE; box-shadow: 0 0 6px rgba(34,211,238,.7); }
+  .route-dot.direct { background: #34D399; box-shadow: 0 0 6px rgba(52,211,153,.7); }
+  .route-dot.block { background: #F87171; box-shadow: 0 0 6px rgba(248,113,113,.7); }
+  .route-dot.warp { background: #A78BFA; box-shadow: 0 0 6px rgba(167,139,250,.7); }
+  .route-dot.unknown { background: #64748B; }
+  /* Connection Center rail: grab-cursor drag-to-scroll for the mouse.
+     .rail-dragging is set while a pointer drag is active (and blocks text
+     selection mid-gesture); trackpad/touch panning is untouched. */
+  #dashboardBoostCards { cursor: grab; }
+  #dashboardBoostCards.rail-dragging { cursor: grabbing; user-select: none; }
+  /* The rail still scrolls (‹ › arrows, wheel, trackpad, drag-to-scroll) but
+     its scrollbar is hidden — over the frameless cards the bar only adds
+     visual noise. */
+  #dashboardBoostCards { scrollbar-width: none; }
+  #dashboardBoostCards::-webkit-scrollbar { display: none; }
   .proxy-toggle {
     transition: all .2s ease;
   }

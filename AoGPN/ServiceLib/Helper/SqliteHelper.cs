@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Globalization;
 
 namespace ServiceLib.Helper;
 
@@ -26,6 +27,58 @@ public sealed class SQLiteHelper
     // without filling the disk.
     private int _busyLogCounter;
     private int _timeoutLogged;
+    private int _slowLogCounter;
+
+    // Kapıyı elinde tutan yazar + tutma başlangıcı — gate-busy satırına yazılır.
+    // 2026-09-10 oturumunda ~2,9M yazma atlandı ama "write timed out" HİÇ
+    // basmadı: tutucu 10-15 sn arası yazıyor ve kapıyı bırakıyordu. Tutucuyu
+    // adlandırmadan bu yazar bulunamazdı.
+    private readonly object _gateStateLock = new();
+    private string? _gateHolder;
+    private long _gateHeldSince;
+
+    /// <summary>Kapıyı bekleyen yazarın atlanmadan önce beklediği süre (test dikişi: kısaltılabilir).</summary>
+    internal TimeSpan GateAcquireTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>Kapıyı tutan yazmaya verilen tavan süre — aşarsa yazma terk edilir, bağlantı yenilenir.</summary>
+    internal TimeSpan GateHoldCap { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>Bu süreyi aşan kilit tutuşları contention olmasa bile raporlanır (yavaş yazar teşhisi).</summary>
+    internal TimeSpan SlowHoldReportThreshold { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Tavan aşımında async bağlantının yeniden kurulup kurulmayacağı. Test dikişi:
+    /// sqlite-net'in bağlantı HAVUZU bağlantı dizesine göre statiktir — testte havuz
+    /// bağlantısını kapatmak tekil örneğin sonraki yazmalarını bozar; tavan aşımı
+    /// davranışı (terk + kapı serbest) bağlantı yenilemesi OLMADAN da doğrulanır.
+    /// </summary>
+    internal bool RecreateConnectionOnTimeout { get; set; } = true;
+
+    internal int BusySkipCount => Volatile.Read(ref _busyLogCounter);
+    internal int TimeoutAbandonCount => Volatile.Read(ref _timeoutLogged);
+    internal int SlowHoldLogCount => Volatile.Read(ref _slowLogCounter);
+
+    internal bool IsGateHeld
+    {
+        get
+        {
+            lock (_gateStateLock)
+            {
+                return _gateHolder is not null;
+            }
+        }
+    }
+
+    internal void ResetGateDiagnosticsForTest()
+    {
+        Interlocked.Exchange(ref _busyLogCounter, 0);
+        Interlocked.Exchange(ref _timeoutLogged, 0);
+        Interlocked.Exchange(ref _slowLogCounter, 0);
+    }
+
+    /// <summary>Test dikişi: gerçek SQLite işlemi olmadan gate davranışını sürer.</summary>
+    internal Task<int> RunSerializedWriteForTest(Func<Task<int>> action)
+        => SerializedWriteAsync(action);
 
     public SQLiteHelper()
     {
@@ -39,32 +92,56 @@ public sealed class SQLiteHelper
         return _db.CreateTable<T>();
     }
 
+    private static string CallerName(Func<Task<int>> action)
+        => $"{action.Method.DeclaringType?.Name}.{action.Method.Name}";
+
+    /// <summary>gate-busy mesajı — bekleme sırasında hem bekleyen hem TUTAN çağıran görünür.</summary>
+    internal static string BuildBusyMessage(string caller, string? holder, double heldForSeconds)
+        => string.Format(CultureInfo.InvariantCulture,
+            "SQLiteHelper write gate busy for 10s — write skipped " +
+            "(caller: {0}; gate holder: {1}; held for: {2:0.0}s).",
+            caller, holder ?? "?", heldForSeconds);
+
     private async Task<int> SerializedWriteAsync(Func<Task<int>> action)
     {
+        var caller = CallerName(action);
+
         // Bounded gate: a stuck writer (e.g. a hung transaction during exit's
         // state flush) previously held _writeGate forever and froze the whole
         // shutdown. Time out and skip instead of blocking.
-        if (!await _writeGate.WaitAsync(TimeSpan.FromSeconds(10)))
+        if (!await _writeGate.WaitAsync(GateAcquireTimeout))
         {
             var n = Interlocked.Increment(ref _busyLogCounter);
             if (n == 1 || n % 1000 == 0)
             {
-                Logging.SaveLog("SQLiteHelper write gate busy for 10s — write skipped.");
+                // Teşhis anahtarı: kapıyı KİM tutuyor + ne zamandır — 2026-09-06'daki
+                // 4,3M özdeş satırın yazıcısı ancak elle bulunabildi; bu satır onu
+                // otomatik adlandırır.
+                var holder = GetGateHolder(out var heldForSeconds);
+                Logging.SaveLog(BuildBusyMessage(caller, holder, heldForSeconds));
             }
             return -1;
         }
+        var heldSince = Stopwatch.GetTimestamp();
         try
         {
+            lock (_gateStateLock)
+            {
+                _gateHolder = caller;
+                _gateHeldSince = heldSince;
+            }
             // Task.Run + Unwrap: sqlite-net's async API can block synchronously
             // inside its connection queue when the queue is wedged. If the action
             // ran on the caller's thread, the gate holder itself would be stuck
             // forever (observed live: the gate stayed held for the whole session,
             // every other write skipped for 10 minutes, and the process froze).
-            // Hopping to a pool thread keeps the 15 s cap effective: the holder
-            // always times out and releases the gate.
-            // Task.Run unwraps Func<Task<T>> automatically — the 15 s cap below
-            // then applies to the real operation.
-            return await Task.Run(action).WaitAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
+            // Hopping to a pool thread keeps the cap effective: the holder always
+            // times out and releases the gate.
+            // Task.Run unwraps Func<Task<T>> automatically — the cap below then
+            // applies to the real operation.
+            var result = await Task.Run(action).WaitAsync(GateHoldCap).ConfigureAwait(false);
+            ReportSlowHoldIfNeeded(caller, heldSince);
+            return result;
         }
         catch (TimeoutException)
         {
@@ -74,15 +151,55 @@ public sealed class SQLiteHelper
             if (Interlocked.Exchange(ref _timeoutLogged, 1) == 0)
             {
                 Logging.SaveLog(
-                    $"SQLiteHelper write timed out after 15s — write abandoned " +
-                    $"(caller: {action.Method.DeclaringType?.Name}.{action.Method.Name}); async connection recreated.");
+                    $"SQLiteHelper write timed out after {GateHoldCap.TotalSeconds:0}s — write abandoned " +
+                    $"(caller: {caller}); async connection recreated.");
             }
-            RecreateAsyncConnection();
+            if (RecreateConnectionOnTimeout)
+            {
+                RecreateAsyncConnection();
+            }
             return -1;
         }
         finally
         {
+            lock (_gateStateLock)
+            {
+                _gateHolder = null;
+                _gateHeldSince = 0;
+            }
             _writeGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Kilit <see cref="SlowHoldReportThreshold"/>'u aştıysa yavaş yazarı adlandırır —
+    /// kimse beklemiyor olsa bile. 10-15 sn'lik tutuşlar busy spam'ı olmadan da sessizce
+    /// yaşanabilir (loglarda "write timed out" yokken ~2,9M atlanan yazma); bu satır
+    /// onları görünür yapar.
+    /// </summary>
+    private void ReportSlowHoldIfNeeded(string caller, long heldSince)
+    {
+        var heldFor = Stopwatch.GetElapsedTime(heldSince);
+        if (heldFor < SlowHoldReportThreshold)
+        {
+            return;
+        }
+        var n = Interlocked.Increment(ref _slowLogCounter);
+        if (n == 1 || n % 100 == 0)
+        {
+            Logging.SaveLog(string.Format(CultureInfo.InvariantCulture,
+                "SQLiteHelper write gate held {0:0.0}s by {1} (slow write).", heldFor.TotalSeconds, caller));
+        }
+    }
+
+    private string? GetGateHolder(out double heldForSeconds)
+    {
+        lock (_gateStateLock)
+        {
+            heldForSeconds = _gateHeldSince == 0
+                ? 0
+                : Stopwatch.GetElapsedTime(_gateHeldSince).TotalSeconds;
+            return _gateHolder;
         }
     }
 
@@ -110,7 +227,16 @@ public sealed class SQLiteHelper
         {
             // yukarıdaki gibi
         }
-        _dbAsync = new SQLiteAsyncConnection(_connstr, false);
+        try
+        {
+            _dbAsync = new SQLiteAsyncConnection(_connstr, false);
+        }
+        catch (Exception ex)
+        {
+            // Yeniden kurulum başarısızsa bile kapı serbest kalır — sonraki yazma
+            // yeniden dener; tekil yazma kaybı tüm akışı kilitlemez.
+            Logging.SaveLog($"SQLiteHelper async connection recreate failed: {ex.Message}");
+        }
     }
 
     public Task<int> InsertAllAsync(IEnumerable models)

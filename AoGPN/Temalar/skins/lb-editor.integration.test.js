@@ -17,14 +17,17 @@ function click(dash, el) {
   el.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
 }
 
-test('dashboard: GPN settings tab and panel are removed (no VLESS bypass editor)', async () => {
+test('dashboard: GPN settings tab holds the advanced section (no VLESS bypass editor)', async () => {
   const dash = await loadDashboard();
   const { document } = dash;
   assert.ok(dash.openView('settings'), 'settings view opens');
-  assert.equal(document.querySelector('[data-settings-tab="gpn"]'), null,
-    'GPN settings tab button is gone');
-  assert.equal(document.querySelector('[data-settings-panel="gpn"]'), null,
-    'GPN settings panel is gone');
+  // Ayarlar → GPN sekmesi, Bağlantı Merkezi'nden taşınan Gelişmiş & Teşhis
+  // kartlarını barındırır (VLESS/launcher bypass editörü değil — o kaldırıldı).
+  const tab = document.querySelector('[data-settings-tab="gpn"]');
+  assert.ok(tab, 'GPN settings tab button exists (advanced & diagnostics moved here)');
+  const panel = document.querySelector('[data-settings-panel="gpn"]');
+  assert.ok(panel, 'GPN settings panel exists');
+  assert.ok(panel.querySelector('#gpnFailoverToggle'), 'failover toggle lives in the GPN settings panel');
   assert.equal(document.getElementById('vlessBypassUri'), null, 'VLESS bypass textarea removed');
   assert.equal(document.getElementById('launcherBypassList'), null, 'launcher bypass editor removed');
   dash.close();

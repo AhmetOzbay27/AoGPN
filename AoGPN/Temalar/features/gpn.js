@@ -1,12 +1,13 @@
 /* ==========================================================================
    features/gpn.js — AoGPN dashboard feature module (GPN paneli)
    --------------------------------------------------------------------------
-   Sunucu Yönetimi (import/edit/toggle/delete + canlı ölçüm), sunucu kümesi
-   kartı, GPN diyagnoz akışı, WARP/WinDivert sağlık banner'ları, PID havuzu,
+   Sunucu Yönetimi (import/edit/toggle/delete + canlı ölçüm), GPN diyagnoz
+   akışı, WARP/WinDivert sağlık banner'ları, PID havuzu,
    WinDivert kuyruk + Wintun ayarları, yakalanan trafik, failover matrisi,
    en iyi aday tahmini, kurtarma/failover toggle'ları, failover telemetrisi,
-   karar günlüğü ve GPN Bağlan rozeti. Host köprüsü window.setGpn* sözleşmesi
-   bu modülde yaşar; app.js/skinBridge aogpn.gpn erişimcileriyle bağlanır.
+   karar günlüğü ve bağlantı durumu kaydı (skinBridge GPN Connect rozeti).
+   Host köprüsü window.setGpn* sözleşmesi bu modülde yaşar; app.js/skinBridge
+   aogpn.gpn erişimcileriyle bağlanır.
    ========================================================================== */
 (() => {
   'use strict';
@@ -76,14 +77,12 @@
   window.setGpnServers = (items) => {
     gpnServers = Array.isArray(items) ? items : [];
     renderGpnServers();
-    renderGpnCluster();
     aogpn.events.emit('skin-changed'); // refresh standalone skins (GPN Servers view)
   };
   window.setGpnServerProbes = (results) => {
     gpnServerProbes.clear();
     (Array.isArray(results) ? results : []).forEach(r => gpnServerProbes.set(r.serverId, r));
     renderGpnServers();
-    renderGpnCluster();
     aogpn.events.emit('skin-changed'); // refresh standalone skins (GPN Servers view)
   };
   window.gpnServersNotify = (message) => {
@@ -187,134 +186,6 @@
         '</div>' +
       '</div>';
     }).join('');
-  }
-
-  // GPN panel "sunucu kümesi" kartı — İtalya/Almanya canlı gecikmesi (host
-  // ProbeGpnServersAsync → aynı gpnServerProbes verisi) + ölçüm döngüsü.
-  let gpnClusterPending = false;
-  let gpnClusterTimer = null;
-  function renderGpnCluster() {
-    const list = document.getElementById('gpnClusterList');
-    if (!list) return;
-    const active = gpnServers.filter(s => s.isEnabled);
-    const ping = document.getElementById('gpnClusterPing');
-    if (!active.length) {
-      list.innerHTML = '<p class="text-[#64748B]">' + t('gpn.cluster.empty') + '</p>';
-      if (ping) ping.textContent = '';
-      return;
-    }
-
-    // İlk sunucu listesi geldiğinde ve GPN paneli görünürken canlı değerler için
-    // tek seferlik ilk ölçümü tetikle (sonraki ölçümler 15 sn'lik döngüden gelir).
-    if (!gpnClusterInitialProbed && document.getElementById('panelGPN')
-        && !document.getElementById('panelGPN').classList.contains('hidden-panel')) {
-      gpnClusterInitialProbed = true;
-      requestGpnClusterProbe();
-      // WinDivert kuyruk + Wintun adapter kartlarını doldur (config değerleri host'tan gelir).
-      postToHost({ action: 'get_gpn_capture_settings' });
-      postToHost({ action: 'get_gpn_wintun_settings' });
-    }
-
-    // En düşük gecikmeli + UDP'si açık aday → "best" vurgusu (WaveGuard seçimiyle aynı amaç).
-    const rows = active.map((s, idx) => {
-      const p = gpnServerProbes.get(s.serverId);
-      const r = { id: s.serverId, name: s.name || s.serverId, addr: (s.endpointHost || '') + ':' + (s.endpointPort || ''), order: idx };
-      if (!p) { r.delayMs = null; r.loss = null; r.udp = null; r.physicalNic = false; return r; }
-      const ok = p.isSuccess && Number.isFinite(p.delayMs) && p.delayMs >= 0;
-      r.delayMs = ok ? p.delayMs : null;
-      r.loss = ok ? p.lossPercent : null;
-      r.udp = p.udpStatus || (ok ? 'Open' : 'unknown');
-      // Tünel aktifken ICMP atlanır ve ping (el sıkışma fallback'i) bazen zaman
-      // aşımına düşebilir; UDP probe'u Open döndüyse onun RTT'sini gecikme olarak
-      // göster — kart boş kalmaz, değer gerçek fiziksel yoldan ölçülmüştür.
-      if (r.delayMs == null && p.udpStatus === 'Open'
-          && Number.isFinite(p.udpRoundTripMs) && p.udpRoundTripMs >= 0) {
-        r.delayMs = p.udpRoundTripMs;
-        r.loss = 0; // kayıp oranı ping ölçümüne aittir — UDP RTT'siyle gösterilmez
-      }
-      // Host, tünel etkinken ölçümün fiziksel NIC üzerinden yapıldığını bildirir
-      // (ICMP atlandı, gecikme UDP el sıkışma RTT'si) — başlıkta ipucu gösterilir.
-      r.physicalNic = p.measuredOverPhysicalNic === true;
-      return r;
-    });
-
-    // Tünel etkinken ölçüm fiziksel NIC üzerinden yapılır: kısa rozet + açıklayıcı
-    // tooltip. Tünel yokken gizlidir (ölçüm normal ICMP yoludur).
-    const egressHint = document.getElementById('gpnClusterEgressHint');
-    if (egressHint) {
-      if (rows.some(r => r.physicalNic)) {
-        egressHint.textContent = t('gpn.cluster.egressHintLabel');
-        egressHint.title = t('gpn.cluster.egressHint');
-        egressHint.classList.remove('hidden');
-      } else {
-        egressHint.classList.add('hidden');
-      }
-    }
-    const best = rows.filter(r => r.delayMs != null && r.udp === 'Open')
-      .sort((a, b) => a.delayMs - b.delayMs)[0];
-
-    list.innerHTML = rows.sort((a, b) => a.order - b.order).map(r => {
-      const bestBadge = best && best.id === r.id
-        ? '<span class="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-400/10 text-emerald-300 border border-emerald-400/25">' + t('gpn.cluster.best') + '</span>'
-        : '';
-      const delay = r.delayMs != null ? Math.round(r.delayMs) + ' ms' : '—';
-      const delayCls = r.delayMs != null ? 'text-cyan-300 num-tabular' : 'text-[#5B6472]';
-      const udpDot = r.udp === 'Open' ? 'bg-emerald-400'
-        : (r.udp === 'Blocked' || r.udp === 'HandshakeNoResponse') ? 'bg-red-400' : 'bg-amber-400';
-      const udpTxt = r.udp ? escHtml(r.udp) : '—';
-      const loss = r.loss != null && r.loss > 0 ? ' · ' + Math.round(r.loss) + '%' : '';
-      return '<div class="flex items-center gap-2.5 min-w-0 rounded-lg bg-white/[.03] border border-white/5 px-2.5 py-2">' +
-        '<span class="w-2 h-2 rounded-full ' + udpDot + ' shrink-0"></span>' +
-        '<div class="min-w-0 flex-1">' +
-          '<div class="flex items-center gap-1.5 min-w-0">' +
-            '<p class="text-xs font-semibold text-slate-100 truncate">' + escHtml(r.name) + '</p>' +
-            bestBadge +
-          '</div>' +
-          '<p class="text-[9px] text-[#5B6472] font-mono truncate">' + escHtml(r.addr) + ' · ' + udpTxt + loss + '</p>' +
-        '</div>' +
-        '<span class="shrink-0 text-sm font-semibold num-tabular ' + delayCls + '">' + escHtml(delay) + '</span>' +
-      '</div>';
-    }).join('');
-
-    if (ping) {
-      const openCount = rows.filter(r => r.udp === 'Open').length;
-      const bestMs = best ? Math.round(best.delayMs) : null;
-      ping.textContent = openCount + ' ' + t('gpn.cluster.open') + (bestMs != null ? ' · ' + bestMs + ' ms' : '');
-    }
-  }
-
-  let gpnClusterInitialProbed = false;
-  function requestGpnClusterProbe() {
-    if (gpnClusterPending) return;
-    gpnClusterPending = true;
-    postToHost({ action: 'gpn_cluster_probe' });
-    setTimeout(() => { gpnClusterPending = false; }, 12000);
-  }
-  function scheduleGpnClusterTick() {
-    const p = document.getElementById('panelGPN');
-    // Sadece GPN paneli görünürken ölç — Sunucu Yönetimi görünümü açıkken
-    // kendi 15 sn döngüsü zaten çalışır, burada tekrar ölçülmez. Sandbox'ta
-    // setTimeout inert olduğundan bu döngü testte setInterval sayacını etkilemez.
-    if (p && !p.classList.contains('hidden-panel') && !gpnProbePending) {
-      requestGpnClusterProbe();
-    }
-    gpnClusterTimer = setTimeout(scheduleGpnClusterTick, 15000);
-  }
-  function startGpnClusterLoop() {
-    stopGpnClusterLoop();
-    gpnClusterTimer = setTimeout(scheduleGpnClusterTick, 15000);
-  }
-  function stopGpnClusterLoop() {
-    if (gpnClusterTimer) { clearTimeout(gpnClusterTimer); gpnClusterTimer = null; }
-    gpnClusterPending = false;
-  }
-
-  const gpnClusterProbeBtn = document.getElementById('gpnClusterProbe');
-  if (gpnClusterProbeBtn) {
-    gpnClusterProbeBtn.addEventListener('click', () => {
-      gpnClusterPending = false;
-      requestGpnClusterProbe();
-    });
   }
 
   // WARP dial sağlığı — host (WarpDialHealthMonitor) sing-box log kuyruğunu
@@ -766,20 +637,77 @@
     }
   }
 
-  // Canlı ölçüm: view açıkken her 15 saniyede bir host'tan taze ping+UDP sonucu iste.
+  // ── Canlı ölçüm döngüsü ───────────────────────────────────────────────
+  //
+  // Host ölçümü (gpn_servers_probe) AĞIRDIR: tüm etkin sunuculara ICMP ping + UDP
+  // WireGuard el sıkışma probe'u gönderir. Bu paketler canlı oyun trafiğiyle AYNI
+  // fiziksel NIC'ten çıkar; eski kod görünürlük durumuna bakmaksızın her 15 saniyede
+  // bir tetikliyordu — tepsiye küçültülmüşken de. Oyunda jitter üreten gerçek bir
+  // kaynaktı.
+  //
+  // Yeni sözleşme:
+  //   * pencere gizliyken (visibilityState === 'hidden') HİÇ ölçüm yapılmaz,
+  //   * bağlantı KURULUYKEN aralık seyreltilir (ölçüm tünel trafiğiyle yarışmasın),
+  //   * bağlı değilken daha sık taranır (kullanıcı hangi sunucunun iyi olduğunu görsün),
+  //   * manuel ⚡ Test düğmesi bu kısıtlamalardan ETKİLENMEZ (kullanıcı istedi).
+  const GPN_PROBE_INTERVAL_IDLE_MS = 15000;
+  const GPN_PROBE_INTERVAL_CONNECTED_MS = 60000;
+
+  function gpnIsSessionConnected() {
+    // Lazily erişilir: yükleme sırası ve test koşulları güvenli kalsın.
+    try {
+      const conn = window.aogpn && aogpn.connection;
+      return !!(conn && typeof conn.isConnected === 'function' && conn.isConnected());
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function gpnProbeIntervalMs() {
+    return gpnIsSessionConnected() ? GPN_PROBE_INTERVAL_CONNECTED_MS : GPN_PROBE_INTERVAL_IDLE_MS;
+  }
+
+  function gpnProbeWindowVisible() {
+    try {
+      return !(typeof document !== 'undefined' && document.visibilityState === 'hidden');
+    } catch (_) {
+      return true;
+    }
+  }
+
   function requestGpnProbe() {
     if (gpnProbePending) return;
     gpnProbePending = true;
     postToHost({ action: 'gpn_servers_probe' });
     setTimeout(() => { gpnProbePending = false; }, 12000);
   }
+
+  /**
+   * Bir sonraki otomatik ölçümü planlar. Aralık her turda yeniden hesaplanır
+   * (bağlantı durumu değiştiyse yeni aralık hemen geçerli olur) ve pencere
+   * gizliyken tetiklenmez — döngü canlı kalır, yalnızca ölçüm atlanır.
+   */
+  function scheduleNextGpnProbe() {
+    if (gpnProbeTimer) clearTimeout(gpnProbeTimer);
+    gpnProbeTimer = setTimeout(() => {
+      gpnProbeTimer = null;
+      if (gpnProbeWindowVisible()) {
+        requestGpnProbe();
+      }
+      scheduleNextGpnProbe();
+    }, gpnProbeIntervalMs());
+  }
+
   function startGpnProbeLoop() {
     stopGpnProbeLoop();
-    requestGpnProbe();
-    gpnProbeTimer = setInterval(requestGpnProbe, 15000);
+    if (gpnProbeWindowVisible()) {
+      requestGpnProbe();
+    }
+    scheduleNextGpnProbe();
   }
+
   function stopGpnProbeLoop() {
-    if (gpnProbeTimer) { clearInterval(gpnProbeTimer); gpnProbeTimer = null; }
+    if (gpnProbeTimer) { clearTimeout(gpnProbeTimer); gpnProbeTimer = null; }
     gpnProbePending = false;
   }
 
@@ -925,17 +853,6 @@
       if (countBadge) countBadge.textContent = '0';
     });
   }
-  const gpnConnectBtn = $('gpnConnectBtn');
-  if (gpnConnectBtn) {
-    gpnConnectBtn.addEventListener('click', () => {
-      if (aogpn.app.getTunLocked()) {
-        return;
-      }
-      setGpnConnectState('…', true);
-      postToHost({ action: 'gpn_connect' });
-    });
-  }
-
   $('connectBtn').addEventListener('click', () => {
     // TUN without elevation would be rejected by the host; block the press up front.
     if (aogpn.app.getTunLocked()) {
@@ -943,8 +860,13 @@
     }
     // The real app waits for C# to acknowledge the applied routing transition. A
     // local fallback keeps the same file interactive when opened outside WebView2.
-    if (!postToHost({ action: 'toggle_connection', mode: aogpn.app.getMode(), transport: aogpn.app.getTransport(), protocol: aogpn.app.getProtocolPreference() })) {
-      aogpn.app.setConnected(!aogpn.app.getConnected(), false);
+    // `connected` = kullanıcının bastığı anda EKRANDA GÖRDÜĞÜ durum. Host bağlan/kes
+    // yönünü bu niyetten türetir (canlı çekirdek durumundan değil): açılışta arka
+    // planda kurulan bir tünel arayüzde hâlâ "Bağlan" görünürken gelen tıklama
+    // "kes"e dönüşüp taze tüneli yıkmasın.
+    const displayedConnected = aogpn.app.getConnected() === true;
+    if (!postToHost({ action: 'toggle_connection', mode: aogpn.app.getMode(), transport: aogpn.app.getTransport(), protocol: aogpn.app.getProtocolPreference(), connected: displayedConnected })) {
+      aogpn.app.setConnected(!displayedConnected, false);
     }
   });
   // Mobile nav quick connect/disconnect: same toggle, same TUN lock.
@@ -954,8 +876,9 @@
       if (aogpn.app.getTunLocked()) {
         return;
       }
-    if (!postToHost({ action: 'toggle_connection', mode: aogpn.app.getMode(), transport: aogpn.app.getTransport(), protocol: aogpn.app.getProtocolPreference() })) {
-      aogpn.app.setConnected(!aogpn.app.getConnected(), false);
+    const displayedConnected = aogpn.app.getConnected() === true;
+    if (!postToHost({ action: 'toggle_connection', mode: aogpn.app.getMode(), transport: aogpn.app.getTransport(), protocol: aogpn.app.getProtocolPreference(), connected: displayedConnected })) {
+      aogpn.app.setConnected(!displayedConnected, false);
     }
     });
   }
@@ -977,30 +900,9 @@
     postToHost({ action: 'app_control', command: 'reboot_as_admin' });
   });
 
-  (function initGpnAdvanced() {
-    const wrap = document.getElementById('gpnAdvanced');
-    const btn = document.getElementById('gpnAdvancedToggle');
-    const body = document.getElementById('gpnAdvancedBody');
-    const chev = document.getElementById('gpnAdvancedChevron');
-    if (!wrap || !btn || !body) return;
-    const KEY = 'aogpn.gpnAdvancedOpen';
-    let open = false;
-    try { open = localStorage.getItem(KEY) === '1'; } catch (e) {}
-    btn.addEventListener('click', () => {
-      open = !open;
-      body.classList.toggle('hidden', !open);
-      btn.setAttribute('aria-expanded', String(open));
-      if (chev) chev.classList.toggle('-rotate-90', !open);
-      try { localStorage.setItem(KEY, open ? '1' : '0'); } catch (e) {}
-    });
-    body.classList.toggle('hidden', !open);
-    if (chev) chev.classList.toggle('-rotate-90', !open);
-    btn.setAttribute('aria-expanded', String(open));
-  })();
-
   window.aogpn = window.aogpn || {};
   window.aogpn.gpn = {
-    startGpnClusterLoop, startGpnProbeLoop, stopGpnProbeLoop,
+    startGpnProbeLoop, stopGpnProbeLoop,
     setGpnConnectState, setGpnRecoveryWatchUI, setGpnFailoverUI,
     bindGpnServersControls,
     getServers: () => gpnServers,

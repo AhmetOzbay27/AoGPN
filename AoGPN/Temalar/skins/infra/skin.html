@@ -125,11 +125,71 @@
           <option value="openvpn">OPENVPN</option>
         </select>
       </div>
+      <div class="if-proxy-row">
+        <span class="if-ctl-label" data-if-i18n="ctl.tunStack">TUN STACK</span>
+        <select class="if-select" id="ifTunStack" aria-label="TUN stack">
+          <option value="gvisor">GVISOR</option>
+          <option value="system">SYSTEM</option>
+          <option value="mixed">MIXED</option>
+        </select>
+      </div>
+      <div class="if-proxy-row">
+        <span class="if-ctl-label" data-if-i18n="ctl.effects">EFFECTS</span>
+        <select class="if-select" id="ifEffects" aria-label="Effects tier">
+          <option value="full">FULL</option>
+          <option value="balanced">BALANCED</option>
+          <option value="reduced">REDUCED</option>
+        </select>
+      </div>
+      <div class="if-proxy-row">
+        <span class="if-ctl-label" data-if-i18n="ctl.autoGame">AUTO-GAME</span>
+        <button type="button" class="if-switch" id="ifAutoGame" role="switch" aria-checked="false" data-if-i18n-title="autoGameTitle" title="Auto-connect when a listed game starts"></button>
+      </div>
+      <div class="if-proxy-row">
+        <span class="if-ctl-label" data-if-i18n="ctl.recovery">RECOVERY</span>
+        <button type="button" class="if-switch" id="ifRecovery" role="switch" aria-checked="false" data-if-i18n-title="recoveryTitle" title="Auto-return to WireGuard after a V2ray fallback"></button>
+      </div>
+      <div class="if-proxy-row">
+        <span class="if-ctl-label" data-if-i18n="ctl.failover">FAILOVER</span>
+        <button type="button" class="if-switch" id="ifFailover" role="switch" aria-checked="false" data-if-i18n-title="failoverTitle" title="Allow automatic server switching on failure"></button>
+      </div>
+      <div class="if-proxy-row">
+        <span class="if-ctl-label" data-if-i18n="ctl.proxyTest">PROXY TEST</span>
+        <button type="button" class="if-proxy-test" id="ifProxyTest">TEST</button>
+      </div>
     </section>
 
-    <!-- bottom: console -->
-    <footer class="if-console" id="ifConsole">
-      <div class="if-console-line sys" data-if-i18n="console.ready">> INFRA SHELL READY. WAITING FOR TUNNEL.</div>
+    <!-- bottom: tabbed console (dashboard module parity) -->
+    <footer class="if-console" id="ifConsoleShell">
+      <div class="if-term-head">
+        <nav class="if-tabs" aria-label="Console tabs">
+          <button type="button" class="if-tab active" data-if-tab="terminal" data-if-i18n="tabs.terminal">TERMINAL</button>
+          <button type="button" class="if-tab" data-if-tab="nodes" data-if-i18n="tabs.nodes">NODES</button>
+          <button type="button" class="if-tab" data-if-tab="gpn" data-if-i18n="tabs.gpn">GPN</button>
+          <button type="button" class="if-tab" data-if-tab="monitor" data-if-i18n="tabs.monitor">MONITOR</button>
+          <button type="button" class="if-tab" data-if-tab="about" data-if-i18n="tabs.about">ABOUT</button>
+        </nav>
+        <span class="if-term-session"><span data-if-i18n="metric.session">SESSION</span> <b id="ifSessionConsole">00:00:00</b></span>
+      </div>
+      <div class="if-term-panels">
+        <div class="if-term-panel active" data-if-panel="terminal">
+          <div class="if-console-log" id="ifConsole">
+            <div class="if-console-line sys" data-if-i18n="console.ready">> INFRA SHELL READY. WAITING FOR TUNNEL.</div>
+          </div>
+        </div>
+        <div class="if-term-panel" data-if-panel="nodes" hidden>
+          <div class="if-tab-panel" id="ifTabNodes"><!-- route nodes --></div>
+        </div>
+        <div class="if-term-panel" data-if-panel="gpn" hidden>
+          <div class="if-tab-panel" id="ifTabGpn"><!-- GPN servers --></div>
+        </div>
+        <div class="if-term-panel" data-if-panel="monitor" hidden>
+          <div class="if-tab-panel" id="ifTabMonitor"><!-- connection monitor --></div>
+        </div>
+        <div class="if-term-panel" data-if-panel="about" hidden>
+          <div class="if-tab-panel" id="ifTabAbout"><!-- about / help --></div>
+        </div>
+      </div>
     </footer>
   </div>
 

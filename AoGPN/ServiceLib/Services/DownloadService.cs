@@ -13,6 +13,28 @@ public class DownloadService
 
     private static readonly string _tag = "DownloadService";
 
+    /// <summary>Tek bir yolda (proxy ya da doğrudan) toplam deneme sayısı — ilk + üstel geri çekilmeli tekrarlar.</summary>
+    internal int MaxAttempts { get; set; } = 3;
+
+    /// <summary>Geri çekilme taban gecikmesi; her başarısız denemede 2^n ile büyür (jitter'lı).</summary>
+    internal TimeSpan RetryBaseDelay { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Üstel geri çekilme gecikmesi: taban * 2^(n-1) ± %25 jitter (saf fonksiyon —
+    /// testler sınırları doğrudan doğrular). Jitter, senkronize yeniden denemelerin
+    /// (örn. güncelleme kontrolü + abonelik yenileme aynı anda) her seferinde
+    /// çakışmasını önler.
+    /// </summary>
+    internal static TimeSpan ComputeRetryDelay(TimeSpan baseDelay, int failedAttempts)
+    {
+        var expMs = baseDelay.TotalMilliseconds * Math.Pow(2, failedAttempts - 1);
+        var jitter = 0.75 + Random.Shared.NextDouble() * 0.5; // 0.75..1.25
+        return TimeSpan.FromMilliseconds(expMs * jitter);
+    }
+
+    private TimeSpan RetryDelay(int failedAttempts)
+        => ComputeRetryDelay(RetryBaseDelay, failedAttempts);
+
     /// <summary>
     /// Downloads data with the specified proxy and reports progress messages.
     /// </summary>
@@ -133,31 +155,76 @@ public class DownloadService
     /// Gets redirect target URL without following redirects automatically.
     /// </summary>
     public async Task<string?> UrlRedirectAsync(string url, bool blProxy)
-    {
-        var webRequestHandler = new SocketsHttpHandler
-        {
-            AllowAutoRedirect = false,
-            Proxy = await GetWebProxy(blProxy)
-        };
-        var certificateChainPolicy = CertPemManager.Instance.BuildCertificateChainPolicy();
-        if (certificateChainPolicy != null)
-        {
-            webRequestHandler.SslOptions.CertificateChainPolicy = certificateChainPolicy;
-            webRequestHandler.SslOptions.RemoteCertificateValidationCallback = null;
-        }
-        using var client = new HttpClient(webRequestHandler);
+        => await UrlRedirectAsync(url, await GetWebProxy(blProxy));
 
-        var response = await client.GetAsync(url);
-        if (response.StatusCode == HttpStatusCode.Redirect && response.Headers.Location is not null)
+    /// <summary>
+    /// Gets redirect target URL without following redirects automatically.
+    /// Her yol (proxy / doğrudan) üstel geri çekilmeyle yeniden denenir; yerel SOCKS
+    /// proxy'si üzerinden sonuç alınamazsa (tünel bozuk, core yeniden başlarken port
+    /// dinlenmiyor, SSL EOF vb.) doğrudan (proxysiz) yola düşülür — güncelleme
+    /// kontrolü tünel durumundan bağımsız çalışır. Her iki yol da başarısızsa
+    /// StatusCode hatası bir kez raporlanır.
+    /// </summary>
+    public async Task<string?> UrlRedirectAsync(string url, IWebProxy? webProxy)
+    {
+        var location = await TryUrlRedirectWithRetryAsync(url, webProxy);
+        if (location is null && webProxy is not null)
         {
-            return response.Headers.Location.ToString();
+            location = await TryUrlRedirectWithRetryAsync(url, null);
         }
-        else
+        if (location is null)
         {
-            Error?.Invoke(this, new ErrorEventArgs(new Exception("StatusCode error: " + response.StatusCode)));
+            Error?.Invoke(this, new ErrorEventArgs(new Exception("StatusCode error: " + url)));
             Logging.SaveLog("StatusCode error: " + url);
-            return null;
         }
+        return location;
+    }
+
+    private async Task<string?> TryUrlRedirectWithRetryAsync(string url, IWebProxy? webProxy)
+    {
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            var location = await TryUrlRedirectAsync(url, webProxy);
+            if (location is not null)
+            {
+                return location;
+            }
+            if (attempt < MaxAttempts)
+            {
+                await Task.Delay(RetryDelay(attempt));
+            }
+        }
+        return null;
+    }
+
+    private static async Task<string?> TryUrlRedirectAsync(string url, IWebProxy? webProxy)
+    {
+        try
+        {
+            var webRequestHandler = new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                Proxy = webProxy,
+            };
+            var certificateChainPolicy = CertPemManager.Instance.BuildCertificateChainPolicy();
+            if (certificateChainPolicy != null)
+            {
+                webRequestHandler.SslOptions.CertificateChainPolicy = certificateChainPolicy;
+                webRequestHandler.SslOptions.RemoteCertificateValidationCallback = null;
+            }
+            using var client = new HttpClient(webRequestHandler);
+
+            using var response = await client.GetAsync(url);
+            if (response.StatusCode == HttpStatusCode.Redirect && response.Headers.Location is not null)
+            {
+                return response.Headers.Location.ToString();
+            }
+        }
+        catch (Exception)
+        {
+            // ağ/proxy hatası — çağıran doğrudan yolu dener
+        }
+        return null;
     }
 
     /// <summary>
@@ -171,13 +238,86 @@ public class DownloadService
 
     /// <summary>
     /// Tries to download string content with a specified proxy.
+    /// Proxy yolu üstel geri çekilmeyle <see cref="MaxAttempts"/> kez denenir;
+    /// sonuç alınamazsa doğrudan (proxysiz) yol aynı politika ile çalışır.
+    /// Geçici arızalar (tünel döngüsü, core restart, SSL EOF) böylece kendiliğinden
+    /// iyileşir; iki yol da tükenirse null döner.
     /// </summary>
     public async Task<string?> TryDownloadString(string url, IWebProxy? webProxy, string userAgent)
+    {
+        var result = await TryDownloadStringWithRetryAsync(url, webProxy, userAgent);
+
+        // Yerel SOCKS proxy'si üzerinden ulaşılamadıysa (tünel döngüsü, core
+        // restart, SSL EOF) doğrudan yolu dene — indirme kullanıcının kendi
+        // internet yolundan tamamlanır, abonelik/güncelleme akışı tıkanmaz.
+        if (result.IsNullOrEmpty() && webProxy is not null)
+        {
+            result = await TryDownloadStringWithRetryAsync(url, null, userAgent);
+        }
+        return result;
+    }
+
+    /// <summary>Tek bir yolu (proxy veya doğrudan) üstel geri çekilmeyle dener.</summary>
+    private async Task<string?> TryDownloadStringWithRetryAsync(string url, IWebProxy? webProxy, string userAgent)
+    {
+        // Ölü yerel SOCKS proxy'si DETERMINISTIK bir arızadır (bağlantı reddi) —
+        // yeniden denemek anlamsızdır ve DownloaderHelper'ın iç denemeleriyle
+        // ~20 sn israf edip doğrudan fallback'i geciktirir. Port kapalıysa retry
+        // yapmadan null dön; çağıran (TryDownloadString) doğrudan yola düşer.
+        if (webProxy is not null && !await IsProxyEndpointReachableAsync(webProxy))
+        {
+            Logging.Verbose(_tag, "download_proxy_dead", ("url", url));
+            return null;
+        }
+
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            // Hata olayları yalnızca SON denemede yayınlanır — geçici bir arıza
+            // ardından gelen başarı, kullanıcıya yanlış "indirme başarısız" tostu
+            // bastırmaz. Ara denemeler yalnızca Verbose günlüğe düşer.
+            var result = await TryDownloadStringCore(url, webProxy, userAgent, raiseErrorEvents: attempt == MaxAttempts);
+            if (result.IsNotEmpty())
+            {
+                return result;
+            }
+            if (attempt < MaxAttempts)
+            {
+                Logging.Verbose(_tag, "download_retry", ("url", url), ("attempt", attempt), ("max", MaxAttempts));
+                await Task.Delay(RetryDelay(attempt));
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Proxy uç noktasına TCP bağlantısını dener. Yerel SOCKS portu kapalıysa
+    /// (core çalışmıyor, tünel yok) false — retry'ı atlayıp doğrudan yola düşmek
+    /// için. Belirsiz durumda (çözümlenemeyen adres vb.) true döner; retry politikası
+    /// yine de uygulanır.
+    /// </summary>
+    private static async Task<bool> IsProxyEndpointReachableAsync(IWebProxy webProxy)
+    {
+        try
+        {
+            var uri = webProxy.GetProxy(new Uri("http://example.com"));
+            if (uri is null || uri.Port <= 0 || uri.Host.IsNullOrEmpty())
+            {
+                return true;
+            }
+            return await SocketCheck(uri.Host, uri.Port);
+        }
+        catch
+        {
+            return true; // belirsiz — retry yine de çalışsın
+        }
+    }
+
+    private async Task<string?> TryDownloadStringCore(string url, IWebProxy? webProxy, string userAgent, bool raiseErrorEvents = true)
     {
         var timeout = 15;
         try
         {
-            var result1 = await DownloadStringAsync(url, webProxy, userAgent, timeout);
+            var result1 = await DownloadStringAsync(url, webProxy, userAgent, timeout, raiseErrorEvents);
             if (result1.IsNotEmpty())
             {
                 return result1;
@@ -185,17 +325,20 @@ public class DownloadService
         }
         catch (Exception ex)
         {
-            Logging.SaveLog(_tag, ex);
-            Error?.Invoke(this, new ErrorEventArgs(ex));
-            if (ex.InnerException != null)
+            if (raiseErrorEvents)
             {
-                Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+                Logging.SaveLog(_tag, ex);
+                Error?.Invoke(this, new ErrorEventArgs(ex));
+                if (ex.InnerException != null)
+                {
+                    Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+                }
             }
         }
 
         try
         {
-            var result2 = await DownloadStringViaDownloader(url, webProxy, userAgent, timeout);
+            var result2 = await DownloadStringViaDownloader(url, webProxy, userAgent, timeout, raiseErrorEvents);
             if (result2.IsNotEmpty())
             {
                 return result2;
@@ -203,11 +346,14 @@ public class DownloadService
         }
         catch (Exception ex)
         {
-            Logging.SaveLog(_tag, ex);
-            Error?.Invoke(this, new ErrorEventArgs(ex));
-            if (ex.InnerException != null)
+            if (raiseErrorEvents)
             {
-                Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+                Logging.SaveLog(_tag, ex);
+                Error?.Invoke(this, new ErrorEventArgs(ex));
+                if (ex.InnerException != null)
+                {
+                    Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+                }
             }
         }
 
@@ -217,7 +363,7 @@ public class DownloadService
     /// <summary>
     /// Downloads string content via HttpClient.
     /// </summary>
-    private async Task<string?> DownloadStringAsync(string url, IWebProxy? webProxy, string userAgent, int timeout)
+    private async Task<string?> DownloadStringAsync(string url, IWebProxy? webProxy, string userAgent, int timeout, bool raiseErrorEvents = true)
     {
         try
         {
@@ -260,11 +406,14 @@ public class DownloadService
         }
         catch (Exception ex)
         {
-            Logging.SaveLog(_tag, ex);
-            Error?.Invoke(this, new ErrorEventArgs(ex));
-            if (ex.InnerException != null)
+            if (raiseErrorEvents)
             {
-                Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+                Logging.SaveLog(_tag, ex);
+                Error?.Invoke(this, new ErrorEventArgs(ex));
+                if (ex.InnerException != null)
+                {
+                    Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+                }
             }
         }
 
@@ -274,7 +423,7 @@ public class DownloadService
     /// <summary>
     /// Downloads string content via DownloaderHelper.
     /// </summary>
-    private async Task<string?> DownloadStringViaDownloader(string url, IWebProxy? webProxy, string userAgent, int timeout)
+    private async Task<string?> DownloadStringViaDownloader(string url, IWebProxy? webProxy, string userAgent, int timeout, bool raiseErrorEvents = true)
     {
         try
         {
@@ -287,11 +436,14 @@ public class DownloadService
         }
         catch (Exception ex)
         {
-            Logging.SaveLog(_tag, ex);
-            Error?.Invoke(this, new ErrorEventArgs(ex));
-            if (ex.InnerException != null)
+            if (raiseErrorEvents)
             {
-                Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+                Logging.SaveLog(_tag, ex);
+                Error?.Invoke(this, new ErrorEventArgs(ex));
+                if (ex.InnerException != null)
+                {
+                    Error?.Invoke(this, new ErrorEventArgs(ex.InnerException));
+                }
             }
         }
         return null;
@@ -318,7 +470,7 @@ public class DownloadService
     /// <summary>
     /// Checks whether the specified TCP endpoint is reachable.
     /// </summary>
-    private async Task<bool> SocketCheck(string ip, int port)
+    private static async Task<bool> SocketCheck(string ip, int port)
     {
         try
         {

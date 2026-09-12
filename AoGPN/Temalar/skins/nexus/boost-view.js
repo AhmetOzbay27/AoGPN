@@ -303,7 +303,7 @@
       <div class="nxv-tileRoute">${routeBadge(eff, routeLabel(eff))}</div>
       <div class="nxv-tileActions">
         <select data-route-process="${esc(processName)}" data-route-display="${esc(display)}" title="${esc(T('route.assign', 'Assign route…'))}">${options}</select>
-        <button type="button" class="nxv-tileDel" data-remove-process="${esc(processName)}" title="${esc(T('boost.view.del', 'Remove'))}" aria-label="${esc(T('boost.view.del', 'Remove'))} ${esc(display)}">✕</button>
+        <button type="button" class="nxv-tileDel" data-remove-process="${esc(processName)}" data-remove-entry-type="${esc(item.entryType || 'app')}" data-remove-entry-value="${esc(item.value || processName)}" title="${esc(T('boost.view.del', 'Remove'))}" aria-label="${esc(T('boost.view.del', 'Remove'))} ${esc(display)}">✕</button>
       </div>
     </div>`;
   }
@@ -380,7 +380,12 @@
           try { if (confirm(`Remove "${processName}" from the routing list?`) === false) return; }
           catch (e) { /* no confirm available */ }
         }
-        B.postToHost({ action: 'remove_app', processName });
+        const entryType = del.dataset.removeEntryType || 'app';
+        if (entryType === 'app') {
+          B.postToHost({ action: 'remove_app', processName });
+        } else {
+          B.postToHost({ action: 'remove_route', entryType, value: del.dataset.removeEntryValue || processName });
+        }
       }
     });
 

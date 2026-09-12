@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -117,13 +118,41 @@ public sealed class DashboardHost : IAsyncDisposable
 
         _disposed = true;
         IsReady = false;
-        if (_webView.CoreWebView2 is { } core)
+
+        // WebView2 teardown'ı COM 0x8007139F ("group or resource not in the
+        // correct state") veya "CoreWebView2 members cannot be accessed after
+        // the WebView2 control is disposed" atabilir: tarayıcı süreci kapanırken
+        // RPC çağrıları başarısız olur. Bu hatalar kapatma yolundan asla dışarı
+        // sızmamalı — sızarsa WPF unhandled-exception çökmesi olur (exit code
+        // 0xffffffff) ve tüm kapanış temizliği yarıda kalır.
+        try
         {
-            core.WebMessageReceived -= OnWebMessageReceived;
-            core.NavigationCompleted -= OnNavigationCompleted;
+            if (_webView.CoreWebView2 is { } core)
+            {
+                core.WebMessageReceived -= OnWebMessageReceived;
+                core.NavigationCompleted -= OnNavigationCompleted;
+            }
+        }
+        catch (Exception ex) when (
+            ex is COMException
+            or InvalidOperationException
+            or ObjectDisposedException)
+        {
+            // WebView2 zaten yıkılmış — abonelik bırakma başarısız olabilir.
         }
 
-        _webView.Dispose();
+        try
+        {
+            _webView.Dispose();
+        }
+        catch (Exception ex) when (
+            ex is COMException
+            or InvalidOperationException
+            or ObjectDisposedException)
+        {
+            // Tarayıcı süreci teardown sırasında kapanmış — yut.
+        }
+
         await ValueTask.CompletedTask;
     }
 }

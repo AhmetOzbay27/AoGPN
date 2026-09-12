@@ -7,62 +7,6 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
     private readonly int _timeout = 30;
     private static readonly string _tag = "UpdateService";
 
-    public async Task CheckUpdateGuiN(bool preRelease)
-    {
-        var url = string.Empty;
-        var fileName = string.Empty;
-
-        DownloadService downloadHandle = new();
-        downloadHandle.UpdateCompleted += (sender2, args) =>
-        {
-            if (args.Success)
-            {
-                _ = UpdateFunc(false, ResUI.MsgDownloadV2rayCoreSuccessfully);
-            }
-            else
-            {
-                _ = UpdateFunc(false, args.Msg);
-            }
-        };
-        downloadHandle.Error += (sender2, args) =>
-        {
-            _ = UpdateFunc(false, args.GetException().Message);
-        };
-
-        await UpdateFunc(false, string.Format(ResUI.MsgStartUpdating, ECoreType.AoGPN));
-        var result = await CheckUpdateAsync(downloadHandle, ECoreType.AoGPN, preRelease);
-        if (result.Success)
-        {
-            await UpdateFunc(false, string.Format(ResUI.MsgParsingSuccessfully, ECoreType.AoGPN));
-            await UpdateFunc(false, result.Msg);
-
-            url = result.Url.ToString();
-            fileName = Utils.GetTempPath(Utils.GetGuid());
-            await downloadHandle.DownloadFileAsync(url, fileName, true, _timeout);
-
-            // Verify before signalling the installer; an executable payload that
-            // fails its SHA-256 check is discarded and never applied.
-            if (File.Exists(fileName))
-            {
-                var verifyError = await VerifyDownloadedFileSha256Async(
-                    downloadHandle, url, fileName, $"{ECoreType.AoGPN} update", requireChecksum: true);
-                if (verifyError is not null)
-                {
-                    TryDeleteDownloadedFile(fileName);
-                    await UpdateFunc(true, verifyError);
-                }
-                else
-                {
-                    await UpdateFunc(true, Utils.UrlEncode(fileName));
-                }
-            }
-        }
-        else
-        {
-            await UpdateFunc(false, result.Msg);
-        }
-    }
-
     public async Task CheckUpdateCore(ECoreType type, bool preRelease)
     {
         var url = string.Empty;
@@ -200,6 +144,16 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
     }
 
+    /// <summary>
+    /// GitHub "latest release" adresini üretir. Burada <c>Path.Combine</c> BİLEREK
+    /// kullanılmaz: Windows'ta ayırıcı '\' olduğu için "…/releases\latest" gibi
+    /// geçersiz bir adres üretiyordu ve çekirdek güncelleme kontrolü her seferinde
+    /// başarısız oluyordu (canlı gözlenen: "StatusCode error: https://github.com/…/releases\latest").
+    /// </summary>
+    /// <returns>Adres; <paramref name="coreUrl"/> boş/null ise null.</returns>
+    internal static string? BuildLatestReleaseUrl(string? coreUrl)
+        => coreUrl.IsNullOrEmpty() ? null : $"{coreUrl.TrimEnd('/')}/latest";
+
     private async Task<UpdateResult> GetRemoteVersion(DownloadService downloadHandle, ECoreType type, bool preRelease)
     {
         var coreInfo = CoreInfoManager.Instance.GetCoreInfo(type);
@@ -220,7 +174,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
         else
         {
-            var url = Path.Combine(coreInfo.Url, "latest");
+            var url = BuildLatestReleaseUrl(coreInfo?.Url);
+            if (url is null)
+            {
+                return new UpdateResult(false, "");
+            }
             var lastUrl = await downloadHandle.UrlRedirectAsync(url, true);
             if (lastUrl == null)
             {

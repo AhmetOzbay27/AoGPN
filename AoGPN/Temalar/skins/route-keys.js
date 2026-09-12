@@ -1,11 +1,12 @@
 // ============================================================================
 // AoGPN skin switch keyboard logic (shared, pure)
 // ----------------------------------------------------------------------------
-// Both standalone skins (CYBER, NEXUS) wire their per-app route switches with
-// the same keyboard contract:
+// All standalone skins (CYBER, NEXUS, INFRA) wire their per-app route switches
+// with the same keyboard contract:
 //   Enter / Space      -> flip the route (tunneled -> direct, else -> vpn)
 //   ArrowRight         -> only turn the tunnel ON  (non-tunneled -> vpn)
 //   ArrowLeft          -> only turn the tunnel OFF (tunneled -> direct)
+//   R                  -> CYCLE the route (vpn -> direct -> block -> warp -> vpn)
 //   any other key      -> no-op
 // This file holds ONLY the pure decision function so the exact same logic runs
 // in the browser (each skin.html loads it via <script>) and in the automated
@@ -47,5 +48,15 @@
     return null;
   }
 
-  return { isTunneled, routeFromKey };
+  // Cycle the app route for a repeatable "R" press: vpn -> direct -> block ->
+  // warp -> vpn. Tunneled variants (vpn+proxy / proxy) count as vpn, unknown
+  // or empty actions start the cycle at vpn.
+  function routeCycle(action) {
+    const order = ['vpn', 'direct', 'block', 'warp'];
+    const cur = isTunneled(action) ? 'vpn' : action;
+    const idx = order.indexOf(cur);
+    return order[(idx + 1) % order.length];
+  }
+
+  return { isTunneled, routeFromKey, routeCycle };
 });

@@ -99,8 +99,8 @@ Read the Wiki for usage guides and configuration details.
 
 - **Change log / 变更日志** — full per-version history, newest first:
   [CHANGELOG.md](CHANGELOG.md)
-- **Versioning & release guide** (Türkçe) — how the version is bumped
-  (`Directory.Build.props`), why the GitHub release tag must match it, how the
+- **Versioning & release guide** (Türkçe) — the git tag is the single source of
+  the version (the release pipeline stamps it into the build), how the
   changelog milestones are organised, and how to keep the dashboard's language
   files and Release Notes tab in sync: [RELEASE_YONERGESI.md](RELEASE_YONERGESI.md)
 

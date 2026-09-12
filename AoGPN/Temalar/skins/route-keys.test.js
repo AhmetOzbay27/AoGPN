@@ -15,7 +15,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { isTunneled, routeFromKey } = require('./route-keys.js');
+const { isTunneled, routeFromKey, routeCycle } = require('./route-keys.js');
 
 // ----------------------------------------------------------------------------
 // isTunneled
@@ -89,6 +89,36 @@ test('ArrowLeft: no-op on non-tunneled apps (never re-toggles back on)', () => {
   assert.equal(routeFromKey('ArrowLeft', 'block'), null);
   assert.equal(routeFromKey('ArrowLeft', ''), null);
   assert.equal(routeFromKey('ArrowLeft', undefined), null);
+});
+
+// ----------------------------------------------------------------------------
+// R — routeCycle: vpn -> direct -> block -> warp -> vpn
+// ----------------------------------------------------------------------------
+test('routeCycle: cycles the full route order vpn -> direct -> block -> warp -> vpn', () => {
+  assert.equal(routeCycle('vpn'), 'direct');
+  assert.equal(routeCycle('direct'), 'block');
+  assert.equal(routeCycle('block'), 'warp');
+  assert.equal(routeCycle('warp'), 'vpn');
+});
+
+test('routeCycle: tunneled variants count as vpn and move to direct', () => {
+  assert.equal(routeCycle('vpn+proxy'), 'direct');
+  assert.equal(routeCycle('proxy'), 'direct');
+});
+
+test('routeCycle: empty / unknown / null start the cycle at vpn', () => {
+  assert.equal(routeCycle(''), 'vpn');
+  assert.equal(routeCycle(undefined), 'vpn');
+  assert.equal(routeCycle(null), 'vpn');
+  assert.equal(routeCycle('whatever'), 'vpn');
+});
+
+test('routeCycle: every state advances — no dead-ends in the cycle', () => {
+  ['vpn', 'direct', 'block', 'warp', 'vpn+proxy', 'proxy', '', 'unknown'].forEach(action => {
+    const next = routeCycle(action);
+    assert.ok(['vpn', 'direct', 'block', 'warp'].includes(next), action + ' cycles to a valid route: ' + next);
+    assert.notEqual(next, action, action + ' always advances');
+  });
 });
 
 // ----------------------------------------------------------------------------

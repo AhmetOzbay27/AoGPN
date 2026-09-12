@@ -110,6 +110,18 @@ public static class CoreConfigHandler
             }
             var options = new GpnMihomoOptions
             {
+                // Sabit adaptör adı (static naming): kullanıcının Wintun ad ön eki
+                // (GpnWintunItem.AdapterName — Ayarlar → GPN → Wintun kartı) mihomo
+                // TUN cihaz adına da işlenir; boşsa sabit "AoGPN". Windows her açılışta
+                // rastgele "Yerel Ağ Bağlantısı N" üretmek yerine aynı adı kullanır ve
+                // WintunOrphanSweeper aynı ön eki yakalayarak hayalet birikimini temizler.
+                TunDevice = ResolveTunDevice(context.AppConfig),
+                // Kullanıcının TUN MTU ayarı GERÇEKTEN uygulanır: GPN yol sınırını
+                // (1360) aşan değerler kırpılır (canlı ölçüm — parçalanmayı önler),
+                // kullanıcının düşük değerine (örn. 1280) saygı duyulur. TUN bloğu
+                // ve tüm WG outbound'ları bu değeri kullanır (bkz. ResolveTunMtu /
+                // ResolveMtu).
+                Mtu = ResolveGpnMtu(context.AppConfig),
                 // Readiness probe bu porta bakar (AppManager.GetLocalPort(socks));
                 // mihomo mixed-port aynı portta dinler → hem SOCKS hem HTTP.
                 MixedPort = AppManager.Instance.GetLocalPort(EInboundProtocol.socks),
@@ -135,6 +147,11 @@ public static class CoreConfigHandler
                 FakeIpRange = IsValidCidr(simpleDns.FakeIPRange)
                     ? simpleDns.FakeIPRange!
                     : "198.18.0.1/16",
+                // İleri Düzey Gaming DNS — sniffing: kullanıcının Ayarlar → Core
+                // "Sniffing enabled" seçimi mihomo YAML'indeki sniffing bloğuna
+                // işlenir (override-destination: HTTP/TLS hedef yazımı — LoL
+                // istemcisi hedefi anında çözer). Varsayılan açık (InItem varsayılanı).
+                SniffingEnabled = context.AppConfig.Inbound.FirstOrDefault()?.SniffingEnabled ?? true,
                 PersistentKeepalive = server.PersistentKeepalive,
                 // WarpDialHealthMonitor bu dosyayı kuyruğundan izler — mihomo
                 // stdout'a yazar, kalıcı dosya yoksa WARP dial hataları yakalanmaz.
@@ -143,7 +160,7 @@ public static class CoreConfigHandler
                 LogFilePath = Path.Combine(Utils.GetLogPath(),
                     $"ao_mihomo_{DateTime.Now:yyyy-MM-dd}.log").Replace('\\', '/'),
             };
-            DiagLog.Write($"GPN_MIHOMO options mixed={options.MixedPort} controller={controllerPort} nic={options.InterfaceName ?? "(auto)"} dns=[{string.Join(", ", nameservers)}] default=[{string.Join(", ", bootstrap)}] mode={options.DnsEnhancedMode}");
+            DiagLog.Write($"GPN_MIHOMO options mixed={options.MixedPort} controller={controllerPort} nic={options.InterfaceName ?? "(auto)"} dns=[{string.Join(", ", nameservers)}] default=[{string.Join(", ", bootstrap)}] mode={options.DnsEnhancedMode} sniff={(options.SniffingEnabled ? "on" : "off")} ipv6=blackhole");
 
             // Çoklu-düğüm YAML'i: context'te aday listesi varsa (GpnCoreLauncher,
             // seçim yapılmış WireGuard bağlantısında koordinatörün adaylarını iletir)
@@ -167,9 +184,12 @@ public static class CoreConfigHandler
                 // uygulayıcı (GpnSoftPolicyApplier) giriş listesinde yapısal değişiklik
                 // olup olmadığını bu parmak iziyle doğrular ve gerektiğinde restart'lı
                 // fallback'e düşer. Pre-socks (yardımcı) çekirdek oturumu temsil etmez.
+                // Düğüm de oturuma yazılır: drift denetçisi (RoutingDriftHealthCheck)
+                // beklenen config'i canlı superset config'le birebir üretmek için
+                // varsayılan düğüm yerine ÇEKİRDEĞİN yüklendiği WG düğümünü kullanır.
                 if (!context.IsPreSocks)
                 {
-                    GpnSoftSession.Begin(policy);
+                    GpnSoftSession.Begin(policy, context.Node);
                 }
                 DiagLog.Write($"GPN_MIHOMO superset mode={policy.Mode} invert={policy.InvertManualRouting} entries={policy.Entries.Count} nodes={(candidateNodes is null ? 0 : candidateNodes.Count)}");
             }
@@ -192,6 +212,31 @@ public static class CoreConfigHandler
     }
 
     /// <summary>
+    /// mihomo TUN cihaz adını çözer (static naming): kullanıcının Wintun adaptör ad
+    /// ön eki (GpnWintunItem.AdapterName) varsa onu (sanitleştirilmiş), yoksa sabit
+    /// "AoGPN" (Global.MihomoTunInterfaceName). Sabit ad sayesinde adaptör her
+    /// oturumda aynı adla açılır — Windows rastgele "Yerel Ağ Bağlantısı N" üretmez
+    /// ve WintunOrphanSweeper'ın sahiplik ön ekleri (BuildOwnedPrefixes) aynı adı
+    /// yakalayarak hayalet birikimini temizler.
+    /// </summary>
+    internal static string ResolveTunDevice(Config config)
+        => GpnWintunSettingsMapper.SanitizeAdapterName(config?.GpnWintunItem?.AdapterName);
+
+    /// <summary>
+    /// Kullanıcının TUN MTU ayarını GPN yol sınırına (1360) kırparak uygulanabilir
+    /// değere çevirir. Canlı ölçüm (Ağu 2026): DF paketleri ~1400 bayta kadar geçiyor;
+    /// 1420 MTU'lu dış paketler parçalanıyor. Kullanıcının düşük değeri (örn. 1280)
+    /// korunur, aşan değer 1360'a kırpılır, 0/geçersiz değer önerilen 1360 olur.
+    /// </summary>
+    internal static int ResolveGpnMtu(Config config)
+    {
+        var mtu = config.TunModeItem?.Mtu ?? 0;
+        return mtu > 0 && mtu <= Global.GpnRecommendedMtu
+            ? mtu
+            : Global.GpnRecommendedMtu;
+    }
+
+    /// <summary>
     /// Global VPN (mihomo) YAML üreticisi: seçili profil tek proxy'ye çevrilir,
     /// TUN durumu context'ten gelir (IsTunEnabled — Proxy transportunda kapalı,
     /// mixed-port devrede), kural tek <c>MATCH,global-proxy</c>'dir. Spli-tunnel
@@ -208,6 +253,15 @@ public static class CoreConfigHandler
             var bootstrap = GpnMihomoConfigService.ParseDnsServers(simpleDns.BootstrapDNS, []);
             var options = new GpnMihomoOptions
             {
+                // Sabit adaptör adı (static naming): GPN yolundakiyle aynı çözücü —
+                // kullanıcı Wintun ad ön eki ya da sabit "AoGPN".
+                TunDevice = ResolveTunDevice(context.AppConfig),
+                // Global VPN de kullanıcının TUN MTU ayarını uygular: WindowsTunStabilityPolicy
+                // zaten güvenli aralığa (1280–1500) normalize ettiği için olduğu gibi kullanılır;
+                // 0/geçersizse önerilen GPN değeri devreye girer.
+                Mtu = context.AppConfig.TunModeItem?.Mtu > 0
+                    ? context.AppConfig.TunModeItem.Mtu
+                    : Global.GpnRecommendedMtu,
                 MixedPort = AppManager.Instance.GetLocalPort(EInboundProtocol.socks),
                 ExternalControllerPort = AppManager.Instance.StatePort2,
                 InterfaceName = context.IsTunEnabled

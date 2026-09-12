@@ -23,17 +23,119 @@ public static class MihomoTunSupport
     private static readonly string[] TunLikeHints =
         ["wintun", "wireguard", "xray", "singbox", "sing-box", "tun", "tap", "aogpn", "clash"];
 
-    /// <summary>Ad/açıklama TUN benzeri (mihomo'nun kendi adaptörü vb.) mi?</summary>
-    public static bool IsTunLikeInterface(string? name, string? description)
+    /// <summary>
+    /// Sanal makine ağı adaptörleri (seçimde asla öncelik ALMAZ — ölü VMnet'e
+    /// bağlanmak WG el sıkışmasını "unreachable network" ile kırar). Makinenin
+    /// kendisi bir VM ise son çare olarak yine de kullanılabilir.
+    /// </summary>
+    private static readonly string[] VirtualAdapterHints =
+        ["vmnet", "vmware", "vmxnet", "virtualbox", "vbox", "host-only", "hostonly",
+            "veethernet", "hyper-v", "default switch", "wsl", "docker", "parallels", "qemu"];
+
+    private static bool IsMatchAny(string? name, string? description, string[] hints)
     {
         var haystack = $"{name ?? string.Empty} {description ?? string.Empty}";
-        return TunLikeHints.Any(h => haystack.Contains(h, StringComparison.OrdinalIgnoreCase));
+        return hints.Any(h => haystack.Contains(h, StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>Ad/açıklama TUN benzeri (mihomo'nun kendi adaptörü vb.) mi?</summary>
+    public static bool IsTunLikeInterface(string? name, string? description)
+        => IsMatchAny(name, description, TunLikeHints);
+
+    /// <summary>Ad/açıklama sanal makine ağı adaptörü (VMware/VMnet, VirtualBox, Hyper-V…) mi?</summary>
+    public static bool IsVirtualAdapter(string? name, string? description)
+        => IsMatchAny(name, description, VirtualAdapterHints);
+
+    /// <summary>
+    /// Saf seçim adayı — gerçek <see cref="NetworkInterface"/> verisinin
+    /// soyutlanmış hali (testlerde kolayca üretilebilir).
+    /// </summary>
+    internal sealed record NicCandidate(
+        string Name,
+        string? Description,
+        NetworkInterfaceType Type,
+        OperationalStatus Status,
+        bool HasIPv4Gateway,
+        /// <summary>Windows GetBestInterface(0): bu adaptör varsayılan rotanın (0.0.0.0/0) sahibi.</summary>
+        bool HasDefaultGateway,
+        string? Gateway,
+        int Index);
+
+    /// <summary>
+    /// Adaylar arasından WG sunucusuna ulaşan en iyi fiziksel arayüzü seçer.
+    /// Sıralama:
+    ///   1. <paramref name="preferredIndexes"/> (GetBestInterface sonuçları):
+    ///      önce hedef IP'nin rotası, sonra varsayılan rotanın (0.0.0.0/0) sahibi.
+    ///      TUN benzeri ve sanal makine adaptörleri bu yolda ASLA dönülmez — kendi
+    ///      TUN'una ya da ölü VMnet adaptörüne bağlanmak WG el sıkışmasını kırar.
+    ///   2. Aktif internet yolu: Up + IPv4 gateway sahibi, TUN olmayan adaylar;
+    ///      varsayılan rota sahibi (HasDefaultGateway) önce gelir, sonra gerçek
+    ///      Ethernet/Wi-Fi, sonra diğer tipler; sanal adaptörler en sona itilir.
+    ///   3. Son çare: yalnızca sanal adaptörler varsa (makinenin kendisi bir VM)
+    ///      TUN olmayan en iyi aday döner — null'dan iyidir, host rotası kurulabilir.
+    /// TUN benzeri adaptörler hiçbir koşulda seçilmez.
+    /// </summary>
+    internal static PhysicalInterfaceInfo? SelectPhysicalInterface(
+        IReadOnlyList<NicCandidate> candidates,
+        IReadOnlyList<int> preferredIndexes)
+    {
+        // 1) Windows'un söylediği en iyi arayüzler (hedef IP → varsayılan rota).
+        foreach (var idx in preferredIndexes)
+        {
+            var ni = candidates.FirstOrDefault(c => c.Index == idx);
+            if (ni is null || ni.Status != OperationalStatus.Up)
+            {
+                continue;
+            }
+            if (IsTunLikeInterface(ni.Name, ni.Description)
+                || IsVirtualAdapter(ni.Name, ni.Description))
+            {
+                continue;
+            }
+            return ToInfo(ni);
+        }
+
+        // 2) Aktif internet yolu: varsayılan rotanın sahibi, gateway'li, TUN olmayan
+        //    fiziksel arayüz; sanal adaptörler en sona itilir (son çare olarak).
+        var viable = candidates
+            .Where(c => c.Status == OperationalStatus.Up && c.HasIPv4Gateway)
+            .Where(c => !IsTunLikeInterface(c.Name, c.Description))
+            .OrderByDescending(c => c.HasDefaultGateway)
+            .ThenBy(c => IsVirtualAdapter(c.Name, c.Description))
+            .ThenByDescending(c => IsPhysicalType(c.Type))
+            .ThenBy(c => c.Name, StringComparer.Ordinal)
+            .ToList();
+        if (viable.Count > 0)
+        {
+            return ToInfo(viable[0]);
+        }
+
+        // 3) Son çare: yalnızca sanal adaptörler varsa (örn. makinenin kendisi bir
+        //    VM) hiçbiri null dönmesin — mihomo auto-detect'ten iyidir, host rotası
+        //    kurulabilir. TUN benzeri yine de asla dönülmez.
+        var lastResort = candidates
+            .Where(c => c.Status == OperationalStatus.Up && c.HasIPv4Gateway)
+            .Where(c => !IsTunLikeInterface(c.Name, c.Description))
+            .OrderByDescending(c => c.HasDefaultGateway)
+            .ThenByDescending(c => IsPhysicalType(c.Type))
+            .ThenBy(c => c.Name, StringComparer.Ordinal)
+            .FirstOrDefault();
+        return lastResort is null ? null : ToInfo(lastResort);
+    }
+
+    private static bool IsPhysicalType(NetworkInterfaceType type)
+        => type is NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211;
+
+    private static PhysicalInterfaceInfo ToInfo(NicCandidate c)
+        => new(c.Name, c.Index, c.Gateway);
 
     /// <summary>
     /// WG sunucusuna ulaşan fiziksel arayüzü bulur (varsayılan rota/gateway sahibi).
-    /// Önce GetBestInterface (IPHelper) ile kesin seçim; olmazsa Up + IPv4 gateway
-    /// sahibi ilk Ethernet/WiFi arayüze düşer. TUN benzeri adaptörler asla seçilmez.
+    /// Önce GetBestInterface (IPHelper) ile hedef IP'nin ve varsayılan rotanın
+    /// sahibini sorar; sonuç TUN/sanal adaptörse elenir. Ardından Up + IPv4 gateway
+    /// sahibi adaylar arasında varsayılan rota sahibi (aktif internet yolu) öncelikli
+    /// seçim yapılır. VMware/VMnet gibi sanal makine adaptörleri asla öncelik almaz;
+    /// TUN benzeri adaptörler hiçbir koşulda seçilmez.
     /// </summary>
     public static PhysicalInterfaceInfo? DetectPhysicalInterface(string? destinationIp = null)
     {
@@ -43,56 +145,55 @@ public static class MihomoTunSupport
         }
 
         // 1) Kesin yol: GetBestInterface — hedef IP'ye giden arayüzü Windows söyler.
+        var preferred = new List<int>();
+        var defaultRouteIndex = -1;
         if (IPAddress.TryParse(destinationIp, out var dest)
-            && dest.AddressFamily == AddressFamily.InterNetwork)
+            && dest.AddressFamily == AddressFamily.InterNetwork
+            && GetBestInterface(ToNetworkOrderDword(dest), out var bestIndex) == 0)
         {
-            if (GetBestInterface(ToNetworkOrderDword(dest), out var bestIndex) == 0)
+            preferred.Add((int)bestIndex);
+        }
+        // 2) Varsayılan rotanın (0.0.0.0/0) sahibi — aktif internet yolu.
+        if (GetBestInterface(0, out var defaultIfIndex) == 0)
+        {
+            defaultRouteIndex = (int)defaultIfIndex;
+            preferred.Add(defaultRouteIndex);
+        }
+
+        var candidates = new List<NicCandidate>();
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback)
             {
-                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
-                {
-                    if (ni.OperationalStatus != OperationalStatus.Up)
-                    {
-                        continue;
-                    }
-                    var props = ni.GetIPProperties();
-                    if (props.GetIPv4Properties()?.Index == (int)bestIndex)
-                    {
-                        return new PhysicalInterfaceInfo(ni.Name, (int)bestIndex,
-                            props.GatewayAddresses.FirstOrDefault(g =>
-                                g.Address.AddressFamily == AddressFamily.InterNetwork)?.Address.ToString());
-                    }
-                }
+                continue;
+            }
+            try
+            {
+                // WFP filtre / sanal sözde adaptörlerde (örn. "Yerel Ağ Bağlantısı* 8-WFP")
+                // GetIPProperties/GetIPv4Properties "İstenen iletişim kuralı sistemde
+                // yapılandırılmamış" ile fırlatabilir (ProbeEgress'te de görülen senaryo) —
+                // böyle adaptörler zaten gateway sahibi olamaz, sessizce atlanır.
+                var props = ni.GetIPProperties();
+                var ipv4 = props.GetIPv4Properties();
+                var gw = props.GatewayAddresses.FirstOrDefault(g =>
+                    g.Address.AddressFamily == AddressFamily.InterNetwork);
+                candidates.Add(new NicCandidate(
+                    ni.Name,
+                    ni.Description,
+                    ni.NetworkInterfaceType,
+                    ni.OperationalStatus,
+                    HasIPv4Gateway: gw is not null,
+                    HasDefaultGateway: ipv4 is not null && ipv4.Index == defaultRouteIndex,
+                    Gateway: gw?.Address.ToString(),
+                    Index: ipv4?.Index ?? 0));
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Write($"{Tag} adapter read skipped ({ni.Name}): {ex.Message}");
             }
         }
 
-        // 2) Yedek: Up + IPv4 gateway sahibi ilk fiziksel arayüz.
-        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces()
-                     .OrderByDescending(n => n.NetworkInterfaceType is NetworkInterfaceType.Ethernet
-                         or NetworkInterfaceType.Wireless80211))
-        {
-            if (ni.OperationalStatus != OperationalStatus.Up
-                || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback)
-            {
-                continue;
-            }
-            var props = ni.GetIPProperties();
-            var gw = props.GatewayAddresses.FirstOrDefault(g =>
-                g.Address.AddressFamily == AddressFamily.InterNetwork);
-            if (gw is null)
-            {
-                continue;
-            }
-            if (IsTunLikeInterface(ni.Name, ni.Description))
-            {
-                continue;
-            }
-            return new PhysicalInterfaceInfo(
-                ni.Name,
-                props.GetIPv4Properties()?.Index ?? 0,
-                gw.Address.ToString());
-        }
-
-        return null;
+        return SelectPhysicalInterface(candidates, preferred);
     }
 
     /// <summary>mihomo config "interface-name" değeri (boş olabilir → mihomo auto-detect).</summary>

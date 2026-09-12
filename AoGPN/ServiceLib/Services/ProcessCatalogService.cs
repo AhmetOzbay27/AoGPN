@@ -134,10 +134,12 @@ public sealed class ProcessCatalogService
             return false;
         }
 
-        // MainModule needs PROCESS_QUERY_INFORMATION|PROCESS_VM_READ, which
-        // anti-cheats (BattlEye, ...) deny to third parties. Fall back to a
-        // limited-information query that most protected processes still allow.
-        var path = ResolvePathWithMainModule(pid) ?? ResolvePathLimitedQuery(pid);
+        // Yol çözümü artık TEK bir yerde: ProcessPathResolver. Sıra bilerek
+        // "önce en az yetki" — MainModule (PROCESS_QUERY_INFORMATION|VM_READ)
+        // anti-cheat ve yükseltilmiş süreçlerde reddedilir ve her red bir
+        // Win32Exception atışı (VS ilk şans gürültüsü) demektir; limited sorgu
+        // hem daha ucuz hem ölçüldüğü üzere daha çok süreci çözer.
+        var path = ProcessPathResolver.Resolve(pid);
         if (path is null)
         {
             return false;
@@ -147,28 +149,6 @@ public sealed class ProcessCatalogService
         return true;
     }
 
-    private static string? ResolvePathWithMainModule(int pid)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            var path = process.MainModule?.FileName;
-            return IsUsableExePath(path) ? Path.GetFullPath(path) : null;
-        }
-        catch (ArgumentException)
-        {
-            return null;
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-        catch (Win32Exception)
-        {
-            return null;
-        }
-    }
-
     /// <summary>
     /// Resolves an executable path with PROCESS_QUERY_LIMITED_INFORMATION only.
     /// Works for many elevated/protected processes (anti-cheat guarded games)
@@ -176,52 +156,7 @@ public sealed class ProcessCatalogService
     /// denied at this level too.
     /// </summary>
     internal static string? ResolvePathLimitedQuery(int pid)
-    {
-        if (pid <= 0)
-        {
-            return null;
-        }
-
-        var handle = OpenProcess(ProcessQueryLimitedInformation, false, pid);
-        if (handle == IntPtr.Zero)
-        {
-            return null;
-        }
-
-        try
-        {
-            var capacity = 32 * 1024u;
-            var buffer = new System.Text.StringBuilder((int)capacity);
-            if (QueryFullProcessImageName(handle, 0, buffer, ref capacity))
-            {
-                var path = buffer.ToString();
-                return IsUsableExePath(path) ? Path.GetFullPath(path) : null;
-            }
-
-            return null;
-        }
-        finally
-        {
-            CloseHandle(handle);
-        }
-    }
-
-    private static bool IsUsableExePath(string? path)
-        => path is not null
-            && !string.IsNullOrWhiteSpace(path)
-            && path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-            && File.Exists(path);
-
-    private const uint ProcessQueryLimitedInformation = 0x1000;
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, System.Text.StringBuilder lpExeName, ref uint lpdwSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr hObject);
+        => ProcessPathResolver.ResolveLimitedOnly(pid);
 
     public static string NormalizeProcessName(string? value)
     {
@@ -309,25 +244,18 @@ public sealed class WindowsProcessCatalogSource : IProcessCatalogSource
                         continue;
                     }
 
-                    var path = string.Empty;
-                    try
+                    // Pid 0 ("System Idle Process") gibi sahte süreçlere hiç
+                    // dokunmuyoruz: modül numaralandırması onlarda
+                    // "Unable to enumerate the process modules." fırlatır ve
+                    // zaten seçilebilir bir uygulama değiller.
+                    var processId = process.Id;
+                    if (processId <= 0)
                     {
-                        path = process.MainModule?.FileName ?? string.Empty;
+                        continue;
                     }
-                    catch (Win32Exception)
-                    {
-                        // Elevated/system processes often deny MainModule access.
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // The process exited between enumeration and inspection.
-                    }
-                    if (string.IsNullOrWhiteSpace(path))
-                    {
-                        // Anti-cheat guarded games (BattlEye, ...) deny MainModule;
-                        // a limited-information query usually still resolves them.
-                        path = ProcessCatalogService.ResolvePathLimitedQuery(process.Id) ?? string.Empty;
-                    }
+
+                    // Tek çözümleme yolu: en az yetki önce (ProcessPathResolver).
+                    var path = ProcessPathResolver.Resolve(processId) ?? string.Empty;
 
                     candidate = new ProcessCatalogCandidate(
                         process.Id,

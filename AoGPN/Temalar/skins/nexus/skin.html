@@ -33,6 +33,10 @@
       <header class="nx-top">
         <div id="nxDragRegion"><div class="nx-eyebrow" data-nx-i18n="eyebrow">GPN CONTROL CENTER</div><div class="nx-title"><span data-nx-i18n="title.prefix">NETWORK</span> <span>/</span> <span id="nxTitleLabel">DASHBOARD</span></div></div>
         <div class="nx-utils">
+          <label class="nx-langWrap" title="Interface language">
+            <span class="nx-langIcon">🌐</span>
+            <select id="nxHeaderLang" class="nx-lang" aria-label="Interface language"><!-- populated by skin.js --></select>
+          </label>
           <button type="button" id="nxToStandardBtn" class="nx-util" title="Switch to Standard dashboard" aria-label="Switch to Standard dashboard">⧉</button>
           <button type="button" id="nxMinBtn" class="nx-util" title="Minimize" aria-label="Minimize window">─</button>
           <button type="button" id="nxMaxBtn" class="nx-util" title="Maximize" aria-label="Maximize window">▢</button>
@@ -111,7 +115,7 @@
               <div class="nx-segLabel" data-nx-i18n="routeMode">Route mode</div>
               <div class="nx-seg">
                 <button type="button" data-nx-mode="gpn" class="nx-segOpt"><span data-nx-i18n="modeGpn">GPN Game Tunnel</span></button>
-                <button type="button" data-nx-mode="vpn" class="nx-segOpt"><span data-nx-i18n="modeGlobal">Global VPN</span></button>
+                <button type="button" data-nx-mode="vpn" class="nx-segOpt"><span data-nx-i18n="modeGlobal">VPN</span></button>
               </div>
             </div>
             <div class="nx-segGroup">
@@ -137,6 +141,7 @@
         <div class="nx-card nx-wide">
           <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="servers">Servers</div><span class="nx-subtle" data-nx-i18n="serversSub">Choose your route endpoint</span></div>
           <div class="nx-servers" id="nxServers"><!-- populated by skin.js --></div>
+          <div id="nxPool"><!-- node pool panel (populated by skin.js) --></div>
         </div>
       </section>
 
@@ -152,6 +157,7 @@
           <div class="nx-cardHead"><div class="nx-label" data-nx-i18n="analytics">Analytics</div><span class="nx-subtle" data-nx-i18n="analyticsSub">Live network telemetry</span></div>
           <div class="nx-ana" id="nxAnalytics"><!-- populated by skin.js --></div>
         </div>
+        <div class="nx-card nx-wide" id="nxMonitor"><!-- Connection Monitor (populated by skin.js) --></div>
       </section>
 
       <section class="nx-view" data-nx-view="gpnsrv">
@@ -177,6 +183,9 @@
     </main>
   </div>
   <div class="nx-toast" id="nxToast">GPN route updated.</div>
+  <!-- Country flags (SVG — Windows cannot render emoji flags). Loaded before
+       skin.js so the node lists can draw real flags + grouped country names. -->
+  <script src="../../core/flags.js"></script>
   <script src="../route-keys.js"></script>
   <script src="skin.js"></script>
   <!-- Standalone Game Boost view module (Windows-style icon views + grouping);

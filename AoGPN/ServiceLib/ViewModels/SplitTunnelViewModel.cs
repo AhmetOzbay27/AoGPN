@@ -126,6 +126,15 @@ public class SplitTunnelViewModel : MyReactiveObject
     private ConnectionMode? _activeGpnMode;
 
     /// <summary>
+    /// Son başarıyla uygulanan mod. Mod DEĞİŞTİĞİNDE (GPN↔VPN) kesintisiz soft-routing
+    /// yolu bilerek atlanır ve reload zorlanır — mod geçişleri tek deterministik yoldan
+    /// gider (çekirdek istenen modla yeniden üretilir, GPN'den çıkışta koordinatör
+    /// teardown'u Reload akışında yapılır). Aynı moddaki rota düzenlemeleri soft yoldan
+    /// kesintisiz uygulanmaya devam eder.
+    /// </summary>
+    private int? _appliedMode;
+
+    /// <summary>
     /// GPN bağlantısı şu anda Connected mı? Yapısal kural değişikliklerinde
     /// (ekleme/silme/sıralama) maç ortası restart yerine erteleme kararı bu
     /// değerden beslenir — canlı bağlantı yoksa eski ReloadRequested yolu kullanılır.
@@ -371,6 +380,38 @@ public class SplitTunnelViewModel : MyReactiveObject
             return;
         }
         ScheduleAutoApply();
+    }
+
+    /// <summary>
+    /// Modu otomatik uygulama (auto-apply) tetiklemeden programatik olarak ayarlar.
+    /// GPN koordinatör akışı (GpnConnectAsync) bağlantıyı zaten kurduğu için kural
+    /// yeniden uygulaması gerekmez; bu yalnızca kalıcı modun (config + VM) kullanıcı
+    /// seçimiyle eşit kalmasını sağlar — host yayınları ('gpn'/'vpn') ve dashboard
+    /// seçimleri çelişmez, kullanıcının seçimi her zaman önceliklidir.
+    ///
+    /// MainWindow (ApplyConnectionModeAsync) mod geçişlerini bu yoldan uygular:
+    /// doğrudan <see cref="Mode"/> atanırsa mod aboneliği +800ms'lik debounce'lu
+    /// İKİNCİ bir auto-apply planlar; o ikinci apply, az önce kurulan tüneli tekrar
+    /// yıkabilen fazladan bir ReloadRequested yayınlardı.
+    /// </summary>
+    public void SetModeSilently(int mode)
+    {
+        _suppressAutoApply = true;
+        try
+        {
+            // `_settingModeProgrammatically` BİLEREK set edilmez: SetModeSilently
+            // yalnızca kullanıcı kaynaklı yollardan çağrılır (MainWindow mod
+            // geçişleri, GPN Bağlan). Mode aboneliği bu yüzden CancelGameTrigger'ı
+            // çalıştırır — oyun otomatik-tetikleyicisi kullanıcının seçimini
+            // (ör. VPN'e geçiş) sonraki tarama tikinde GPN'e geri dayatamaz.
+            // Tetikleyicinin kendi Connect/Restore geçişleri bayrağı doğrudan
+            // set etmeye devam eder ve davranışı değişmez.
+            Mode = mode;
+        }
+        finally
+        {
+            _suppressAutoApply = false;
+        }
     }
 
     private void ScheduleAutoApply()
@@ -1208,6 +1249,54 @@ public class SplitTunnelViewModel : MyReactiveObject
         return true;
     }
 
+    /// <summary>
+    /// Removes a manual-list entry (app, domain or IP rule) by type + value.
+    /// Rule entries are addressed exactly like <see cref="MoveManualRoute"/> so the
+    /// dashboard can delete ANY entry — apps included — without needing the
+    /// WPF selection state. Removal persists and auto-applies through the normal
+    /// collection-change path (same as the row delete button for apps).
+    /// Returns false when the entry type is invalid or no entry matches.
+    /// </summary>
+    public bool RemoveManualRoute(string entryType, string value)
+    {
+        var index = FindManualRouteIndex(Apps, entryType, value);
+        if (index < 0)
+        {
+            Logging.Verbose("GPN", "remove_route_rejected",
+                ("entryType", entryType), ("value", value ?? "(null)"),
+                ("reason", value.IsNullOrEmpty() || entryType is not ("app" or "domain" or "ip") ? "invalid_input" : "unknown_entry"));
+            return false;
+        }
+
+        var removed = Apps[index].DisplayName;
+        Logging.Verbose("GPN", "remove_route", ("entryType", entryType), ("value", value), ("displayName", removed));
+        Apps.RemoveAt(index); // CollectionChanged → OnListChanged persists + auto-applies
+        return true;
+    }
+
+    /// <summary>
+    /// Rota listesinde tür + değerle (büyük/küçük harf duyarsız) giriş arar.
+    /// Geçersiz tür ya da boş değer -1 döndürür. Kaldırma/sıralama komutlarının
+    /// ortak eşleştirme sözleşmesidir — dashboard rule satırları (domain/IP) da
+    /// app satırlarıyla aynı yoldan adreslenir.
+    /// </summary>
+    internal static int FindManualRouteIndex(IList<SplitTunnelAppItem> apps, string entryType, string value)
+    {
+        if (value.IsNullOrEmpty() || entryType is not ("app" or "domain" or "ip"))
+        {
+            return -1;
+        }
+        for (var i = 0; i < apps.Count; i++)
+        {
+            if (apps[i].EntryType == entryType
+                && apps[i].Value.Equals(value, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private async Task ApplyAsync(bool silent = false)
     {
         Logging.Verbose("GPN", "apply_start", ("mode", Mode), ("transport", Transport), ("silent", silent));
@@ -1279,8 +1368,21 @@ public class SplitTunnelViewModel : MyReactiveObject
         // varken restart yerine uygulama SONRAKİ doğal yeniden bağlantıya ertelenir
         // (kurallar zaten kaydedildi — sonraki bağlantı config'i yeni kurallarla
         // üretir). Rota seçimleri ve mod/yön değişiklikleri bu kapıya takılmaz.
+        // Mod DEĞİŞTİYSE (ör. GPN↔VPN) kesintisiz soft yol BİLEREK atlanır: mod
+        // geçişleri her zaman reload ile uygulanır — çekirdek istenen modla yeniden
+        // üretilir ve GPN'den çıkışta koordinatör teardown'u Reload akışında yapılır.
+        // Aksi halde (canlı superset oturumu varken) soft yol modu reload'suz
+        // değiştirir; GPN koordinatörü Connected kalır, dashboard GPN markası
+        // gösterir ve iki yolun farklı zamanlaması "bazen geçiyor bazen geçmiyor"
+        // hissi üretir. Aynı moddaki rota düzenlemeleri soft yoldan kesintisiz
+        // uygulanmaya devam eder (aşağıdaki maç ortası kopma koruması aynen korunur).
+        var modeChanged = _appliedMode is null || _appliedMode != Mode;
         var softPolicy = GpnSoftRouting.BuildPolicy(Mode, InvertManualRouting, Apps, _config);
-        if (!await TryApplyGpnRoutingSoftAsync(softPolicy))
+        if (modeChanged)
+        {
+            StatusBarViewModel.Instance.ReloadRequested.Publish();
+        }
+        else if (!await TryApplyGpnRoutingSoftAsync(softPolicy))
         {
             if (_isGpnConnected
                 && GpnSoftRouting.IsStructuralEntryChange(GpnSoftSession.Fingerprint, softPolicy))
@@ -1293,6 +1395,7 @@ public class SplitTunnelViewModel : MyReactiveObject
                 StatusBarViewModel.Instance.ReloadRequested.Publish();
             }
         }
+        _appliedMode = Mode;
 
         // The routing rules changed; drop the monitor's cached routing and refresh so
         // the live route tags match the newly applied rules.

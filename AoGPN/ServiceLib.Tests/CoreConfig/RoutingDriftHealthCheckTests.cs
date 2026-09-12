@@ -9,6 +9,7 @@ using ServiceLib.Models;
 using ServiceLib.Models.Entities;
 using ServiceLib.Services;
 using ServiceLib.Services.CoreConfig;
+using ServiceLib.Services.Gpn;
 using ServiceLib.Services.CoreConfig.Mihomo;
 using Xunit;
 
@@ -430,6 +431,172 @@ public class RoutingDriftHealthCheckIntegrationTests
 
         report.State.Should().Be(RuleDriftState.Unknown);
         report.Warnings.Should().Contain(w => w.Contains("No config file", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Rapordaki "expected=1 live=74" yanlış alarmının birebir senaryosu: GPN
+    /// superset oturumu AKTİF (çekirdek, launcher'ın geçici WG profiliyle üretildi)
+    /// ama uygulamanın varsayılan düğümü bir abonelik VLESS profili. Denetim,
+    /// beklenen config'i canlı superset config'le birebir üretebilmek için oturum
+    /// kaydındaki WG düğümünü kullanmalı; aksi hâlde varsayılan düğümle GLOBAL
+    /// config (tek MATCH kuralı) üretir ve canlı 74 kurala karşı yanlış drift bildirir.
+    /// </summary>
+    [Fact]
+    public async Task Check_SupersetSessionActive_DefaultServerIsNotWg_IsInSync()
+    {
+        await CleanAsync();
+        var config = CreateConfig();
+        BindConfig(config);
+        CreateTables();
+
+        // Varsayılan düğüm: kullanıcının son seçimi — abonelikten bir VLESS düğümü
+        // (mihomo core → GLOBAL config üreticisi tek MATCH kuralı basar).
+        var vlessNode = new ProfileItem
+        {
+            IndexId = "node-vless",
+            ConfigType = EConfigType.VLESS,
+            CoreType = ECoreType.mihomo,
+            Remarks = "vless-node",
+            Address = "example.com",
+            Port = 443,
+            Password = Guid.NewGuid().ToString(),
+            Network = nameof(ETransport.raw),
+            StreamSecurity = Global.StreamSecurityReality,
+            Sni = "example.com",
+            PublicKey = "xQZLxeDqYrCcM7oDYbFxDszWnCk4SzwYYXWsrib8S3A=",
+            ShortId = "abc123",
+            Subid = string.Empty,
+        };
+        await SQLiteHelper.Instance.ReplaceAsync(vlessNode);
+        config.IndexId = vlessNode.IndexId;
+
+        // Çekirdeğin gerçekten yüklediği WG düğümü (launcher geçici profil kurar,
+        // varsayılan seçimi değiştirmez) + aktif routing.
+        var wgNode = CreateNode();
+        await SQLiteHelper.Instance.ReplaceAsync(wgNode);
+        var routing = CreateRouting(UserRule("chrome.exe", Global.ProxyTag));
+        await SQLiteHelper.Instance.ReplaceAsync(routing);
+
+        // Launcher akışını simüle et: WG düğümüyle superset config üret → oturum
+        // Begin olur (canlı çekirdek bu config'le başlatıldı) → diske yaz.
+        var builderResult = await CoreConfigContextBuilder.Build(config, wgNode);
+        builderResult.Success.Should().BeTrue(string.Join("; ", builderResult.ValidatorResult.Errors));
+        var launcherContext = builderResult.Context with
+        {
+            GpnSoftPolicy = GpnSoftRouting.BuildPolicy(config),
+        };
+        var liveResult = await CoreConfigHandler.GenerateClientConfig(launcherContext, null);
+        liveResult.Success.Should().BeTrue("superset config generation must succeed: " + liveResult.Msg);
+        GpnSoftSession.IsActive.Should().BeTrue("superset üretimi oturumu Begin etmeli");
+        GpnSoftSession.Node.Should().BeSameAs(wgNode, "oturum, config'in üretildiği WG düğümünü taşımalı");
+
+        var configPath = ConfigFilePath();
+        try
+        {
+            await File.WriteAllTextAsync(configPath, liveResult.Data!.ToString()!, TestContext.Current.CancellationToken);
+
+            var report = await new RoutingDriftHealthCheck(config).CheckAsync();
+
+            report.State.Should().Be(RuleDriftState.InSync);
+            report.IsDrifted.Should().BeFalse();
+            report.ExpectedRuleCount.Should().BeGreaterThan(1,
+                "oturum aktifken beklenen config superset biçiminde üretilmeli (tek MATCH değil)");
+            report.ExpectedRuleCount.Should().Be(report.LiveRuleCount);
+        }
+        finally
+        {
+            if (File.Exists(configPath))
+            {
+                File.Delete(configPath);
+            }
+            GpnSoftSession.End();
+        }
+    }
+
+    /// <summary>
+    /// Superset oturumu sırasında kullanıcı uygulama listesine giriş eklerse denetim
+    /// GERÇEK drift'i hâlâ yakalamalı: canlı config eski giriş setiyle üretildi,
+    /// beklenen yeni ao-&lt;i&gt; kural satırını içeriyor → reconnect gerekli.
+    /// </summary>
+    [Fact]
+    public async Task Check_SupersetSessionActive_EntryAdded_IsDrifted()
+    {
+        await CleanAsync();
+        var config = CreateConfig();
+        BindConfig(config);
+        CreateTables();
+
+        var vlessNode = new ProfileItem
+        {
+            IndexId = "node-vless",
+            ConfigType = EConfigType.VLESS,
+            CoreType = ECoreType.mihomo,
+            Remarks = "vless-node",
+            Address = "example.com",
+            Port = 443,
+            Password = Guid.NewGuid().ToString(),
+            Network = nameof(ETransport.raw),
+            StreamSecurity = Global.StreamSecurityReality,
+            Sni = "example.com",
+            PublicKey = "xQZLxeDqYrCcM7oDYbFxDszWnCk4SzwYYXWsrib8S3A=",
+            ShortId = "abc123",
+            Subid = string.Empty,
+        };
+        await SQLiteHelper.Instance.ReplaceAsync(vlessNode);
+        config.IndexId = vlessNode.IndexId;
+
+        var wgNode = CreateNode();
+        await SQLiteHelper.Instance.ReplaceAsync(wgNode);
+        await SQLiteHelper.Instance.ReplaceAsync(CreateRouting(UserRule("chrome.exe", Global.ProxyTag)));
+
+        // Canlı config, HENÜZ boş giriş listesiyle (ConnectionItem yok) üretilir.
+        var builderResult = await CoreConfigContextBuilder.Build(config, wgNode);
+        builderResult.Success.Should().BeTrue();
+        var launcherContext = builderResult.Context with
+        {
+            GpnSoftPolicy = GpnSoftRouting.BuildPolicy(config),
+        };
+        var liveResult = await CoreConfigHandler.GenerateClientConfig(launcherContext, null);
+        liveResult.Success.Should().BeTrue();
+        GpnSoftSession.IsActive.Should().BeTrue();
+
+        // Oturum sürerken kullanıcı uygulama listesine giriş ekler (yapısal
+        // değişiklik — yeniden bağlantı gerektirir).
+        config.ConnectionItem = new ConnectionSettingsItem
+        {
+            Mode = GameTriggerModes.Manual,
+            ManualRoutes =
+            [
+                new ManualRouteSetting
+                {
+                    EntryType = "app",
+                    Value = "chrome.exe",
+                    Port = string.Empty,
+                    Action = "vpn",
+                },
+            ],
+        };
+
+        var configPath = ConfigFilePath();
+        try
+        {
+            await File.WriteAllTextAsync(configPath, liveResult.Data!.ToString()!, TestContext.Current.CancellationToken);
+
+            var report = await new RoutingDriftHealthCheck(config).CheckAsync();
+
+            report.State.Should().Be(RuleDriftState.Drifted);
+            report.IsDrifted.Should().BeTrue();
+            report.MissingRules.Should().Contain(r => r.Contains("chrome.exe"),
+                "yeni girişin ao-0 kural satırı canlı config'te yok — reconnect gerekli");
+        }
+        finally
+        {
+            if (File.Exists(configPath))
+            {
+                File.Delete(configPath);
+            }
+            GpnSoftSession.End();
+        }
     }
 
     [Fact]

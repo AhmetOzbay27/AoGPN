@@ -151,15 +151,18 @@ public class CoreManager
 
         if (Utils.IsNonWindows())
         {
+            // Yan güncelleyici de yürütülebilir olmalı: güncelleme sırasında
+            // AoGPN'nin kendisi kapalıyken dosyaları yerine koyan süreç odur.
+            if (AppUpdaterLauncher.UpdaterExists(out var updaterPath))
+            {
+                await Utils.SetLinuxChmod(updaterPath);
+            }
+
             var coreInfo = CoreInfoManager.Instance.GetCoreInfo();
             foreach (var it in coreInfo)
             {
-                if (it.CoreType == ECoreType.AoGPN)
+                if (it.CoreType == ECoreType.AoGPN || it.CoreExes is null)
                 {
-                    if (Utils.UpgradeAppExists(out var upgradeFileName))
-                    {
-                        await Utils.SetLinuxChmod(upgradeFileName);
-                    }
                     continue;
                 }
 
@@ -631,15 +634,16 @@ public class CoreManager
     {
         try
         {
-            // MainModule throws for other-architecture or access-protected
-            // processes; that is fine — those cannot be positively attributed
-            // to this app and are therefore never killed.
-            return IsPathUnderDirectories(proc.MainModule?.FileName, ownedDirectories);
+            // En az yetkiyle çöz (ProcessPathResolver): korumalı ya da başka
+            // mimarideki bir süreçte MainModule reddedilir ve her çağrı bir
+            // Win32Exception atışı üretir. Çözülemezse sahiplik kanıtlanamaz ve
+            // süreç öldürülmez — bu kasıtlıdır.
+            return IsPathUnderDirectories(ProcessPathResolver.Resolve(proc.Id), ownedDirectories);
         }
         catch
         {
-            // Access denied / process exited: without positive proof of ownership
-            // the process is left untouched.
+            // Süreç çıktı / beklenmedik hata: sahiplik kanıtı yoksa süreç
+            // dokunulmadan bırakılır.
             return false;
         }
     }

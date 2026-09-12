@@ -308,7 +308,12 @@ public class MainWindowViewModel : MyReactiveObject
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(async blShow =>
             {
-                await ShowHideWindowInteraction.Handle(blShow);
+                // Bildirim: pencere henüz yüklenmediyse (WhenActivated handler'ları
+                // kayıtlı değilken tepsi/arka plan isteği geldi) istek sessizce düşer.
+                // TryHandleAsync dinleyici yoksa HİÇ ÇAĞIRMAZ: eskiden burada
+                // UnhandledInteractionException atılıp yutuluyordu ve Visual Studio
+                // her çağrı için ilk şans istisnası satırı yazıyordu.
+                await ShowHideWindowInteraction.TryHandleAsync(blShow);
             });
 
         StatusBarViewModel.SetDefaultServerRequested
@@ -340,7 +345,10 @@ public class MainWindowViewModel : MyReactiveObject
         AppManager.Instance.CoreEngineHost ??= new CoreEngineHost(_config, UpdateHandler);
         await AppManager.Instance.CoreEngineHost.InitializeAsync();
         await CertPemManager.Instance.Init(_config);
-        TaskManager.Instance.RegUpdateTask(_config, UpdateTaskHandler);
+        // Bakım tikleri (abonelik/çekirdek güncelleme) bağlantı uçuştayken ERTELENİR:
+        // bu tikler Reload() çağırabilir ve Reload'ın bağlı bir tünelde ağır iş
+        // koşturması maç ortasında kesinti üretirdi (bkz. ShouldDeferScheduledTasks).
+        TaskManager.Instance.RegUpdateTask(_config, UpdateTaskHandler, ShouldDeferScheduledTasks);
 
         if (_config.GuiItem.EnableStatistics
             || _config.GuiItem.DisplayRealTimeSpeed
@@ -377,6 +385,44 @@ public class MainWindowViewModel : MyReactiveObject
             NoticeManager.Instance.Enqueue(msg);
         }
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Zamanlanmış bakım tikleri ertelenmeli mi? (Saf, test edilebilir.)
+    ///
+    /// TRUE iken abonelik otomatik güncellemesi ve çekirdek güncelleme kontrolü
+    /// bu turu atlar. İki koruma var:
+    ///   * <see cref="GpnConnectionState.Connecting"/> — bağlanma uçuştayken
+    ///     bakım işi başlatmak ölçümü ve el sıkışmayı yavaşlatır,
+    ///   * tünel yeni kurulduysa (<see cref="GpnConnectFreshWindow"/>) — ilk
+    ///     saniyeler en kırılgan andır: adaptör/rota yerleşiyor, DNS fake-ip
+    ///     eşlemesi ısınıyor. Bu pencerede Reload tabanlı bakım çalıştırılmaz.
+    ///
+    /// Erteleme kayıp DEĞİLDİR: süresi gelmiş bir abonelik bir sonraki dakikada
+    /// yeniden denenir; güncelleme kontrolü 24 saatlik periyodunu korur.
+    /// </summary>
+    internal static readonly TimeSpan GpnConnectFreshWindow = TimeSpan.FromSeconds(60);
+
+    internal static bool ShouldDeferScheduledTasks(
+        GpnConnectionState? state, DateTimeOffset? updatedAt, DateTimeOffset now)
+    {
+        if (state is GpnConnectionState.Connecting)
+        {
+            return true;
+        }
+
+        if (state is GpnConnectionState.Connected && updatedAt is { } at)
+        {
+            return now - at < GpnConnectFreshWindow;
+        }
+
+        return false;
+    }
+
+    private bool ShouldDeferScheduledTasks()
+    {
+        var snapshot = _gpnCoordinator?.Snapshot;
+        return ShouldDeferScheduledTasks(snapshot?.State, snapshot?.UpdatedAt, DateTimeOffset.UtcNow);
     }
 
     private async Task UpdateTaskHandler(bool success, string msg)
@@ -741,6 +787,53 @@ public class MainWindowViewModel : MyReactiveObject
         => GetGpnSelectionService().ProbeAllAsync(servers, options, cancellationToken);
 
     /// <summary>
+    /// Açılış ön yüklemesi (Faz 3): GPN sunucu ölçüm önbelleğini ISITIR.
+    ///
+    /// Bağlanma yolunun yapacağı ICMP + UDP el sıkışma ölçümleri burada, kullanıcı
+    /// bir şey beklemediği anda ve paralel olarak yapılır; sonraki "Bağlan" ölçümü
+    /// (kısa ömürlü önbellek sayesinde) büyük ölçüde hazır veriden karşılanır.
+    /// Best-effort'tur: aday yoksa veya ölçüm başarısız olursa sessizce çıkar —
+    /// ön yükleme asla bağlanmayı veya açılışı bozmaz.
+    /// </summary>
+    public async Task WarmGpnProbeCacheAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var candidates = await WireGuardServerCatalog.LoadAsync().ConfigureAwait(false);
+            if (candidates.Count == 0)
+            {
+                return;
+            }
+
+            // Zaman aşımları kullanıcı ayarından (bağlanma yoluyla aynı kaynak) gelir;
+            // böylece ön yükleme ölçümü bağlanmanın kullanacağı ölçümle birebir aynı
+            // anahtara sahip olur ve önbellekten gerçekten karşılanır.
+            var probe = _config.GuiItem.GpnProbe ?? new GpnProbeTuning();
+            var options = new GpnProbeOptions
+            {
+                UseCache = true,
+                PerSampleTimeoutMs = Math.Max(200, probe.IcmpSampleTimeoutMs),
+                UdpCheck = new UdpHealthCheckOptions(WaitTimeoutMs: Math.Max(200, probe.UdpWaitTimeoutMs)),
+                HandshakeProbe = new WireGuardHandshakeProbeOptions(
+                    WaitTimeoutMs: Math.Max(300, probe.HandshakeWaitTimeoutMs),
+                    MaxAttempts: 2),
+            };
+
+            DiagLog.Write($"GPN_PREFLIGHT probe-warm start candidates={candidates.Count}");
+            await GetGpnSelectionService().WarmProbeCacheAsync(candidates, options, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Açılış iptal edildi — sessizce çık.
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("[GPN] Ön yükleme ölçümü hatası", ex);
+        }
+    }
+
+    /// <summary>
     /// Dashboard ⚡ Test paneli için paralel UDP sağlık testi (el sıkışma + junk
     /// zinciri) — seçim/failover ile AYNI kanıt; UDP rozeti ve gecikme fallback'i
     /// (Open round-trip) bu sonuçlardan beslenir.
@@ -785,7 +878,29 @@ public class MainWindowViewModel : MyReactiveObject
         => GetGpnSelectionService().EvaluateSelection(servers, pingResults, udpResults, options);
 
     /// <summary>
-    /// GPN otomatik-seçimi artık uygulanmıyorsa (ör. seçili profil VLESS/SS'e geçtiğinde
+    /// GPN akışının çalışıp çalışmayacağına karar verir (saf — test edilebilir):
+    /// kullanıcının kalıcı modu Manuel (GPN) ise ve TUN etkinse GPN akışı; aksi halde
+    /// normal tek-profil akışı. Seçili profilin türü kararı ETKİLEMEZ — kullanıcının
+    /// GPN/VPN seçimi her zaman önceliklidir.
+    /// </summary>
+    internal static bool ShouldRunGpnFlow(int userMode, bool tunEnabled)
+        => userMode == SplitTunnelViewModel.ModeManual && tunEnabled;
+
+    /// <summary>
+    /// Kullanıcı GPN akışını (Manuel mod + TUN) yapılandırmış mı? Açılış ön
+    /// yüklemesinin GPN sunucu ölçümlerini ısıtıp ısıtmayacağına karar verir —
+    /// GPN kapalıyken adaylara boşa ICMP/el sıkışma paketi gönderilmez.
+    ///
+    /// Karar <see cref="ShouldRunGpnFlow"/> ile AYNI kaynaktan üretilir; böylece
+    /// ön yükleme ile gerçek bağlanma akışı asla ayrışmaz.
+    /// </summary>
+    public bool IsGpnFlowConfigured()
+        => ShouldRunGpnFlow(
+            _config.ConnectionItem?.Mode ?? SplitTunnelViewModel.ModeOff,
+            _config.TunModeItem.EnableTun);
+
+    /// <summary>
+    /// GPN otomatik-seçimi artık uygulanmıyorsa (ör. kullanıcı VPN moduna geçtiğinde
     /// veya TUN kapandığında <paramref name="gpnConnected"/> = false olur) aktif GPN
     /// koordinatörünü teardown eder: failover izleyicisini iptal eder ve launcher'ın
     /// başlattığı tüneli durdurur. Aksi halde eski failover döngüsü arka planda yaşar ve
@@ -802,6 +917,42 @@ public class MainWindowViewModel : MyReactiveObject
         {
             await coordinator.DisconnectAsync(CancellationToken.None);
             Logging.SaveLog("[GPN] Koordinatör durduruldu — normal akışa geçiliyor.");
+        }
+    }
+
+    /// <summary>
+    /// Aktif GPN koordinatör tünelini durdurur: failover izleyicisi iptal edilir,
+    /// yakalama köprüsü/çekirdek durdurulur ve superset oturum kaydı temizlenir.
+    /// İki yerde çağrılır:
+    ///
+    ///  1) Kullanıcı bağlantıyı KESTİĞİNDE (ModeOff) — yumuşak uygulayıcı Off
+    ///     vektörünü canlı mihomo'ya yazar (trafik DIRECT) ama Wintun/TUN adaptörünü,
+    ///     failover izleyicisini ve superset oturumu yerinde bırakır; "Bağlantıyı Kes"
+    ///     gerçek bir teardown olmalı (aksi halde tünel gizlice ayakta kalır ve sonraki
+    ///     bağlantılar port/TUN çakışması yaşar — "hemen kesilmiyor" hissinin kaynağı),
+    ///  2) Uygulama kapanışında — düzenli teardown olmadan çıkış, arka planda izleyici
+    ///     görevi ve superset oturum bırakır (kararsız kapanışın kaynağı).
+    ///
+    /// Koordinatör kurulmamış veya zaten kopuksa no-op.
+    /// </summary>
+    public async Task StopGpnTunnelIfActiveAsync()
+        => await StopGpnTunnelIfActiveAsync(_gpnCoordinator);
+
+    /// <summary>
+    /// <see cref="StopGpnTunnelIfActiveAsync"/>'in test edilebilir hali: koordinatör
+    /// bağlı/bağlanıyor durumundaysa teardown eder, aksi halde hiçbir şey yapmaz.
+    /// </summary>
+    internal static async Task StopGpnTunnelIfActiveAsync(IGpnConnectionCoordinator? coordinator)
+    {
+        if (coordinator is null)
+        {
+            return;
+        }
+        var snapshot = coordinator.Snapshot;
+        if (snapshot.State is GpnConnectionState.Connected or GpnConnectionState.Connecting)
+        {
+            await coordinator.DisconnectAsync(CancellationToken.None);
+            Logging.SaveLog("[GPN] Koordinatör durduruldu — kullanıcı bağlantıyı kesti / uygulama kapanıyor.");
         }
     }
 
@@ -848,6 +999,13 @@ public class MainWindowViewModel : MyReactiveObject
             var snapshot = await coordinator.ConnectAsync(candidates,
                 options: new GpnProbeOptions
                 {
+                    // Kısa ömürlü ölçüm önbelleği (Faz 2): kullanıcı "kes → bağlan"
+                    // yaptığında veya Reload tetiklendiğinde aynı sunucuların
+                    // ICMP/el sıkışma ölçümleri saniyeler içinde baştan yapılmasın.
+                    // Ölçüm-kritik yollar (dashboard ⚡ Test ve failover izleyicisi)
+                    // bu bayrağı AÇMAZ — ikisi de her zaman taze ölçüm ister.
+                    UseCache = true,
+
                     // V2rayTCP düşüşü sonrası otomatik Tier-2 (WireGuard) kurtarma
                     // kullanıcı ayarından gelir (GUIItem.GpnEnableRecoveryWatch).
                     EnableRecoveryWatch = _config.GuiItem.GpnEnableRecoveryWatch,
@@ -927,6 +1085,21 @@ public class MainWindowViewModel : MyReactiveObject
             Logging.SaveLog("[GPN] GPN Bağlan: TUN etkinleştirildi.");
         }
 
+        // Kullanıcının GPN seçimi kalıcı ve yetkili: bağlantıdan önce mod Manuel'e
+        // yazılır (config + VM, auto-apply tetiklenmeden). Host durum yayınları
+        // ('gpn') ve dashboard pill'leri böylece kullanıcı tercihiyle çelişmez;
+        // sonraki Reload'lar da aynı seçimle GPN akışını sürdürür.
+        if (_config.ConnectionItem is null)
+        {
+            _config.ConnectionItem = new();
+        }
+        if (_config.ConnectionItem.Mode != SplitTunnelViewModel.ModeManual)
+        {
+            _config.ConnectionItem.Mode = SplitTunnelViewModel.ModeManual;
+            await ConfigHandler.SaveConfig(_config);
+        }
+        ConnectionViewModel.SetModeSilently(SplitTunnelViewModel.ModeManual);
+
         await TryRunGpnConnectAsync();
     }
 
@@ -949,6 +1122,12 @@ public class MainWindowViewModel : MyReactiveObject
         {
             SetReloadEnabled(false);
 
+            // Bağlantı zaten ayakta mıydı? Aşağıdaki otomatik ölçüm yalnızca GERÇEKTEN
+            // yeni bir bağlantı kurulduğunda çalışmalı: idempotent bağlanma sayesinde
+            // Reload artık tüneli yıkmıyor, ama ölçümü her Reload'da tekrarlamak yine
+            // gereksiz sunucu ping'i ve arayüz trafiği üretirdi.
+            var coreWasReadyBeforeReload = ReadMainCoreHealth()?.State == CoreHealthState.Ready;
+
             var profileItem = await ConfigHandler.GetDefaultServer(_config);
             if (profileItem == null)
             {
@@ -956,18 +1135,22 @@ public class MainWindowViewModel : MyReactiveObject
                 return;
             }
 
-            // GPN akışı: seçili profil bir WireGuard profili ve TUN açıksa, tüm
-            // WireGuard adaylarını (İtalya/Almanya) ölçüp en düşük gecikmeli sunucuyu
-            // otomatik seç ve ona bağlan (failover izleyici dahil).
-            var gpnActive = profileItem.ConfigType == EConfigType.WireGuard
-                && _config.TunModeItem.EnableTun;
+            // GPN akışı: kullanıcının GPN/VPN SEÇİMİ yetkilidir — mod Manuel (GPN)
+            // ise ve TUN açıksa WireGuard adaylarını (İtalya/Almanya) ölçüp en düşük
+            // gecikmeli sunucuyu otomatik seç ve ona bağlan (failover izleyici dahil).
+            // Seçili profilin türü bu kararı EZEMEZ: aksi halde WireGuard profili
+            // seçiliyken VPN seçimi sessizce GPN tüneline dönüşür (kullanıcı seçimi
+            // yok sayılır — "VPN bağlanamıyor"un kaynağı) ve GPN seçiliyken WireGuard
+            // dışı bir profil normal VPN akışını çalıştırırdı.
+            var userMode = _config.ConnectionItem?.Mode ?? SplitTunnelViewModel.ModeOff;
+            var gpnActive = ShouldRunGpnFlow(userMode, _config.TunModeItem.EnableTun);
             var gpnConnected = gpnActive && await TryRunGpnConnectAsync();
 
-            // GPN artık uygulanmıyorsa (seçili profil VLESS/SS gibi WireGuard dışı bir
-            // profile geçti veya TUN kapandı) aktif bir GPN koordinatörü varsa teardown
-            // et: failover izleyicisini iptal et ve GpnCoreLauncher'ın başlattığı tüneli
-            // durdur. Aksi halde eski failover döngüsü arka planda yaşar ve normal
-            // (tek-profil) akışla çakışır.
+            // GPN artık uygulanmıyorsa (kullanıcı VPN moduna geçti, mod Off oldu veya
+            // TUN kapandı) aktif bir GPN koordinatörü varsa teardown et: failover
+            // izleyicisini iptal et ve GpnCoreLauncher'ın başlattığı tüneli durdur.
+            // Aksi halde eski failover döngüsü arka planda yaşar ve normal (tek-profil)
+            // akışla çakışır.
             await StopGpnCoordinatorWhenNotConnectedAsync(gpnConnected, _gpnCoordinator);
 
             if (!gpnConnected)
@@ -1005,7 +1188,14 @@ public class MainWindowViewModel : MyReactiveObject
             // biri). Çekirdek Ready (bağlantı kuruldu) olunca ölçüm yapılır; bağlantı
             // kurulamazsa (hata / kapatıldı / zaman aşımı) otomatik ölçüm atlanır —
             // manuel ⚡ Test butonu her zaman çalışır.
-            _ = RunAvailabilityCheckAfterConnectAsync();
+            if (!coreWasReadyBeforeReload)
+            {
+                _ = RunAvailabilityCheckAfterConnectAsync();
+            }
+            else
+            {
+                Logging.SaveLog("[Reload] Bağlantı zaten kuruluydu — otomatik sunucu ölçümü atlandı.");
+            }
 
             var showClashUI = AppManager.Instance.IsRunningCore(ECoreType.mihomo);
             if (showClashUI)

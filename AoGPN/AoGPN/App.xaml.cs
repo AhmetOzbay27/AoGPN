@@ -133,9 +133,52 @@ public partial class App
             // device). Best-effort: without admin rights removal is skipped with
             // a log entry. Skipped in reboot-as-admin for the same reason as the
             // orphan-core sweep above.
-            _ = Task.Run(async () =>
-                await WintunOrphanSweeper.SweepOrphanedAsync(AppManager.Instance.Config?.GpnWintunItem));
+            //
+            // BU ÇAĞRI BEKLENİR (fire-and-forget DEĞİL): süpürme, çekirdek
+            // başlatılmadan (MainWindowViewModel → Reload) ÖNCE tamamlanır.
+            // Aksi halde yarış riski oluşurdu — bu örnek kendi Wintun adaptörünü
+            // açarken süpürme aynı adla açılmış CANLI adaptörü silebilirdi.
+            // Süpürme yalnızca birkaç P/Invoke + arayüz numaralandırmasıdır
+            // (ms mertebesinde); hata açılışı asla engellemez.
+            try
+            {
+                await WintunOrphanSweeper.SweepOrphanedAsync(AppManager.Instance.Config?.GpnWintunItem);
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog("AoGPN startup Wintun orphan sweep failed", ex);
+            }
         }
+
+        // Son çare ağı — kapanış kancaları (Graceful Shutdown Hooks):
+        //  * Normal çıkışlar (pencere kapatma / tray çıkışı) → ExitApplicationSafelyAsync
+        //    çekirdek durduktan sonra bir kapanış süpürmesi daha koşturur.
+        //  * Uygulama.Exit → OnExit (base.OnExit — Application.Exit olayı) → düzenli
+        //    teardown + Environment.Exit(0).
+        //  * Oturum kapanışı (oturum kapatma / kapat) → Current_SessionEnding.
+        //  * Aşağıdaki ProcessExit kancası, düzenli kancalardan HİÇBİRİ çalışmadan
+        //    süreç biterse (ör. OnExit tırmanıcısının zorla çıkışı) son bir senkron,
+        //    best-effort süpürme dener. KORUMA: çekirdek hâlâ çalışıyorsa süpürme
+        //    ATLANIR — canlı tünelin adaptörü asla silinmez (bir sonraki açılış
+        //    süpürmesi kalıntıyı zaten yakalar). WPF konsol uygulaması olmadığından
+        //    Console.CancelKeyPress yolu yoktur; Ctrl+C burada anlamlı değildir.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try
+            {
+                if (!AppManager.Instance.IsRunningCore(ECoreType.mihomo)
+                    && !AppManager.Instance.IsRunningCore(ECoreType.Xray)
+                    && !AppManager.Instance.IsRunningCore(ECoreType.openvpn))
+                {
+                    WintunOrphanSweeper.SweepOrphanedAsync(AppManager.Instance.Config?.GpnWintunItem)
+                        .GetAwaiter().GetResult();
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog("AoGPN ProcessExit Wintun sweep failed", ex);
+            }
+        };
 
         AppManager.Instance.InitComponents();
         Splash?.SetProgress(30);

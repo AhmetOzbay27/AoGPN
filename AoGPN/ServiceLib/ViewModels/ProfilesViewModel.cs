@@ -350,13 +350,9 @@ public class ProfilesViewModel : MyReactiveObject
 
         await RefreshServers();
 
-        try
-        {
-            await ProfilesFocusInteraction.Handle(Unit.Default);
-        }
-        catch (UnhandledInteractionException<Unit, Unit>)
-        {
-        }
+        // Bildirim: görünüm aktif değilse dinleyici yoktur — çağrı hiç yapılmaz
+        // (eskiden istisna atılıp yutuluyordu, bkz. InteractionExtensions).
+        await ProfilesFocusInteraction.TryHandleAsync(Unit.Default);
     }
 
     private async Task ServerFilterChanged(bool c)
@@ -400,13 +396,9 @@ public class ProfilesViewModel : MyReactiveObject
             SelectedProfile = selected ?? lstModel.First();
         }
 
-        try
-        {
-            await DispatcherRefreshServersBizInteraction.Handle(Unit.Default);
-        }
-        catch (UnhandledInteractionException<Unit, Unit>)
-        {
-        }
+        // Bildirim: WebView2 yerleşiminde bu görünüm yüklenmeyebilir — dinleyici
+        // yoksa çağrı hiç yapılmaz (eskiden istisna atılıp yutuluyordu).
+        await DispatcherRefreshServersBizInteraction.TryHandleAsync(Unit.Default);
     }
 
     public async Task RefreshSubscriptions()
@@ -424,7 +416,10 @@ public class ProfilesViewModel : MyReactiveObject
 
     public async Task AdjustMainLvColWidth()
     {
-        await AdjustMainLvColWidthInteraction.Handle(Unit.Default);
+        // Bildirim: dinleyici yoksa (legacy görünüm yüklü değil) no-op. Burada
+        // eskiden koruma hiç yoktu: dinleyicisiz çağrı, çağıranı gözlemlenmeyen
+        // bir istisnayla bırakabilirdi.
+        await AdjustMainLvColWidthInteraction.TryHandleAsync(Unit.Default);
     }
 
     private async Task<List<ProfileItemModel>?> GetProfileItemsEx(string subid, string filter)

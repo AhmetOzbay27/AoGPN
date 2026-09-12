@@ -12,20 +12,27 @@ sayfadaki adımları sırayla uygula.
 - [5. Dil dosyalarını güncelleme](#5-dil-dosyalarını-güncelleme)
 - [6. Dashboard'ı güncelleme](#6-dashboardı-güncelleme)
 - [7. Doğrulama & smoke testler](#7-doğrulama--smoke-testler)
-- [8. Uçtan uca örnek](#8-uçtan-uca-örnek)
+- [8. Güncelleme hattı ön koşulu: depo görünürlüğü](#8-güncelleme-hattı-ön-koşulu-depo-görünürlüğü)
+- [9. Uçtan uca örnek](#9-uçtan-uca-örnek)
 
 ---
 
 ## 1. Tek sürüm kaynağı
 
-Sürümün tek kaynağı **`AoGPN/Directory.Build.props`** içindeki `<Version>`
-etiketidir:
+Sürümün tek kaynağı **git etiketidir** (`v<major>.<minor>.<patch>`):
 
-```xml
-<PropertyGroup>
-    <Version>1.1.1</Version>
-</PropertyGroup>
+```bash
+git tag v1.1.1
 ```
+
+`AoGPN/Directory.Build.props` içinde elle yazılmış bir `<Version>` **yoktur**;
+derleme sürümü oradaki MSBuild hedefiyle etiketten türetilir:
+
+| Durum | Damgalanan sürüm |
+| --- | --- |
+| Yayın hattı (`release.yml`) | Etiketten gelen `-p:Version=1.1.1` |
+| Yerel / etiket dışı CI derlemesi | HEAD'den erişilebilen en yakın `v<sayı>` etiketi |
+| Etiket yok · git yok · etiket biçimi bozuk | `0.0.1` (yedek) |
 
 Bu değer derlenince assembly sürümü olur (`1.1.1.0`). Aşağıdaki her yer aynı
 kaynaktan beslenir, ayrıca elle güncellenmesi **gerekmez**:
@@ -36,15 +43,22 @@ kaynaktan beslenir, ayrıca elle güncellenmesi **gerekmez**:
 | Pencere başlığı / sürüm damgası | `Utils.GetVersionInfo()` |
 | Güncelleme kontrolü | `Utils.GetVersionInfo()` (assembly) |
 
-> Yani sürümü yalnızca `Directory.Build.props` içinde değiştirirsin; About
-> sayfası otomatik olarak doğru değeri gösterir.
+> Yani sürümü yalnızca **etiket** belirler; About sayfası otomatik olarak doğru
+> değeri gösterir ve `Directory.Build.props` içinde elle güncellenecek bir
+> sürüm satırı kalmamıştır. Yedek `0.0.1` bilerek sıfırdan farklıdır:
+> `AppUpdateChecker` yerel sürümü `0.0.0` okuduğunda bunu "sürüm bilinmiyor"
+kabul eder ve güncelleme **önermez** — yedek `0.0.0` olsaydı etiketsiz her
+> derlemede güncelleme denetimi tümden susardı.
 
 ---
 
 ## 2. Numaralandırma şeması
 
 - **Assembly / güncelleme-kontrol sürümü:** AoGPN-yerli **`1.x.x`** şeması
-  kullanılır (`Directory.Build.props`). Örn. şu anki sürüm: **1.1.1**.
+  kullanılır ve sürüm **git etiketinden** gelir. Etiket biçimi
+  `v<major>.<minor>.<patch>` olmalıdır; `v` öneki isteğe bağlıdır (`1.1.1` de
+  kabul edilir), ancak sonekli etiket (`v1.1.1-rc1`) **reddedilir** — çünkü
+  `AssemblyVersion` sayısal olmak zorundadır. Örn. şu anki sürüm: **1.1.1**.
 - **CHANGELOG:** Beslenen değer aynı sürüm numarasıyla `[1.1.1]` başlığı olarak
   yazılır. Yayınlanmamış iç geliştirme işleri, `1.1.1` altında
   **"Development milestones folded into this release"** bölümünde `####`
@@ -57,21 +71,32 @@ kaynaktan beslenir, ayrıca elle güncellenmesi **gerekmez**:
 
 ## 3. Yeni sürüm çıkarma: adım adım
 
-1. **Assembly sürümünü artır** — `AoGPN/Directory.Build.props`
-   `<Version>` değerini güncelle (ör. `1.1.1` → `1.2.0`).
+1. **Sürüm numarasını seç** — `Directory.Build.props` içinde güncellenecek bir
+   değer YOK; numarayı yalnızca etiket belirler (ör. `v1.1.1` → `v1.2.0`).
+   Yerel derlemenin yeni numarayı göstermesi için etiketi erkenden atabilirsin;
+   atmazsan yerel derleme bir önceki etiketi bildirir.
 2. **CHANGELOG'a giriş ekle** — en üste yeni `## [x.y.z]` başlığını yaz ve
    değişiklikleri `### Added` / `### Changed` / `### Fixed` / `### Technical`
    bölümlerine ayır. (Yapı detayı: [4. CHANGELOG yapısı](#4-changelog-yapısı).)
-3. **Release etiketini sürümle eşle** — GitHub üzerinden yayın etiketi (tag),
-   assembly sürümüyle **birebir** uyumlu olmalıdır (ör. `1.1.1`).
-   Güncelleme kontrolü (`UpdateService`) assembly sürümünü, GitHub release
-   etiketinden çözülen `SemanticVersion` ile karşılaştırır:
-   - Etiket sürümden küçükse → program yanlışlıkla sürekli "güncelleme var"
-     der.
-   - Etiket sürümden büyükse → yeni yayını hiç görmez.
-   Yani: **etiket = assembly sürümü** olmalı (örn. `1.1.1`). Mevcut etiket
-   biçimi `v` öneksizdir (tek mevcut etiket: `7.24.4`), bu yüzden aynı şekilde
-   `1.1.1` kullan.
+3. **Etiketi at ve yayınla** — sürüm ile etiket artık ayrı iki şey değil;
+   etiket **sürümün kendisidir**:
+
+   ```bash
+git tag v1.1.1
+git push origin v1.1.1
+   ```
+
+   `.github/workflows/release.yml` tetiklenir: Release derler,
+   `AoGPN-windows-64.zip` üretir, sürümü etiketten `-p:Version=<etiket>` ile
+   damgalar ve **aynı** etiketle GitHub Releases'e yayımlar. Etiket biçimi
+   `v<major>.<minor>.<patch>` olmalıdır; sonekli bir etiket (`v1.1.1-beta`)
+   yayın adımında reddedilir ve `releases/latest` ucu ön sürümleri zaten
+   göstermez.
+
+   Güncelleme denetimi (`AppUpdateChecker`) assembly sürümünü GitHub etiketiyle
+   karşılaştırır: etiket assembly sürümünden küçükse program sürekli "güncelleme
+   var" der; büyükse yeni yayını görmez. Etiketten damgalama sayesinde bu
+   sapma yayınlanmış derlemelerde yapısal olarak imkânsızdır.
 4. **Yeni i18n anahtarı eklendiyse** → [5. Dil dosyaları](#5-dil-dosyalarını-güncelleme).
 5. **Dashboard değiştiyse** → [6. Dashboard'ı güncelleme](#6-dashboardı-güncelleme).
 6. **Doğrulamayı çalıştır** → [7. Doğrulama](#7-doğrulama--smoke-testler).
@@ -188,7 +213,7 @@ Dashboard statik + çalışma zamanı dosyalarından oluşur:
 
 ## 7. Doğrulama & smoke testler
 
-Yayın öncesi şu üçünü çalıştır:
+Yayın öncesi şu dördünü çalıştır:
 
 ```bash
 # 1) Dashboard/skin JS testleri
@@ -200,7 +225,24 @@ cd AoGPN && dotnet build AoGPN/AoGPN.csproj -c Release -t:Compile
 # 3) Yerelleştirme tutarlılık testi
 cd AoGPN && dotnet test ServiceLib.Tests/ServiceLib.Tests.csproj \
   --filter "FullyQualifiedName~LocalizationConsistency"
+
+# 4) Yayın hattı sözleşmesi: varlık adları uygulamanın istediği adlarla aynı mı,
+#    sürüm ön sürüm olarak işaretlenmiyor mu, paket kökünde AoGPN.Updater.exe
+#    var mı, v* etiketini yalnızca tek hat mı yazıyor
+cd AoGPN && dotnet test ServiceLib.Tests/ServiceLib.Tests.csproj \
+  --filter "FullyQualifiedName~ReleasePipelineContract"
+
+# 5) Güncelleme denetimi sözleşmesi: 404 beklenen bir sonuç (istisna değil),
+#    "depo görünmüyor" ile "kararlı yayın yok" ayrı teşhis edilir, başarısız
+#    denetim 6 saat önbelleğe alınmaz
+cd AoGPN && dotnet test ServiceLib.Tests/ServiceLib.Tests.csproj \
+  --filter "FullyQualifiedName~AppUpdateCheckerTests"
 ```
+
+> 4. adım `release.yml`'i YAML olarak ayrıştırır; `.github/workflows/` altındaki
+> bir değişiklik bu kurallardan birini bozarsa test kırılır. `ReleasePipelineContractTests`
+> bu yüzden `test.yml`'in yol filtrelerine de eklenmiştir — sözleşmeyi koruyan
+> test, sözleşme değiştiğinde çalışmazsa hiçbir işe yaramaz.
 
 **Smoke (uygulama açıkken):**
 
@@ -211,11 +253,72 @@ cd AoGPN && dotnet test ServiceLib.Tests/ServiceLib.Tests.csproj \
 
 ---
 
-## 8. Uçtan uca örnek (1.2.0 yayınlamak)
+## 8. Güncelleme hattı ön koşulu: depo görünürlüğü
 
-1. `AoGPN/Directory.Build.props`: `<Version>1.2.0</Version>`.
+Uygulama içi güncelleme denetimi (`AppUpdateChecker`) ve paket indirme
+(`AppUpdateInstaller`) **kimlik doğrulaması taşımayan** HTTPS istekleri yapar:
+
+```
+GET https://api.github.com/repos/<owner>/<repo>/releases/latest
+GET <asset browser_download_url>
+```
+
+Bu yolun çalışması için depo **herkese açık olmak zorundadır**. GitHub, özel
+(private) depolara yapılan anonim isteklere **403 değil 404** döndürür. Belirti
+yalnızca bir `404 NotFound`tur ve "henüz kararlı yayın yok" sanılabilir;
+görünürlük yanlışsa güncelleme hattı hiçbir sürümde çalışmaz.
+
+Uygulama günlüğünde teşhis tek satırda ve süreç başına bir kez yazılır:
+
+```
+[AppUpdate] Güncelleme denetimi yapılamadı (RepositoryNotVisible). '<owner>/<repo>'
+deposu anonim isteklere görünmüyor (404). GitHub özel depolara 403 değil 404 döner;
+depo özel kaldıkça sürüm denetimi de paket indirme de çalışmaz. Çözüm: depoyu herkese
+açık yapın ya da yayın paketlerini herkese açık bir adresten sunun. → <url>
+```
+
+Aynı 404 iki farklı anlama geldiği için ayrım liste ucuna düşülerek yapılır:
+
+| `/releases/latest` | `/releases` | Teşhis | Anlamı |
+| --- | --- | --- | --- |
+| 404 | 404 | `RepositoryNotVisible` | Depo özel ya da silinmiş — **yapılandırma hatası** |
+| 404 | 200 | `NoPublishedRelease` | Depo var, kararlı yayın yok — normal |
+| 403/429 | — | `RateLimited` | Kimliksiz API limiti (60 istek/saat) |
+| 5xx | — | `HttpError` | Sunucu hatası |
+
+Sözleşmenin geri kalanı:
+
+- **İstisna yok:** 404/403/5xx beklenen sonuçlardır; bunlar için istisna atılmaz.
+  (Aksi halde Visual Studio her biri için "ilk şans istisnası" satırı yazar ve
+  hata ayıklama çıktısı kullanılamaz hale gelir.)
+- **Ön sürüme yükseltme yok:** otomatik denetim asla ön sürüm sunmaz; depoda
+  yalnızca ön sürüm varsa bu `NoPublishedRelease` olarak bildirilir.
+- **Başarısız denetim önbelleğe alınmaz:** başarı `MinCheckInterval` (6 saat)
+  boyunca geçerlidir, başarısızlık yalnızca `FailureRetryInterval` (1 dk) fren
+  uygular — geçici bir kesinti güncellemeleri saatlerce kapatmaz.
+- **Tek kaynak:** depo adı yalnızca `Global.CoreUrls` içindeki
+  `ECoreType.AoGPN` girdisinde tanımlıdır.
+
+> Kapalı depo bilinçli bir tercihse güncelleme paketleri herkese açık bir
+> adresten (ayrı bir yayın deposu, CDN ya da sürüm dosyası) sunulmalıdır:
+> uygulamaya token gömmek, dağıtılan her kopyada gizli anahtar taşımak demektir.
+
+---
+
+## 9. Uçtan uca örnek (1.2.0 yayınlamak)
+
+1. **Etiketi at:** `git tag v1.2.0 && git push origin v1.2.0`. Sürüm numarası
+   başka hiçbir yerde yazılmaz — yayın hattı bu etiketi `-p:Version=1.2.0`
+   olarak derlemeye verir.
 2. CHANGELOG en üste `## [1.2.0] — …` ve içerik bölümlerini yaz; yayınlanmamış
    geliştirme adımları varsa bu başlık altında `####` alt başlıklarına al.
-3. GitHub'da veya CI'da release etiketini `1.2.0` yap (mevcut biçim `v` öneksiz;
-   örn. `7.24.4`) — assembly sürümüyle birebir.
-4. Dokunulan her yeni UI metni için 9 dil + fallback dict güncellendi.5. Bölüm 7'deki üç testi koş, About sayfasını smoke'la.
+3. Yayının bittiğini doğrula: Actions'ta `release` işi `AoGPN-windows-64.zip`
+   varlığıyla ve normal (ön sürüm OLMAYAN) bir release oluşturmuş olmalı; aksi
+   hâlde `releases/latest` ucu onu göstermez ve güncelleme önerilmez. İmzalama
+   işi aynı sürüme `.sig` dosyalarının yanında **`AoGPN-public-key.asc`** de
+   yükler; böylece indirilen paket doğrulanabilir. Ortak anahtarın üretildiği tek
+   yer `.github/actions/publish-public-key` bileşenidir (`release.yml` imzalama
+   işi ve `pub-key.yml` yalnızca onu çağırır), yani aynı varlık adını yazan
+   ikinci bir kod yolu yoktur.
+4. Dokunulan her yeni UI metni için 9 dil + fallback dict güncellendi.
+5. Bölüm 7'deki üç testi koş, About sayfasını smoke'la.

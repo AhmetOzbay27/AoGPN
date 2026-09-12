@@ -32,7 +32,12 @@ public interface IDashboardBridge
 
     // ---- connection / mode operations ----
 
-    Task ToggleConnectionAsync(string requestedMode, string transport);
+    /// <param name="displayedConnected">
+    /// İsteği gönderen arayüzün ekranda gösterdiği bağlantı durumu (dashboard
+    /// <c>toggle_connection</c> yükü). <c>null</c> → gönderen durum bildirmedi;
+    /// yön canlı duruma göre yorumlanır.
+    /// </param>
+    Task ToggleConnectionAsync(string requestedMode, string transport, bool? displayedConnected = null);
     Task RunGpnConnectAsync();
     Task SetConnectionModeAsync(string mode);
     Task SetDashboardModeAsync(string mode);
@@ -122,4 +127,7 @@ public interface IDashboardBridge
     /// <summary>Persists dashboard "save_settings" payloads through the settings view-model.</summary>
     Task SaveSettingsAsync(JsonElement root);
     Task NotifyNodesOpAsync(string message);
+
+    /// <summary>Executes the host-composed undo-toast script (window.setUndoAvailable).</summary>
+    Task PushUndoStateAsync(string script);
 }

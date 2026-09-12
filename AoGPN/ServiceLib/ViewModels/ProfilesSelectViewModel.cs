@@ -138,13 +138,9 @@ public class ProfilesSelectViewModel : MyReactiveObject, ICloseable
 
         await RefreshServers();
 
-        try
-        {
-            await ProfilesFocusInteraction.Handle(Unit.Default);
-        }
-        catch (UnhandledInteractionException<Unit, Unit>)
-        {
-        }
+        // Bildirim: görünüm aktif değilse dinleyici yoktur — çağrı hiç yapılmaz
+        // (eskiden istisna atılıp yutuluyordu, bkz. InteractionExtensions).
+        await ProfilesFocusInteraction.TryHandleAsync(Unit.Default);
     }
 
     private async Task ServerFilterChanged(bool c)

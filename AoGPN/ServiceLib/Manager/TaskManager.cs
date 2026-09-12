@@ -4,13 +4,33 @@ public class TaskManager
 {
     private static readonly Lazy<TaskManager> _instance = new(() => new());
     public static TaskManager Instance => _instance.Value;
+    /// <summary>
+    /// Çekirdek güncelleme kontrolünün İLK çalışma dakikası (dakika cinsinden).
+    ///
+    /// Eskiden 1 idi: sayaç 1'den başladığı için kontrol açılıştan ~1 dakika sonra,
+    /// yani tam ilk bağlanma penceresinde çalışıyordu ve GitHub'a giden ağ trafiği
+    /// bağlanmayı yavaşlatıyordu (canlı gözlenen). 10. dakikaya alındı — açılış ve
+    /// ilk bağlanma tamamen bu trafikten arınmış kalır, 24 saatlik periyot korunur.
+    /// </summary>
+    private const int UpdateCheckFirstRunMinute = 10;
+
     private Config _config;
     private Func<bool, string, Task>? _updateFunc;
 
-    public void RegUpdateTask(Config config, Func<bool, string, Task> updateFunc)
+    /// <summary>
+    /// "Şu an bakım tiki çalıştırılmasın" sinyali (Faz 1 — tünel koruması).
+    /// Bağlanma uçuştayken veya tünel yeni kurulmuşken TRUE döner: abonelik
+    /// güncellemesi tamamlandığında <c>UpdateTaskHandler → Reload()</c> zinciri
+    /// çalışır ve maç ortasında kesinti üretmemelidir. Erteleme KAYIP DEĞİLDİR:
+    /// süresi gelmiş abonelik bir sonraki dakikada yeniden denenir.
+    /// </summary>
+    private Func<bool>? _shouldDefer;
+
+    public void RegUpdateTask(Config config, Func<bool, string, Task> updateFunc, Func<bool>? shouldDefer = null)
     {
         _config = config;
         _updateFunc = updateFunc;
+        _shouldDefer = shouldDefer;
 
         Task.Run(ScheduledTasks);
     }
@@ -70,8 +90,8 @@ public class TaskManager
                 }
             }
 
-            //Execute once 24 hour
-            if (numOfExecuted % 1440 == 1)
+            //Execute once 24 hour (ilk çalışma UpdateCheckFirstRunMinute'da)
+            if (numOfExecuted % 1440 == UpdateCheckFirstRunMinute)
             {
                 try
                 {
@@ -88,6 +108,12 @@ public class TaskManager
 
     private async Task UpdateTaskRunSubscription()
     {
+        if (_shouldDefer?.Invoke() == true)
+        {
+            Logging.SaveLog("ScheduledTasks - subscription update deferred (connection in progress)");
+            return;
+        }
+
         var updateTime = ((DateTimeOffset)DateTime.Now).ToUnixTimeSeconds();
         var lstSubs = (await AppManager.Instance.SubItems())?
             .Where(t => t.AutoUpdateInterval > 0)
@@ -132,6 +158,12 @@ public class TaskManager
 
     private async Task UpdateTaskRunCheckUpdate()
     {
+        if (_shouldDefer?.Invoke() == true)
+        {
+            Logging.SaveLog("ScheduledTasks - update check deferred (connection in progress)");
+            return;
+        }
+
         Logging.SaveLog("Execute check update");
 
         var updateService = new UpdateService(_config, async (success, msg) => await Task.CompletedTask);

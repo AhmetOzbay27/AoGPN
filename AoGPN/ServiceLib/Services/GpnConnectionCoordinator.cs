@@ -136,6 +136,30 @@ public sealed class GpnConnectionCoordinator : IGpnConnectionCoordinator
         options ??= new GpnProbeOptions();
         _candidates = candidates;
 
+        // ── Faz 0: aşama ölçümü ──────────────────────────────────────────
+        // "Bağlan"dan tünele geçen sürenin nereye gittiğini kanıtlar: sunucu ölçümü
+        // (ICMP/UDP), teardown, çekirdek başlatma, el sıkışma, Ready. Çağıran kendi
+        // zaman çizelgesini verebilir; verilmezse bu çağrı için bir tane üretilir.
+        var timeline = options.Timeline ?? new GpnConnectTimeline();
+        options = options with { Timeline = timeline };
+        timeline.Mark("connect-start");
+
+        // ── Faz 1: idempotentlik kapısı ──────────────────────────────────
+        // İstenen hedef ZATEN karşılanıyorsa hiçbir şey yapma. Bu kapı olmadan
+        // Reload / abonelik güncellemesi / tepsi gibi tetikler çalışan tüneli
+        // yıkıp sıfırdan kuruyordu — canlı gözlenen "bağlan → kop → yeniden
+        // bağlan" dizisinin ve ~10 saniyelik kesintinin kaynağı.
+        if (GpnReconnectPolicy.ShouldReuseExistingTunnel(
+                Snapshot.State, Snapshot.Mode, Snapshot.Server?.ServerId, preferred))
+        {
+            timeline.Mark("no-op");
+            DiagLog.Write($"GPN_LOG connect no-op — tünel zaten hedefi karşılıyor "
+                + $"(state={Snapshot.State} server={Snapshot.Server?.ServerId ?? "-"} "
+                + $"preferred={preferred?.ServerId ?? "none"})");
+            DiagLog.Write(timeline.Summarize());
+            return Snapshot;
+        }
+
         // Kesintisiz düğüm değişimi (make-before-break): bağlantı zaten kurulu bir
         // WireGuard tünelindeyken kullanıcı başka bir düğümle "Bağlan" derse tüneli
         // yıkıp yeniden kurmak yerine çalışan mihomo'nun GPN-Nodes grubunun seçimini
@@ -153,7 +177,9 @@ public sealed class GpnConnectionCoordinator : IGpnConnectionCoordinator
         {
             SetState(GpnConnectionState.Connected, ConnectionMode.WireGuardUDP, preferred,
                 $"WireGuard → {preferred.Name} (kesintisiz geçiş)");
+            timeline.Mark("soft-switch");
             DiagLog.Write($"GPN_LOG soft-switch → {preferred.ServerId}");
+            DiagLog.Write(timeline.Summarize());
             Logging.SaveLog($"[{Tag}] Kesintisiz düğüm değişimi: {currentServer.Name} → {preferred.Name}");
             // Eski düğümde kalan oturumları izle (mevcut bağlantılar kesilmez, eski
             // düğümde boşalır) — dashboard "eski düğüm boşalıyor" durumunu gösterir.
@@ -180,6 +206,7 @@ public sealed class GpnConnectionCoordinator : IGpnConnectionCoordinator
         // Temiz başlangıç: eski bağlantı ve izleyici varsa durdur (idempotent).
         StopMonitor();
         await _launcher.StopAsync(ct).ConfigureAwait(false);
+        timeline.Mark("teardown");
 
         DiagLog.Write($"GPN_LOG connect start candidates={candidates.Count}");
         SetState(GpnConnectionState.Connecting, ConnectionMode.WireGuardUDP, null, "sunucu ölçülüyor");
@@ -215,9 +242,12 @@ public sealed class GpnConnectionCoordinator : IGpnConnectionCoordinator
                 // Adaylar iletildi → mihomo config'i tüm düğümler + GPN-Nodes grubuyla
                 // üretilir; böylece daha sonraki düğüm değişimleri kesintisiz yapılabilir.
                 await _launcher.LaunchAsync(ConnectionMode.WireGuardUDP, server, ct, _candidates).ConfigureAwait(false);
+                timeline.Mark("launch");
 
                 SetState(GpnConnectionState.Connected, ConnectionMode.WireGuardUDP, server, $"WireGuard → {server.Name}");
+                timeline.Mark("connected");
                 DiagLog.Write($"GPN_LOG connected mode=WireGuardUDP server={server.ServerId}");
+                DiagLog.Write(timeline.Summarize());
                 if (options.EnableFailover)
                 {
                     StartFailoverMonitor(server, candidates, options, ct);
@@ -233,9 +263,12 @@ public sealed class GpnConnectionCoordinator : IGpnConnectionCoordinator
                 // UDP yolu doğrulanamadı → Tier 3: mevcut V2ray düğümü
                 SetState(GpnConnectionState.Connecting, ConnectionMode.V2rayTCP, null, "V2ray TCP (fallback)");
                 await _launcher.LaunchAsync(ConnectionMode.V2rayTCP, null, ct).ConfigureAwait(false);
+                timeline.Mark("launch");
 
                 SetState(GpnConnectionState.Connected, ConnectionMode.V2rayTCP, null, "V2ray TCP (fallback)");
+                timeline.Mark("connected");
                 DiagLog.Write("GPN_LOG connected mode=V2rayTCP (fallback)");
+                DiagLog.Write(timeline.Summarize());
             }
 
             return Snapshot;
@@ -247,7 +280,9 @@ public sealed class GpnConnectionCoordinator : IGpnConnectionCoordinator
         catch (Exception ex)
         {
             Logging.SaveLog($"[{Tag}] Bağlantı hatası: {ex.Message}");
+            timeline.Mark("failed");
             DiagLog.Write($"GPN_LOG failed: {ex.Message}");
+            DiagLog.Write(timeline.Summarize());
             SetState(GpnConnectionState.Failed, Snapshot.Mode, Snapshot.Server, null, ex.Message);
             return Snapshot;
         }
@@ -301,7 +336,11 @@ public sealed class GpnConnectionCoordinator : IGpnConnectionCoordinator
         // (EscapeTunnelForProbes: UDP/TCP fiziksel NIC'e bağlanır, ICMP atlanır).
         // Seçim (SelectBestServerAsync) bu bayrağı ALMAZ — bağlantı-öncesi ölçüm
         // tünel yokken zaten fiziksel yoldan yapılır ve ICMP gösterimi korunur.
-        var monitorOptions = options with { EscapeTunnelForProbes = true };
+        //
+        // UseCache BİLEREK KAPATILIR: failover kararı "sunucu öldü mü?" sorusuna
+        // dayanır; önbellekten dönen taze görünen bir ölçüm izleyiciyi körleştirir
+        // ve gerçek bir düşüşü gizler.
+        var monitorOptions = options with { EscapeTunnelForProbes = true, UseCache = false };
 
         // TUN'un etkin olduğunu koordinatör garantiler (çekirdek Ready = TUN kuruldu):
         // aktif tünel adaptörünün adını ProbeEgressNic teşhisine DOĞRUDAN ilet — ilk

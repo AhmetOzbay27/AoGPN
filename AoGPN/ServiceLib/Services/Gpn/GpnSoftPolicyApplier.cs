@@ -16,6 +16,7 @@ public static class GpnSoftSession
 {
     private static readonly object _gate = new();
     private static IReadOnlyList<string>? _entryKeys;
+    private static ProfileItem? _node;
 
     /// <summary>Çalışan config superset biçiminde üretildi mi?</summary>
     public static bool IsActive
@@ -29,13 +30,27 @@ public static class GpnSoftSession
         get { lock (_gate) { return _entryKeys; } }
     }
 
+    /// <summary>
+    /// Superset config'in üretildiği WireGuard düğümü (GpnCoreLauncher'ın
+    /// <c>BuildWireGuardProfile</c> çıktısı — çekirdeğin gerçekten yüklediği
+    /// config'in kaynağı). Oturum sırasında uygulamanın varsayılan düğümü BU
+    /// DEĞİLDİR (launcher geçici bir profil kurar, kullanıcının varsayılan
+    /// seçimini değiştirmez); RoutingDriftHealthCheck beklenen config'i canlı
+    /// superset config'le birebir üretebilmek için bu düğümü kullanır.
+    /// </summary>
+    public static ProfileItem? Node
+    {
+        get { lock (_gate) { return _node; } }
+    }
+
     /// <summary>Superset config üretildiğinde çağrılır (giriş listesi oturum boyunca sabittir).</summary>
-    public static void Begin(GpnSoftRoutingPolicy policy)
+    public static void Begin(GpnSoftRoutingPolicy policy, ProfileItem? node = null)
     {
         var keys = policy?.EntryKeys ?? [];
         lock (_gate)
         {
             _entryKeys = keys;
+            _node = node;
         }
     }
 
@@ -45,6 +60,7 @@ public static class GpnSoftSession
         lock (_gate)
         {
             _entryKeys = null;
+            _node = null;
         }
     }
 
@@ -91,7 +107,9 @@ public static class GpnSoftPolicyApplier
         return await TryApplyCoreAsync(
             desired,
             fingerprint: GpnSoftSession.Fingerprint,
-            fetchProxies: async () => (await ClashApiManager.Instance.GetClashProxiesAsync().ConfigureAwait(false))?.Item1,
+            // forceAttempt: politika uygulaması karar-kritik — geri çekilme
+            // penceresi yüzünden boş okuma alıp yanlış karar vermemeli.
+            fetchProxies: async () => (await ClashApiManager.Instance.GetClashProxiesAsync(forceAttempt: true).ConfigureAwait(false))?.Item1,
             setSelection: (group, target) => ClashApiManager.Instance.ClashSetActiveProxy(group, target),
             cancellationToken).ConfigureAwait(false);
     }

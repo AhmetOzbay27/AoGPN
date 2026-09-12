@@ -31,6 +31,15 @@ internal static class ProbeEgressNic
 {
     private const string Tag = "ProbeEgress";
     private const int CacheSeconds = 15;
+
+    /// <summary>
+    /// Anlık görüntü önbelleğinin ömrü — TEK kaynak. Testler bu değeri okuyup
+    /// iddialarını pencereye göre kurar; eskiden test, iki ardışık çağrının her
+    /// koşulda bu pencere içinde kalacağını VARSAYIYORDU ve yüklü bir paralel
+    /// koşuda pencere aşıldığında (ikinci çağrı haklı olarak taze numaralandırır)
+    /// kararsız biçimde kırılıyordu.
+    /// </summary>
+    internal static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(CacheSeconds);
     private static readonly object Sync = new();
     private static Snapshot? _cached;
     private static DateTime _cachedUtc;
@@ -227,7 +236,7 @@ internal static class ProbeEgressNic
             }
 
             var now = DateTime.UtcNow;
-            if (_cached is not null && now - _cachedUtc < TimeSpan.FromSeconds(CacheSeconds))
+            if (_cached is not null && now - _cachedUtc < CacheTtl)
             {
                 return _cached;
             }

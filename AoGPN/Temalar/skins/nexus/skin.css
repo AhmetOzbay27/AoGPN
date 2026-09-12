@@ -76,6 +76,13 @@ body {
 .nx-util { width: 32px; height: 32px; border: 1px solid var(--nx-line); border-radius: 9px; background: rgba(255,255,255,.02); color: #a7b0bf; font-size: 14px; cursor: pointer; transition: .2s; display: grid; place-items: center; }
 .nx-util:hover { color: var(--nx-cyan); border-color: rgba(32,232,255,.3); box-shadow: 0 0 14px rgba(32,232,255,.12); }
 .nx-util.nx-close:hover { color: #ff5577; border-color: rgba(255,85,119,.35); box-shadow: 0 0 14px rgba(255,85,119,.12); }
+/* Header language picker — always visible without entering SETTINGS; the
+   same whole-app channel as the settings select (B.setLanguage). */
+.nx-langWrap { display: flex; align-items: center; gap: 6px; height: 32px; border: 1px solid var(--nx-line); border-radius: 9px; background: rgba(255,255,255,.02); padding: 0 8px; cursor: pointer; transition: .2s; }
+.nx-langWrap:hover { border-color: rgba(32,232,255,.3); box-shadow: 0 0 14px rgba(32,232,255,.12); }
+.nx-langIcon { font-size: 12px; line-height: 1; }
+.nx-lang { appearance: none; border: 0; background: transparent; color: #a7b0bf; font-size: 11px; outline: none; cursor: pointer; padding: 0 2px 0 0; }
+.nx-lang:focus { color: var(--nx-cyan); }
 .nx-status { display: flex; align-items: center; gap: 9px; color: #a4afbf; font-size: 11px; }
 .nx-dot { width: 8px; height: 8px; border-radius: 50%; background: #20e8ff; box-shadow: 0 0 15px #20e8ff; }
 
@@ -190,6 +197,17 @@ body {
 .nx-srv:hover { border-color: rgba(32,232,255,.3); }
 .nx-srv.active { border-color: rgba(32,232,255,.5); background: rgba(32,232,255,.06); box-shadow: 0 0 18px rgba(32,232,255,.07); }
 .nx-srvFlag { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #161e2c, #0a0e15); border: 1px solid var(--nx-line); display: grid; place-items: center; font-size: 16px; }
+/* Real country flags inside the 36px tile / group headers (SVG from core/flags.js). */
+.nx-flagRow, .nx-flagHead { display: inline-flex; overflow: hidden; border-radius: 3px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .25); }
+.nx-flagRow { width: 30px; height: 21px; }
+.nx-flagHead { width: 20px; height: 14px; border-radius: 2px; }
+.nx-flagRow svg, .nx-flagHead svg { display: block; width: 100%; height: 100%; }
+/* Country group headers (flag + localized name + count). */
+.nx-srvGroupHead { display: flex; align-items: center; gap: 9px; border-top: 1px solid rgba(255, 255, 255, .07); padding-top: 12px; margin-top: 8px; }
+.nx-srvGroupHead:first-child { border-top: 0; padding-top: 0; margin-top: 2px; }
+.nx-srvGroupName { font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: #8a94a6; }
+.nx-srvGroupCount { margin-left: auto; font-family: ui-monospace, monospace; font-size: 9px; color: #5b6472; }
+.nx-srvGroupGlobe { font-size: 12px; line-height: 1; }
 .nx-srvName { font-size: 12px; color: var(--nx-text); }
 .nx-srvMeta { display: block; font-size: 9px; color: #687488; margin-top: 3px; }
 .nx-srvPing { margin-left: auto; font: 600 12px Orbitron; color: var(--nx-green); }
@@ -509,3 +527,49 @@ body {
 .nx-progTxt { min-width: 0; }
 .nx-gameIcon img { width: 100%; height: 100%; object-fit: contain; padding: 3px; border-radius: 6px; }
 .nx-boostIcon img { width: 100%; height: 100%; object-fit: contain; padding: 3px; border-radius: 8px; }
+
+/* ---- Servers: sort row + node pool (dashboard Nodes-view parity) ---- */
+.nx-sortRow { display: flex; align-items: center; gap: 10px; margin: 10px 0 6px; }
+.nx-sortSel { max-width: 220px; }
+.nx-pool { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--nx-line); }
+.nx-poolDesc { font-size: 10px; color: #687488; margin: 8px 0 10px; line-height: 1.5; }
+.nx-poolAdd { display: flex; gap: 8px; margin-bottom: 10px; }
+.nx-poolAdd .nx-inp { flex: 1; }
+.nx-poolList { display: flex; flex-direction: column; gap: 6px; }
+.nx-poolRow { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--nx-line); border-radius: 10px; background: rgba(255,255,255,.02); }
+.nx-poolRow.edit { border-color: rgba(32,232,255,.35); }
+.nx-poolDot { width: 6px; height: 6px; border-radius: 50%; background: var(--nx-cyan); box-shadow: 0 0 8px rgba(32,232,255,.6); flex-shrink: 0; }
+.nx-poolUrl { flex: 1; min-width: 0; font-size: 10.5px; color: #aeb8c8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-poolRow .nx-inp { flex: 1; }
+
+/* ---- Connection Monitor (Perf parity) ---- */
+.nx-liveBadge { font-size: 9px; color: var(--nx-green); letter-spacing: 1.5px; }
+.nx-liveBadge.off { color: #687488; }
+.nx-monStats { display: flex; gap: 10px; margin: 12px 0; }
+.nx-monStat { flex: 1; border: 1px solid var(--nx-line); border-radius: 12px; padding: 10px 14px; background: rgba(255,255,255,.02); }
+.nx-monStat b { font: 700 20px Orbitron; color: var(--nx-text); display: block; }
+.nx-monStat span { font-size: 9px; color: #687488; letter-spacing: 1.5px; text-transform: uppercase; }
+.nx-monTools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.nx-monTools .nx-inp { flex: 1; min-width: 180px; }
+.nx-monHide { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: #aeb8c8; cursor: pointer; }
+.nx-monGroup { max-width: 190px; }
+.nx-mhead, .nx-mrow { display: grid; grid-template-columns: 1.6fr .9fr .7fr 1.2fr 1.1fr .7fr 1fr; gap: 10px; align-items: center; }
+.nx-mhead { padding: 8px 12px; font-size: 9px; color: #687488; letter-spacing: 1.5px; text-transform: uppercase; border-bottom: 1px solid var(--nx-line); }
+.nx-mrow { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,.03); font-size: 10.5px; color: #aeb8c8; }
+.nx-mrow:hover { background: rgba(255,255,255,.02); }
+.nx-mrow.hidden { display: none; }
+.nx-mcol.addr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; font-size: 10px; }
+.nx-mcol .nx-routeSel { width: 100%; }
+.nx-mgroup { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 10.5px; color: #c8d2e0; cursor: pointer; background: rgba(32,232,255,.04); border-bottom: 1px solid var(--nx-line); }
+.nx-mgroup:hover { background: rgba(32,232,255,.07); }
+.nx-mgroup b { font-weight: 600; }
+.nx-mgroup em { font-style: normal; margin-left: auto; color: var(--nx-cyan); font-size: 9px; }
+.nx-mchev { color: var(--nx-cyan); }
+
+/* ---- Undo toast (Boost parity) ---- */
+.nx-toast { display: flex; align-items: center; gap: 10px; pointer-events: auto; }
+.nx-toastTxt { color: #dfe7f2; }
+.nx-toastBtn { border: 1px solid rgba(32,232,255,.35); background: rgba(32,232,255,.09); color: var(--nx-cyan); font-size: 10px; font-family: inherit; padding: 5px 10px; border-radius: 7px; cursor: pointer; }
+.nx-toastBtn:hover { background: rgba(32,232,255,.16); }
+.nx-toastBtn.x { border-color: var(--nx-line); background: none; color: #687488; padding: 4px 7px; }
+.nx-toastBtn.x:hover { color: #ff9aaf; border-color: rgba(255,85,119,.4); }

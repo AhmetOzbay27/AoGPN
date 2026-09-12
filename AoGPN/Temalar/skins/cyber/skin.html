@@ -20,15 +20,19 @@
              (each connected app gets its own trace into the core). -->
         <g id="cySourceTraces"></g>
 
-        <path class="trace-idle" d="M 820 400 L 890 290 L 950 230 H 1035" />
-        <path class="trace-active" id="trace-dst0" d="M 820 400 L 890 290 L 950 230 H 1035" />
-        <path class="trace-pulse" id="pulse-dst0" d="M 820 400 L 890 290 L 950 230 H 1035" />
-        <path class="trace-idle" d="M 820 400 L 920 380 L 960 330 H 1035" />
-        <path class="trace-active" id="trace-dst1" d="M 820 400 L 920 380 L 960 330 H 1035" />
-        <path class="trace-pulse" id="pulse-dst1" d="M 820 400 L 920 380 L 960 330 H 1035" />
-        <path class="trace-idle" d="M 820 400 L 930 430 H 1035" />
-        <path class="trace-active" id="trace-dst2" d="M 820 400 L 930 430 H 1035" />
-        <path class="trace-pulse" id="pulse-dst2" d="M 820 400 L 930 430 H 1035" />
+        <!-- Destination traces start at the JACK IN button's center (700 335)
+             and run horizontally BEHIND the button to its right edge (820) so
+             the source fan and the destination fan meet at one core point —
+             data flows in from the left, through the core, out to the right. -->
+        <path class="trace-idle" d="M 700 335 H 820 L 890 290 L 950 230 H 1035" />
+        <path class="trace-active" id="trace-dst0" d="M 700 335 H 820 L 890 290 L 950 230 H 1035" />
+        <path class="trace-pulse" id="pulse-dst0" d="M 700 335 H 820 L 890 290 L 950 230 H 1035" />
+        <path class="trace-idle" d="M 700 335 H 820 L 920 380 L 960 330 H 1035" />
+        <path class="trace-active" id="trace-dst1" d="M 700 335 H 820 L 920 380 L 960 330 H 1035" />
+        <path class="trace-pulse" id="pulse-dst1" d="M 700 335 H 820 L 920 380 L 960 330 H 1035" />
+        <path class="trace-idle" d="M 700 335 H 820 L 930 430 H 1035" />
+        <path class="trace-active" id="trace-dst2" d="M 700 335 H 820 L 930 430 H 1035" />
+        <path class="trace-pulse" id="pulse-dst2" d="M 700 335 H 820 L 930 430 H 1035" />
       </g>
     </svg>
 
@@ -40,6 +44,11 @@
         <div class="cy-node-label" id="cyNodeLabel">[ NODE: DAR ES SALAAM, TZ ]</div>
       </div>
       <div class="cy-theme-switch">
+        <!-- Header language selector — same bridge contract as the SETTINGS
+             one, but visible on every view so language switching is never
+             buried (mirrors the INFRA skin's header LANG select). -->
+        <span class="cy-header-lang-label" data-cy-i18n="ctl.language">LANGUAGE</span>
+        <select class="cy-lang" id="cyHeaderLang" aria-label="Interface language"><!-- populated at boot --></select>
         <button type="button" class="cy-btn-theme" data-cy-theme="yellow">[ CYBER YELLOW ]</button>
         <!-- NOTE: the theme names are brand accents, intentionally not translated -->
         <button type="button" class="cy-btn-theme" data-cy-theme="purple">[ NEON VIOLET ]</button>
@@ -155,18 +164,73 @@
         <span class="cy-ctl-label" data-cy-i18n="ctl.language">LANGUAGE</span>
         <select class="cy-select" id="cyLanguage" aria-label="Interface language"><!-- populated at boot --></select>
       </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.tunStack">TUN STACK</span>
+        <select class="cy-select" id="cyTunStack" aria-label="TUN stack">
+          <option value="gvisor">GVISOR</option>
+          <option value="system">SYSTEM</option>
+          <option value="mixed">MIXED</option>
+        </select>
+      </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.effects">EFFECTS</span>
+        <select class="cy-select" id="cyEffects" aria-label="Effects tier">
+          <option value="full">FULL</option>
+          <option value="balanced">BALANCED</option>
+          <option value="reduced">REDUCED</option>
+        </select>
+      </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.autoGame">AUTO-GAME</span>
+        <button type="button" class="cy-switch" id="cyAutoGame" role="switch" aria-checked="false" data-cy-i18n-title="autoGameTitle" title="Auto-connect when a listed game starts"></button>
+      </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.recovery">RECOVERY</span>
+        <button type="button" class="cy-switch" id="cyRecovery" role="switch" aria-checked="false" data-cy-i18n-title="recoveryTitle" title="Auto-return to WireGuard after a V2ray fallback"></button>
+      </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.failover">FAILOVER</span>
+        <button type="button" class="cy-switch" id="cyFailover" role="switch" aria-checked="false" data-cy-i18n-title="failoverTitle" title="Allow automatic server switching on failure"></button>
+      </div>
+      <div class="cy-ctl-row">
+        <span class="cy-ctl-label" data-cy-i18n="ctl.proxyTest">PROXY TEST</span>
+        <button type="button" class="cy-proxy-test" id="cyProxyTest">TEST</button>
+      </div>
     </div>
 
-    <!-- bottom: terminal (operations console) -->
+    <!-- bottom: tabbed terminal (operations console) -->
     <div class="cy-bottom">
       <div class="cy-term-head">
         <div class="cy-term-header" id="cyTermHeader" data-cy-i18n="console.root">CONSOLE // ROOT ACCESS</div>
+        <nav class="cy-tabs" id="cyTabs" aria-label="Console tabs">
+          <button type="button" class="cy-tab active" data-cy-tab="terminal" data-cy-i18n="tabs.terminal">TERMINAL</button>
+          <button type="button" class="cy-tab" data-cy-tab="nodes" data-cy-i18n="tabs.nodes">NODES</button>
+          <button type="button" class="cy-tab" data-cy-tab="gpn" data-cy-i18n="tabs.gpn">GPN</button>
+          <button type="button" class="cy-tab" data-cy-tab="monitor" data-cy-i18n="tabs.monitor">MONITOR</button>
+          <button type="button" class="cy-tab" data-cy-tab="about" data-cy-i18n="tabs.about">ABOUT</button>
+        </nav>
         <div class="cy-term-head-right"><span data-cy-i18n="console.session">SESSION</span> <b id="cyTermSession">00:00:00</b></div>
       </div>
-      <div class="cy-term-body" id="cyTermLog">
-        <div class="sys-msg" data-cy-i18n="console.bootOk">> SYSTEM BOOT: OK</div>
-        <div class="sys-msg" data-cy-i18n="console.bootLoaded">> AO GPN HYBRID PROTOCOL LOADED.</div>
-        <div class="err-msg" id="cyBootVuln" data-cy-i18n="console.bootVuln">> STATUS: VULNERABLE. SELECT ROUTE AND JACK IN.</div>
+      <div class="cy-term-panels">
+        <div class="cy-term-panel active" data-cy-panel="terminal">
+          <div class="cy-term-body" id="cyTermLog">
+            <div class="sys-msg" data-cy-i18n="console.bootOk">> SYSTEM BOOT: OK</div>
+            <div class="sys-msg" data-cy-i18n="console.bootLoaded">> AO GPN HYBRID PROTOCOL LOADED.</div>
+            <div class="err-msg" id="cyBootVuln" data-cy-i18n="console.bootVuln">> STATUS: VULNERABLE. SELECT ROUTE AND JACK IN.</div>
+          </div>
+        </div>
+        <div class="cy-term-panel" data-cy-panel="nodes" hidden>
+          <div class="cy-tab-panel" id="cyTabNodes"><!-- node pool + route nodes --></div>
+        </div>
+        <div class="cy-term-panel" data-cy-panel="gpn" hidden>
+          <div class="cy-tab-panel" id="cyTabGpn"><!-- GPN servers --></div>
+        </div>
+        <div class="cy-term-panel" data-cy-panel="monitor" hidden>
+          <div class="cy-tab-panel" id="cyTabMonitor"><!-- connection monitor --></div>
+        </div>
+        <div class="cy-term-panel" data-cy-panel="about" hidden>
+          <div class="cy-tab-panel" id="cyTabAbout"><!-- about / help --></div>
+        </div>
       </div>
     </div>
   </div>

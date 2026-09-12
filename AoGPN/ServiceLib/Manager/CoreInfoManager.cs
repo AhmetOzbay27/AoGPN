@@ -56,11 +56,9 @@ public sealed class CoreInfoManager
 
         if (RuntimeInformation.ProcessArchitecture != Architecture.X86)
         {
-            if (IsCheckUpdateSupported(ECoreType.AoGPN))
-            {
-                lst.Add(ECoreType.AoGPN);
-            }
-
+            // Uygulamanın KENDİSİ bu listede yer almaz: yeni sürüm denetimi ve
+            // kurulumu tek yoldan yürür (AppUpdateChecker + AoGPN.Updater).
+            // Burada bilerek yalnızca yönlendirme çekirdekleri listelenir.
             if (!(Utils.IsWindows() && Environment.OSVersion.Version.Major < 10))
             {
                 lst.Add(ECoreType.Xray);

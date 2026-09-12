@@ -125,12 +125,45 @@
     'settingsSub': 'Preferences',
     'routeMode': 'Route mode',
     'modeGpn': 'GPN Game Tunnel',
-    'modeGlobal': 'Global VPN',
+    'modeGlobal': 'VPN',
     'capture': 'Capture',
     'transportProxy': 'Proxy',
     'transportTun': 'TUN',
     'loadingNodes': 'Loading nodes…',
     'noServers': 'No servers available yet.',
+    'nodes.sortBy': 'Sort',
+    'nodes.pool': 'Node pool',
+    'nodes.poolDesc': 'Add GitHub / .txt links that publish node lists — one click pulls them into your nodes.',
+    'nodes.poolEmpty': 'No links in the pool yet.',
+    'nodes.poolAdd': 'Add link',
+    'nodes.poolFetch': 'Download new nodes',
+    'nodes.poolEdit': 'Edit',
+    'nodes.poolRemove': 'Remove',
+    'nodes.poolSave': 'Save',
+    'nodes.poolCancel': 'Cancel',
+    'nodes.sortDefault': 'Default order',
+    'nodes.sortCountry': 'Country A-Z',
+    'nodes.sortFav': 'Favorites first',
+    'nodes.sortPing': 'Ping: low to high',
+    'nodes.sortPingDesc': 'Ping: high to low',
+    'nodes.sortRecent': 'Recently used',
+    'undo.remove': '{name} removed',
+    'undo.route': 'Route changed for {name}',
+    'undo.add': '{name} added',
+    'undo.action': 'Undo',
+    'undo.dismiss': 'Dismiss',
+    'monitor.title': 'Connection Monitor',
+    'monitor.connections': 'Connections',
+    'monitor.apps': 'Applications',
+    'monitor.filter': 'Filter app, address or country…',
+    'monitor.hideListeners': 'Hide listeners',
+    'monitor.view.empty': 'No visible connections.',
+    'monitor.view.groupNone': 'None',
+    'monitor.view.groupRoute': 'Route',
+    'monitor.view.groupProtocol': 'Protocol',
+    'monitor.view.groupState': 'State',
+    'monitor.view.groupCountry': 'Country',
+    'monitor.view.groupApp': 'Application',
     'noGames': 'No GPN game assigned yet — add one from Game Boost.',
     'noBoostApps': 'No boost-tunneled apps yet — add one from Game Boost in the main dashboard.',
     'kind.vpn': 'VPN',
@@ -156,7 +189,7 @@
     'ana.gpn': 'GPN',
     'ana.global': 'GLOBAL',
     'setting.routeMode': 'Route mode',
-    'setting.routeModeDesc': 'GPN Game Tunnel or Global VPN',
+    'setting.routeModeDesc': 'GPN Game Tunnel or VPN',
     'setting.capture': 'Capture',
     'setting.captureDesc': 'Proxy or TUN at the network layer',
     'setting.split': 'Split tunneling',
@@ -178,7 +211,7 @@
     'proxy.on': 'PROXY ON',
     'proxy.off': 'PROXY OFF',
     'opt.off': 'Off',
-    'opt.globalSplit': 'Global split',
+    'opt.globalSplit': 'VPN split',
     'opt.gpnSplit': 'GPN split',
     'opt.clear': 'Clear',
     'opt.set': 'Set',
@@ -379,7 +412,7 @@
     'gpn.reslog.action.recover': 'Recover',
     'gpn.reslog.action.select': 'Selection',
     // ---- Dashboard: Global VPN panel ----
-    'global.title': 'Global VPN',
+    'global.title': 'VPN',
     'global.allTraffic': 'All Traffic Tunnelled',
     'global.disconnected': 'Disconnected',
     'global.transport': 'Transport',
@@ -392,7 +425,7 @@
     // ---- Dashboard: status banners ----
     'banner.tunAdmin': 'TUN requires administrator privileges — CONNECT is locked. Relaunch as admin or switch to Proxy capture.',
     'banner.relaunch': 'Relaunch as admin',
-    'banner.captureLock': 'Global VPN locks capture to TUN — every app is captured at the network layer so nothing can bypass the tunnel. Choose GPN Game Tunnel to pick Proxy capture.',
+    'banner.captureLock': 'VPN locks capture to TUN — every app is captured at the network layer so nothing can bypass the tunnel. Choose GPN Game Tunnel to pick Proxy capture.',
     'banner.tunProxy': 'TUN capture won\'t touch your system proxy — your PROXY ON preference stays independent. Only traffic that ignores the OS proxy (games, some apps) needs TUN.',
     'banner.leak': 'You are connected but your public IP has not changed — traffic may be leaking. Check your capture settings or try switching to TUN.',
     'banner.ok': 'Tunnel verified — your public IP is now {ip} (was {isp}). Traffic is routing through the selected node.',
@@ -433,7 +466,7 @@
     'boost.appRoutesDesc': 'Changing a route persists it and applies immediately while Smart Split is active.',
     'boost.routeMode': 'Route mode',
     'boost.off': 'Off',
-    'boost.globalVpn': 'Global VPN',
+    'boost.globalVpn': 'VPN',
     'boost.gpnTunnel': 'GPN Game Tunnel',
     'boost.autoGame': 'Auto-connect when a game starts',
     'boost.autoGameDesc': 'When a listed VPN game launches, Smart Split is enabled; it returns to Off after the last game closes.',
@@ -559,6 +592,8 @@
       gpnResilienceLog: G('gpnResilienceLog') || null,
       gpnDiagLines: G('gpnDiagLines') || [],
       processCatalog: G('processCatalog') || [],
+      nodePool: G('nodePool') || [],
+      undoAvailable: G('undoAvailable') || null,
       connectionError: G('connectionError') || null,
       realIpState: G('realIpState') || null,
       systemProxyState: G('systemProxyState') || { desired: 0, effective: 0, owned: false },
@@ -592,7 +627,7 @@
     if (view === 'route') nxRenderRoute();
     if (view === 'gpnsrv') nxRenderGpnServers();
     if (view === 'games') nxRenderGameProfiles();
-    if (view === 'analytics') nxRenderAnalytics();
+    if (view === 'analytics') { nxRenderAnalytics(); nxRenderMonitor(); }
     if (view === 'settings') nxRenderSettings();
     if (view === 'about') nxRenderAbout();
   }
@@ -601,7 +636,9 @@
   function nxToggleConnect() {
     const S = nxState();
     if (B) {
-      const ok = B.postToHost({ action: 'toggle_connection', mode: S.mode, transport: S.transport, protocol: S.protocolPreference });
+      // `connected` = bastığı anda ekranda görünen durum → host yönü bu
+      // niyetten türetir (bkz. features/gpn.js).
+      const ok = B.postToHost({ action: 'toggle_connection', mode: S.mode, transport: S.transport, protocol: S.protocolPreference, connected: S.connected === true });
       if (!ok && typeof B.setConnected === 'function') B.setConnected(!S.connected, false);
     } else {
       DEMO.connected = !DEMO.connected;
@@ -618,6 +655,50 @@
   }
   function nxNodeMs(node, useReal) { return useReal ? (node.delay > 0 ? node.delay + ' ms' : '— ms') : (node.ping + ' ms'); }
   function nxNodeCode(node, useReal) { return useReal ? (node.country || node.sub || 'VPN').slice(0, 2) : (node.code || '🌐'); }
+
+  // ---- country flags + localized grouping (mirrors the Nodes view) ----
+  // Windows cannot render emoji flags, so real flags come from core/flags.js
+  // as tiny SVGs (loaded by skin.html); unknown codes fall back to a letter
+  // tile so the list never shows an empty box.
+  function nxNodeCountryKey(node, useReal) {
+    const raw = useReal ? (node && node.country) : (node && node.code);
+    if (typeof raw === 'string' && /^[A-Za-z]{2}$/.test(raw)) return raw.toUpperCase();
+    return '';
+  }
+  function nxSvgFlagInner(code, boxCls) {
+    if (!code) return '';
+    try {
+      if (window.aogpn && window.aogpn.flags && typeof window.aogpn.flags.flagFor === 'function') {
+        const inner = window.aogpn.flags.flagFor(code);
+        if (inner) return '<span class="' + boxCls + '">' + inner + '</span>';
+      }
+    } catch (e) { /* fall through to the letter tile */ }
+    return '';
+  }
+  function nxCountryLabel(code, lang) {
+    try {
+      const name = new Intl.DisplayNames([(lang || 'en')], { type: 'region' }).of(code);
+      if (name && String(name) !== code) return String(name);
+    } catch (e) { /* unknown region */ }
+    return null;
+  }
+  function nxNodeFlagMarkup(node, useReal) {
+    const code = nxNodeCountryKey(node, useReal);
+    if (code) {
+      const flag = nxSvgFlagInner(code, 'nx-flagRow');
+      if (flag) return '<div class="nx-srvFlag">' + flag + '</div>';
+    }
+    return '<div class="nx-srvFlag">' + escHtml(nxNodeCode(node, useReal)) + '</div>';
+  }
+  function nxServersGroupHead(code, count, S) {
+    const label = code ? (nxCountryLabel(code, S.language) || code) : nxT('nodes.countryUnknown');
+    const flag = code ? nxSvgFlagInner(code, 'nx-flagHead') : '';
+    return '<div class="nx-srvGroupHead">'
+      + (flag || '<span class="nx-srvGroupGlobe">🌐</span>')
+      + '<span class="nx-srvGroupName">' + escHtml(label) + '</span>'
+      + '<span class="nx-srvGroupCount">' + count + '</span>'
+      + '</div>';
+  }
 
   function nxActiveNodeKey(S) { return S.useRealNodes ? S.activeRealNodeId : (S.selectedNode ? S.selectedNode.key : ''); }
 
@@ -705,6 +786,20 @@
       });
     });
 
+    // Header language picker — visible on every view without opening SETTINGS.
+    // Same whole-app channel as the settings select: B.setLanguage persists
+    // through the host and re-renders this skin (and the dashboard) instantly.
+    const hdrLang = nxRef('nxHeaderLang');
+    if (hdrLang) {
+      hdrLang.innerHTML = __nxOpts(__nxLangs(), nxState().language);
+      hdrLang.addEventListener('change', () => {
+        const next = String(hdrLang.value || 'en');
+        if (B && typeof B.setLanguage === 'function') B.setLanguage(next);
+        SET('language', next);
+        nxSyncAll();
+      });
+    }
+
     const stdBtn = nxRef('nxToStandardBtn');
     if (stdBtn) stdBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -736,6 +831,8 @@
   // ---------- dashboard sync ----------
   function syncNexusSkin() {
     const S = nxState();
+    const hdrLang = nxRef('nxHeaderLang');
+    if (hdrLang) hdrLang.value = S.language || 'en';
     const st = nxRef('nxState'), sub = nxRef('nxSubstate'), modeEl = nxRef('nxRouteMode');
     const routeState = nxRef('nxRouteState');
     const ping = nxRef('nxPing'), jitter = nxRef('nxJitter'), loss = nxRef('nxLoss');
@@ -809,22 +906,145 @@
   }
 
   // ---------- servers sub-view ----------
+  // Node list sort order, mirrored from the dashboard's Nodes view (same
+  // semantics: country A-Z, favorites first, recently used, ping asc/desc).
+  // Persisted locally so the choice survives re-renders and reloads.
+  let _nxSort = 'default';
+  try {
+    const s = localStorage.getItem('aogpn.nexusSort.v1');
+    if (['default', 'country', 'fav', 'ping', 'pingDesc', 'recent'].includes(s)) _nxSort = s;
+  } catch (e) { /* no localStorage */ }
+  function nxPersistSort() {
+    try { localStorage.setItem('aogpn.nexusSort.v1', _nxSort); } catch (e) { /* ignore */ }
+  }
+
+  function nxSortedNodes(nodes) {
+    const arr = [...(nodes || [])];
+    if (_nxSort === 'country') {
+      arr.sort((a, b) => (a.country || 'ZZ').localeCompare(b.country || 'ZZ') || (a.name || '').localeCompare(b.name || ''));
+    } else if (_nxSort === 'default') {
+      // Default order = the host's persisted order; the host already keeps
+      // countries adjacent, so no re-sorting happens here.
+    } else if (_nxSort === 'fav') {
+      arr.sort((a, b) => ((b.fav ? 1 : 0) - (a.fav ? 1 : 0)) || (a.country || 'ZZ').localeCompare(b.country || 'ZZ') || (a.name || '').localeCompare(b.name || ''));
+    } else if (_nxSort === 'recent') {
+      arr.sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
+    } else if (_nxSort === 'ping' || _nxSort === 'pingDesc') {
+      // Unmeasured nodes sink to the bottom so a "0 ms" node is never the
+      // fastest.
+      const dir = _nxSort === 'ping' ? 1 : -1;
+      const ms = a => (Number(a.delay) > 0 ? Number(a.delay) : null);
+      arr.sort((a, b) =>
+        ((ms(a) === null ? 1 : 0) - (ms(b) === null ? 1 : 0))
+        || dir * ((ms(a) || 0) - (ms(b) || 0))
+        || (a.name || '').localeCompare(b.name || ''));
+    }
+    return arr;
+  }
+
+  // Node pool panel: subscription links (GitHub / .txt) the host pulls nodes
+  // from — add, inline-edit, remove and one-click fetch, same contract as the
+  // dashboard's Nodes view pool.
+  let _nxPoolEdit = null;
+  function nxRenderNodePool() {
+    const root = nxRef('nxPool');
+    if (!root) return;
+    const S = nxState();
+    const links = S.nodePool || [];
+    const list = links.length === 0
+      ? '<p class="nx-empty center slim">' + escHtml(nxT('nodes.poolEmpty')) + '</p>'
+      : '<div class="nx-poolList">' + links.map(link => {
+          if (link === _nxPoolEdit) {
+            return '<div class="nx-poolRow edit" data-nx-pooleditrow>'
+              + '<input type="text" class="nx-inp" data-nx-pooleditval value="' + escHtml(link) + '" spellcheck="false">'
+              + '<button type="button" class="nx-btn sm" data-nx-poolsave>' + escHtml(nxT('nodes.poolSave')) + '</button>'
+              + '<button type="button" class="nx-btn sm" data-nx-poolcancel>' + escHtml(nxT('nodes.poolCancel')) + '</button>'
+              + '</div>';
+          }
+          return '<div class="nx-poolRow"><span class="nx-poolDot"></span><span class="nx-poolUrl" title="' + escHtml(link) + '">' + escHtml(link) + '</span>'
+            + '<button type="button" class="nx-btn sm" data-nx-pooledit="' + escHtml(link) + '">' + escHtml(nxT('nodes.poolEdit')) + '</button>'
+            + '<button type="button" class="nx-btn sm danger" data-nx-poolremove="' + escHtml(link) + '">' + escHtml(nxT('nodes.poolRemove')) + '</button></div>';
+        }).join('') + '</div>';
+    root.innerHTML =
+      '<div class="nx-pool">'
+      + '<div class="nx-cardHead"><div class="nx-label" data-nx-i18n="nodes.pool">Node pool</div></div>'
+      + '<p class="nx-poolDesc">' + escHtml(nxT('nodes.poolDesc')) + '</p>'
+      + '<div class="nx-poolAdd"><input type="text" class="nx-inp" data-nx-poolurl placeholder="https://github.com/user/nodes.txt" spellcheck="false">'
+      + '<button type="button" class="nx-btn primary" data-nx-pooladd>＋ ' + escHtml(nxT('nodes.poolAdd')) + '</button>'
+      + '<button type="button" class="nx-btn" data-nx-poolfetch>⟳ ' + escHtml(nxT('nodes.poolFetch')) + '</button></div>'
+      + list
+      + '</div>';
+    const addInput = root.querySelector('[data-nx-poolurl]');
+    root.querySelector('[data-nx-pooladd]')?.addEventListener('click', () => {
+      const url = (addInput && addInput.value || '').trim();
+      if (!url || !B) return;
+      B.postToHost({ action: 'add_node_pool_link', url });
+      addInput.value = '';
+    });
+    if (addInput) addInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); root.querySelector('[data-nx-pooladd]')?.click(); }
+    });
+    root.querySelector('[data-nx-poolfetch]')?.addEventListener('click', () => {
+      if (B) B.postToHost({ action: 'fetch_node_pool' });
+    });
+    root.querySelectorAll('[data-nx-pooledit]').forEach(btn => {
+      btn.addEventListener('click', () => { _nxPoolEdit = btn.dataset.nxPooledit; nxRenderNodePool(); const inp = root.querySelector('[data-nx-pooleditval]'); if (inp) { inp.focus(); inp.select(); } });
+    });
+    root.querySelectorAll('[data-nx-poolremove]').forEach(btn => {
+      btn.addEventListener('click', () => { if (B) B.postToHost({ action: 'remove_node_pool_link', url: btn.dataset.nxPoolremove }); });
+    });
+    const editVal = root.querySelector('[data-nx-pooleditval]');
+    if (editVal) {
+      const finish = (save) => {
+        const newUrl = editVal.value.trim();
+        const oldUrl = _nxPoolEdit;
+        _nxPoolEdit = null;
+        if (save && newUrl && newUrl !== oldUrl && B) B.postToHost({ action: 'edit_node_pool_link', url: oldUrl, newUrl });
+        nxRenderNodePool();
+      };
+      root.querySelector('[data-nx-poolsave]')?.addEventListener('click', () => finish(true));
+      root.querySelector('[data-nx-poolcancel]')?.addEventListener('click', () => finish(false));
+      editVal.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        else if (e.key === 'Escape') finish(false);
+      });
+    }
+  }
+
   function nxRenderServers() {
     const root = nxRef('nxServers');
     if (!root) return;
     const S = nxState();
-    const nodes = S.nodes || [];
+    const nodes = nxSortedNodes(S.nodes || []);
     // When the host publishes the real node pool, surface it like the dashboard's
     // Nodes view does (favorites come along with the pushed node objects).
     const toolbar = S.useRealNodes && nodes.some(n => n && n.indexId)
       ? '<div class="nx-srvToolbar"><span class="nx-srvRealDot"></span> <b>' + escHtml(nxT('realNodes')) + '</b> <em>· ' + escHtml(nxT('realNodesDesc')) + '</em></div>'
       : '';
+    const sortRow = S.useRealNodes && nodes.some(n => n && n.indexId)
+      ? '<div class="nx-sortRow"><span class="nx-subLabel">' + escHtml(nxT('nodes.sortBy')) + '</span><select class="nx-settingSel nx-sortSel" data-nx-sort aria-label="Sort nodes">'
+        + [['default', 'nodes.sortDefault'], ['country', 'nodes.sortCountry'], ['fav', 'nodes.sortFav'], ['recent', 'nodes.sortRecent'], ['ping', 'nodes.sortPing'], ['pingDesc', 'nodes.sortPingDesc']]
+          .map(o => '<option value="' + o[0] + '"' + (o[0] === _nxSort ? ' selected' : '') + '>' + escHtml(nxT(o[1])) + '</option>').join('')
+        + '</select></div>'
+      : '';
     if (nodes.length === 0) {
-      root.innerHTML = toolbar + '<p class="nx-empty">' + escHtml(nxT('noServers')) + '</p>';
+      root.innerHTML = toolbar + sortRow + '<p class="nx-empty">' + escHtml(nxT('noServers')) + '</p>';
+      nxWireSort(root);
+      nxRenderNodePool();
       return;
     }
     const activeKey = nxActiveNodeKey(S);
-    root.innerHTML = toolbar + nodes.map(n => {
+    // Group the rows by country (ISO code → flag + localized name), like the
+    // main dashboard's Nodes view. Unknown/missing countries gather under one
+    // "Other" header; rows keep their data-nx-node/fav wiring untouched.
+    const groupOrder = [];
+    const grouped = new Map();
+    for (const n of nodes) {
+      const code = nxNodeCountryKey(n, S.useRealNodes);
+      if (!grouped.has(code)) { groupOrder.push(code); grouped.set(code, []); }
+      grouped.get(code).push(n);
+    }
+    const rowHtml = (n) => {
       const key = nxNodeKey(n, S.useRealNodes);
       const active = String(key) === String(activeKey);
       const fav = S.useRealNodes && n.fav === true;
@@ -832,13 +1052,18 @@
         ? '<button type="button" class="nx-fav' + (fav ? ' on' : '') + '" data-nx-fav="' + escHtml(String(key)) + '" title="' + escHtml(nxT('fav.title')) + '" aria-label="' + escHtml(nxT('fav.title')) + '">' + (fav ? '★' : '☆') + '</button>'
         : '';
       return '<div class="nx-srv' + (active ? ' active' : '') + '" data-nx-node="' + escHtml(String(key)) + '">'
-        + '<div class="nx-srvFlag">' + escHtml(nxNodeCode(n, S.useRealNodes)) + '</div>'
+        + nxNodeFlagMarkup(n, S.useRealNodes)
         + '<div><div class="nx-srvName">' + escHtml(nxNodeLabel(n, S.useRealNodes)) + (active ? ' <span class="nx-routeModePill inline">' + escHtml(nxT('srvActive')) + '</span>' : '') + '</div>'
         + '<span class="nx-srvMeta">' + escHtml(nxNodeMeta(n, S.useRealNodes)) + '</span></div>'
         + favBtn
         + '<div class="nx-srvPing">' + escHtml(nxNodeMs(n, S.useRealNodes)) + '</div>'
         + '</div>';
+    };
+    root.innerHTML = toolbar + sortRow + groupOrder.map(code => {
+      const list = grouped.get(code);
+      return nxServersGroupHead(code, list.length, S) + list.map(rowHtml).join('');
     }).join('');
+    nxWireSort(root);
     root.querySelectorAll('[data-nx-node]').forEach(card => {
       card.addEventListener('click', () => {
         nxSwitchNode(card.dataset.nxNode);
@@ -853,6 +1078,19 @@
         e.stopPropagation();
         if (B) B.postToHost({ action: 'toggle_node_fav', indexId: favBtn.dataset.nxFav });
       });
+    });
+    nxRenderNodePool();
+  }
+
+  // Sort select wiring (servers view): changing the order re-renders the list
+  // and persists the choice locally.
+  function nxWireSort(root) {
+    const sel = root.querySelector('[data-nx-sort]');
+    if (!sel) return;
+    sel.addEventListener('change', () => {
+      _nxSort = sel.value;
+      nxPersistSort();
+      nxRenderServers();
     });
   }
 
@@ -886,6 +1124,14 @@
         if (key === 'ArrowRight') return nxIsTunneled(currentAction) ? null : 'vpn';
         if (key === 'ArrowLeft') return nxIsTunneled(currentAction) ? 'direct' : null;
         return null;
+      };
+  const nxRouteCycle = (typeof AoGPNRouteKeys !== 'undefined' && AoGPNRouteKeys.routeCycle)
+    ? AoGPNRouteKeys.routeCycle
+    : function (action) {
+        const order = ['vpn', 'direct', 'block', 'warp'];
+        const cur = nxIsTunneled(action) ? 'vpn' : action;
+        const idx = order.indexOf(cur);
+        return order[(idx + 1) % order.length];
       };
 
   // Toggle one boost app's route (tunneled <-> direct) through the host. The
@@ -1088,7 +1334,7 @@
           ? ''
           : '<button type="button" class="nx-mvBtn' + (order && order.index <= 0 ? ' off' : '') + '" data-nx-move="up" data-nx-etype="' + escHtml(item.entryType || 'app') + '" data-nx-value="' + escHtml(processName) + '" title="Move up" aria-label="Move up">↑</button>'
             + '<button type="button" class="nx-mvBtn' + (order && order.index >= order.total - 1 ? ' off' : '') + '" data-nx-move="down" data-nx-etype="' + escHtml(item.entryType || 'app') + '" data-nx-value="' + escHtml(processName) + '" title="Move down" aria-label="Move down">↓</button>')
-      + '<button type="button" class="nx-rmBtn" data-nx-rm="' + escHtml(processName) + '" title="' + escHtml(nxT('boost.remove')) + '">✕</button>'
+      + '<button type="button" class="nx-rmBtn" data-nx-rm="' + escHtml(processName) + '" data-nx-rm-etype="' + escHtml(item.entryType || 'app') + '" data-nx-rm-value="' + escHtml(processName) + '" title="' + escHtml(nxT('boost.remove')) + '">✕</button>'
       + '</div>'
       + '</div>';
   }
@@ -1127,19 +1373,19 @@
       + '<button type="button" class="nx-btn" data-nx-boost="apps">▣ <span>' + escHtml(nxT('boost.runningApps')) + '</span></button>'
       + '<button type="button" class="nx-btn primary" data-nx-boost="addexe">' + escHtml(nxT('boost.addExe')) + '</button>'
       + '<button type="button" class="nx-btn" data-nx-bszapi>⚡ <span>BSG API → WARP</span></button>'
-      + '<button type="button" class="nx-btn' + (_nxBoostDomainOpen ? ' active' : '') + '" data-nx-adddomain>＋ <span>Domain</span></button>'
+      + '<button type="button" class="nx-btn' + (_nxBoostDomainOpen ? ' active' : '') + '" data-nx-adddomain>＋ <span>' + escHtml(nxT('boost.addDomain').replace(/^＋\s*/, '')) + '</span></button>'
       + '</div>'
       + picker
       + (_nxBoostDomainOpen
           ? '<div class="nx-domainRow">'
-            + '<input type="text" class="nx-inp nx-domainValue" data-nx-domainvalue placeholder="example.com or 1.2.3.4 (optional :port)" value="' + escHtml(_nxBoostDomainDraft) + '" spellcheck="false">'
-            + '<select class="nx-inp nx-domainSel" data-nx-domainaction aria-label="Domain route">'
+            + '<input type="text" class="nx-inp nx-domainValue" data-nx-domainvalue placeholder="' + escHtml(nxT('boost.domainPlaceholder')) + '" value="' + escHtml(_nxBoostDomainDraft) + '" spellcheck="false">'
+            + '<select class="nx-inp nx-domainSel" data-nx-domainaction aria-label="' + escHtml(nxT('boost.domainRouteAria')) + '">'
             + '<option value="vpn" selected>' + escHtml(nxT('route.vpn')) + '</option>'
             + '<option value="direct">' + escHtml(nxT('route.direct')) + '</option>'
             + '<option value="block">' + escHtml(nxT('route.block')) + '</option>'
             + '<option value="warp">' + escHtml(nxT('route.warp')) + '</option>'
             + '</select>'
-            + '<button type="button" class="nx-btn primary" data-nx-domainsubmit>Add rule</button>'
+            + '<button type="button" class="nx-btn primary" data-nx-domainsubmit>' + escHtml(nxT('boost.addRule')) + '</button>'
             + '</div>'
           : '')
       + '<div class="nx-modeRow">'
@@ -1265,9 +1511,15 @@
       btn.addEventListener('click', () => {
         const processName = btn.dataset.nxRm;
         if (!processName) return;
+        const entryType = btn.dataset.nxRmEtype || 'app';
         let ok = true;
         if (typeof confirm === 'function') { try { ok = confirm('Remove "' + processName + '" from the routing list?'); } catch (e) { /* jsdom */ } }
-        if (ok && B) B.postToHost({ action: 'remove_app', processName });
+        if (!ok || !B) return;
+        if (entryType === 'app') {
+          B.postToHost({ action: 'remove_app', processName });
+        } else {
+          B.postToHost({ action: 'remove_route', entryType, value: processName });
+        }
       });
     });
     root.querySelectorAll('[data-nx-move]').forEach(btn => {
@@ -1875,6 +2127,138 @@
       + '</div>';
   }
 
+  // ---------- Connection Monitor (Perf parity) ----------
+  // Live per-connection table fed by the same monitorSnapshot the dashboard's
+  // Performance → Connection Monitor renders: filter, "hide listeners" and
+  // group-by (route/protocol/state/country/application) with collapsible
+  // headers, plus connection/application counters. Preferences persist locally.
+  let _nxMonFilter = '';
+  let _nxMonGroup = 'none';
+  let _nxMonHideListeners = true;
+  const _nxMonCollapsed = new Set();
+  try {
+    const saved = JSON.parse(localStorage.getItem('aogpn.nexusMonitor.v1') || '{}');
+    if (['none', 'route', 'protocol', 'state', 'country', 'app'].includes(saved.group)) _nxMonGroup = saved.group;
+    if (typeof saved.hideListeners === 'boolean') _nxMonHideListeners = saved.hideListeners;
+  } catch (e) { /* no localStorage */ }
+  function _nxMonPersist() {
+    try { localStorage.setItem('aogpn.nexusMonitor.v1', JSON.stringify({ group: _nxMonGroup, hideListeners: _nxMonHideListeners })); } catch (e) { /* ignore */ }
+  }
+
+  const NX_MON_GROUP_KEYS = [
+    ['none', 'monitor.view.groupNone'], ['route', 'monitor.view.groupRoute'], ['protocol', 'monitor.view.groupProtocol'],
+    ['state', 'monitor.view.groupState'], ['country', 'monitor.view.groupCountry'], ['app', 'monitor.view.groupApp']
+  ];
+
+  function _nxMonRow(item, hidden) {
+    const S = nxState();
+    const country = [item.countryText, item.asnText].filter(Boolean).join(' · ') || '—';
+    const pname = item.processName || '';
+    const display = item.displayName || pname || 'Unknown';
+    const route = item.routeTag || '';
+    const label = item.routeText || (S.routeLabels && S.routeLabels[route]) || route || '—';
+    const cls = ['proxy', 'direct', 'block', 'warp'].includes(route) ? route : 'unknown';
+    const opts = [['', nxT('route.assign')], ['vpn', nxT('route.vpn')], ['direct', nxT('route.direct')], ['block', nxT('route.block')], ['warp', nxT('route.warp')]]
+      .map(o => '<option value="' + o[0] + '"' + (o[0] === (item.action || '') ? ' selected' : '') + '>' + escHtml(o[1]) + '</option>').join('');
+    return '<div class="nx-mrow' + (hidden ? ' hidden' : '') + '" data-app-group="' + escHtml(display) + '">'
+      + '<div class="nx-mcol prog"><div class="nx-progCell">' + nxAppIcon(item.exePath, display) + '<div class="nx-progTxt"><b>' + escHtml(display) + '</b><span>' + escHtml(pname) + (item.pid ? ' · PID ' + escHtml(String(item.pid)) : '') + '</span></div></div></div>'
+      + '<div class="nx-mcol"><span class="nx-routeBadge ' + cls + '">' + escHtml(label) + '</span></div>'
+      + '<div class="nx-mcol">' + escHtml(item.protocol || '—') + '</div>'
+      + '<div class="nx-mcol addr" title="' + escHtml(item.remoteAddress || '') + '">' + escHtml(item.remoteAddress || '—') + '</div>'
+      + '<div class="nx-mcol addr" title="' + escHtml(country) + '">' + escHtml(country) + '</div>'
+      + '<div class="nx-mcol">' + escHtml(item.state || '—') + '</div>'
+      + '<div class="nx-mcol"><select class="nx-routeSel" data-nx-monroute="' + escHtml(pname) + '" data-nx-mondisplay="' + escHtml(display) + '">' + opts + '</select></div>'
+      + '</div>';
+  }
+
+  function _nxMonGroupHead(name, count) {
+    const collapsed = _nxMonCollapsed.has(name);
+    return '<div class="nx-mgroup" data-nx-mongroup="' + escHtml(name) + '" role="button" tabindex="0" aria-expanded="' + !collapsed + '"><span class="nx-mchev">' + (collapsed ? '▸' : '▾') + '</span><b>' + escHtml(name) + '</b><em>' + count + '</em></div>';
+  }
+
+  function nxRenderMonitor() {
+    const root = nxRef('nxMonitor');
+    if (!root) return;
+    // Don't clobber the filter while the user is typing.
+    const filterEl = root.querySelector('[data-nx-monfilter]');
+    if (filterEl && root.contains(document.activeElement)) return;
+    const S = nxState();
+    const snap = S.monitorSnapshot || {};
+    const conns = snap.connections || [];
+    const filter = _nxMonFilter.trim().toLowerCase();
+    const rows = conns.filter(item => {
+      if (_nxMonHideListeners && item.protocol === 'TCP' && item.state === 'Listen') return false;
+      if (!filter) return true;
+      const hay = [item.displayName, item.processName, item.remoteAddress, item.countryText, item.asnText, item.protocol, item.state]
+        .filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(filter);
+    });
+    const appsCount = (snap.apps || []).length;
+    const liveBadge = S.connected
+      ? '<span class="nx-liveBadge">● ' + escHtml(nxT('hint.live')) + '</span>'
+      : '<span class="nx-liveBadge off">○ ' + escHtml(nxT('hint.idle')) + '</span>';
+    const groupOpts = NX_MON_GROUP_KEYS.map(o => '<option value="' + o[0] + '"' + (o[0] === _nxMonGroup ? ' selected' : '') + '>' + escHtml(nxT(o[1])) + '</option>').join('');
+    let body;
+    if (rows.length === 0) {
+      body = '<p class="nx-empty center">' + escHtml(nxT('monitor.view.empty')) + '</p>';
+    } else if (_nxMonGroup === 'none') {
+      body = rows.map(it => _nxMonRow(it, false)).join('');
+    } else {
+      const keyOf = (it) => {
+        if (_nxMonGroup === 'route') return it.routeText || it.routeTag || '—';
+        if (_nxMonGroup === 'protocol') return it.protocol || '—';
+        if (_nxMonGroup === 'state') return it.state || '—';
+        if (_nxMonGroup === 'country') return [it.countryText, it.asnText].filter(Boolean).join(' · ') || '—';
+        return it.displayName || it.processName || 'Unknown';
+      };
+      const order = [];
+      const grouped = new Map();
+      for (const it of rows) {
+        const k = keyOf(it);
+        if (!grouped.has(k)) { order.push(k); grouped.set(k, []); }
+        grouped.get(k).push(it);
+      }
+      body = order.map(k => {
+        const list = grouped.get(k);
+        const collapsed = _nxMonCollapsed.has(k);
+        return _nxMonGroupHead(k, list.length) + list.map(it => _nxMonRow(it, collapsed)).join('');
+      }).join('');
+    }
+    root.innerHTML =
+      '<div class="nx-cardHead"><div class="nx-label">' + escHtml(nxT('monitor.title')) + '</div>' + liveBadge + '</div>'
+      + '<div class="nx-monStats">'
+      + '<div class="nx-monStat"><b>' + rows.length + '</b><span>' + escHtml(nxT('monitor.connections')) + '</span></div>'
+      + '<div class="nx-monStat"><b>' + appsCount + '</b><span>' + escHtml(nxT('monitor.apps')) + '</span></div>'
+      + '</div>'
+      + '<div class="nx-monTools">'
+      + '<input type="search" class="nx-inp" data-nx-monfilter placeholder="' + escHtml(nxT('monitor.filter')) + '" value="' + escHtml(_nxMonFilter) + '">'
+      + '<label class="nx-monHide"><input type="checkbox" data-nx-monhide' + (_nxMonHideListeners ? ' checked' : '') + '> <span>' + escHtml(nxT('monitor.hideListeners')) + '</span></label>'
+      + '<select class="nx-settingSel nx-monGroup" data-nx-mongroup-sel aria-label="Group by">' + groupOpts + '</select>'
+      + '</div>'
+      + (rows.length ? '<div class="nx-mhead"><span>' + escHtml(nxT('boost.colProgram')) + '</span><span>' + escHtml(nxT('boost.colRoute')) + '</span><span>PROTOCOL</span><span>ADDRESS</span><span>COUNTRY</span><span>STATE</span><span>' + escHtml(nxT('route.assign')) + '</span></div>' + body : body);
+    const f = root.querySelector('[data-nx-monfilter]');
+    if (f) f.addEventListener('input', () => { _nxMonFilter = f.value; nxRenderMonitor(); });
+    const hide = root.querySelector('[data-nx-monhide]');
+    if (hide) hide.addEventListener('change', () => { _nxMonHideListeners = hide.checked; _nxMonPersist(); nxRenderMonitor(); });
+    const gsel = root.querySelector('[data-nx-mongroup-sel]');
+    if (gsel) gsel.addEventListener('change', () => { _nxMonGroup = gsel.value; _nxMonPersist(); nxRenderMonitor(); });
+    root.querySelectorAll('[data-nx-mongroup]').forEach(h => {
+      const toggle = () => {
+        const name = h.dataset.nxMongroup;
+        if (_nxMonCollapsed.has(name)) _nxMonCollapsed.delete(name); else _nxMonCollapsed.add(name);
+        nxRenderMonitor();
+      };
+      h.addEventListener('click', toggle);
+      h.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    });
+    root.querySelectorAll('[data-nx-monroute]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        if (!sel.value) return;
+        if (B) B.postToHost({ action: 'set_app_route', processName: sel.dataset.nxMonroute, displayName: sel.dataset.nxMondisplay, route: sel.value });
+      });
+    });
+  }
+
   // ---------- settings sub-view ----------
   // Option labels are translated through nxT() so the settings panel follows
   // the app language; the language list itself comes from the bridge (the same
@@ -2259,9 +2643,63 @@
     }).join('');
   }
 
+  // ---- undo toast (Boost parity) ----
+  // The host pushes setUndoAvailable({ kind, processName, displayName }) after
+  // every app mutation; the toast shows the action with a real Undo button that
+  // posts undo_last_app_op — the same single-level slot the main dashboard uses.
+  let _nxUndoShowing = false;
+  let _nxUndoSignature = '';
+  let _nxUndoTimer = null;
+
   function nxToastMsg(msg) {
     const el = nxRef('nxToast');
-    if (el) { el.textContent = msg; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 1800); }
+    if (el) {
+      _nxUndoShowing = false;
+      el.innerHTML = '<span>' + escHtml(msg) + '</span>';
+      el.classList.add('show');
+      if (_nxUndoTimer) clearTimeout(_nxUndoTimer);
+      _nxUndoTimer = setTimeout(() => el.classList.remove('show'), 1800);
+    }
+  }
+
+  function nxSyncUndoToast() {
+    const el = nxRef('nxToast');
+    if (!el) return;
+    const slot = nxState().undoAvailable;
+    if (!slot || typeof slot !== 'object' || !slot.kind) return;
+    const sig = slot.kind + '|' + (slot.displayName || slot.processName || '');
+    // Already on screen — the 2 s sync must not re-render (and reset) it.
+    if (_nxUndoShowing && sig === _nxUndoSignature) return;
+    const name = slot.displayName || slot.processName || '';
+    const text = slot.kind === 'remove' ? nxT('undo.remove', { name })
+      : slot.kind === 'route' ? nxT('undo.route', { name })
+      : slot.kind === 'add' ? nxT('undo.add', { name })
+      : name;
+    el.innerHTML = '<span class="nx-toastTxt">' + escHtml(text) + '</span>'
+      + '<button type="button" class="nx-toastBtn" data-nx-undo>' + escHtml(nxT('undo.action')) + '</button>'
+      + '<button type="button" class="nx-toastBtn x" data-nx-undox aria-label="' + escHtml(nxT('undo.dismiss')) + '" title="' + escHtml(nxT('undo.dismiss')) + '">✕</button>';
+    el.classList.add('show');
+    _nxUndoShowing = true;
+    _nxUndoSignature = sig;
+    if (_nxUndoTimer) clearTimeout(_nxUndoTimer);
+    _nxUndoTimer = setTimeout(() => {
+      el.classList.remove('show');
+      _nxUndoShowing = false;
+      _nxUndoSignature = '';
+    }, 10000);
+    const undoBtn = el.querySelector('[data-nx-undo]');
+    if (undoBtn) undoBtn.addEventListener('click', () => {
+      if (B) B.postToHost({ action: 'undo_last_app_op' });
+      el.classList.remove('show');
+      _nxUndoShowing = false;
+      _nxUndoSignature = '';
+    });
+    const xBtn = el.querySelector('[data-nx-undox]');
+    if (xBtn) xBtn.addEventListener('click', () => {
+      el.classList.remove('show');
+      _nxUndoShowing = false;
+      _nxUndoSignature = '';
+    });
   }
 
   // ---------- live refresh (host pushes + safety poll) ----------
@@ -2309,14 +2747,71 @@
     if (_nxView === 'route') nxRenderRoute();
     if (_nxView === 'gpnsrv') nxRenderGpnServers();
     if (_nxView === 'games') nxRenderGameProfiles();
-    if (_nxView === 'analytics') nxRenderAnalytics();
+    if (_nxView === 'analytics') { nxRenderAnalytics(); nxRenderMonitor(); }
     if (_nxView === 'settings') nxRenderSettings();
     if (_nxView === 'about') nxRenderAbout();
+    nxSyncUndoToast();
   }
 
   // ---------- boot ----------
+  // ---- global keyboard shortcuts (shared across all skins) ----
+  //   Ctrl+Enter -> connect / disconnect (same toggle as the GPN Connect)
+  //   Alt+1..8   -> switch views (dashboard/route/servers/gpn/games/analytics/
+  //                 settings/about — matches the sidebar order)
+  //   R          -> cycle the focused app's route (vpn/direct/block/warp)
+  // The exact same set exists in CYBER and INFRA (Alt+1..5 for their tabs).
+  const NX_VIEW_KEYS = ['dashboard', 'route', 'servers', 'gpnsrv', 'games', 'analytics', 'settings', 'about'];
+  let _nxShortcutsBound = false;
+
+  // Cycle one app's route through the host — same local-override model as the
+  // game-switch keydown handler (override + post + toast + full sync).
+  function nxCycleRoute(pname) {
+    const S = nxState();
+    const app = (S.monitorSnapshot.apps || []).find(a => (a.processName || a.value) === pname);
+    const cur = nxActionFor(app || { processName: pname });
+    const next = nxRouteCycle(cur);
+    if (next === cur) return;
+    _nxLocalRoutes[pname] = next;
+    _nxLocalRouteTs[pname] = Date.now();
+    const displayName = app ? (app.displayName || pname) : pname;
+    if (B) B.postToHost({ action: 'set_app_route', processName: pname, displayName, route: next });
+    nxToastMsg('ROUTE ' + next.toUpperCase() + ' · ' + displayName.toUpperCase());
+    nxSyncAll();
+  }
+
+  function nxBindShortcuts() {
+    if (_nxShortcutsBound) return;
+    _nxShortcutsBound = true;
+    document.addEventListener('keydown', (e) => {
+      // Connect / disconnect — safe in every context, including inputs.
+      if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'Enter' || e.key === 'NumpadEnter')) {
+        e.preventDefault();
+        nxToggleConnect();
+        return;
+      }
+      const typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
+      // View switching.
+      if (e.altKey && !e.ctrlKey && !e.metaKey && !typing && /^[1-8]$/.test(e.key)) {
+        e.preventDefault();
+        nxGo(NX_VIEW_KEYS[Number(e.key) - 1]);
+        return;
+      }
+      // Route cycle on the focused app switch / row (games view and dashboard cards).
+      if (!typing && !e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'r' || e.key === 'R')) {
+        const el = document.activeElement && document.activeElement.closest
+          ? document.activeElement.closest('[data-nx-pname]')
+          : null;
+        if (el && el.dataset && el.dataset.nxPname) {
+          e.preventDefault();
+          nxCycleRoute(el.dataset.nxPname);
+        }
+      }
+    });
+  }
+
   function boot() {
     wireNexusSkin();
+    nxBindShortcuts();
     nxApplyStaticTexts();
     nxGo('dashboard');
     if (NX_PREVIEW) {

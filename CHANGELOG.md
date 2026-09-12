@@ -13,10 +13,19 @@ All notable changes to AoGPN will be documented in this file.
 ## [1.1.1] — 2026-09-08 — WARP degrade-egress, capture-gap hardening, launcher bypass editor, shell declutter, hidden-boot crash fix
 
 > Development notes for this session (11 commits: `d3cdeb5` … `ad32ec3`, plus
-> the uncommitted working tree). Assembly/update-check version bumped to
-> `1.1.1` in `Directory.Build.props` — the release tag must be `1.1.1`.
+> the uncommitted working tree). Assembly/update-check version is no longer set
+> by hand: `Directory.Build.props` derives it from the git tag
+> (`v1.1.1` here, or `-p:Version=…` on the release pipeline), so this heading
+> and the release tag are the only places the number lives.
 
 ### Added
+- **CYBER skin header LANGUAGE selector (uncommitted working tree)**: the
+  SETTINGS-panel language select stays, and a second select now sits in the
+  header next to the theme buttons (same INFRA-header pattern) so language
+  switching is visible on every CYBER view without opening SETTINGS. Both
+  selects share one handler and switch the whole app through the same
+  skinBridge.setLanguage channel as the top-bar picker (verified live: picking
+  Türkçe from the header re-renders the skin instantly).
 - **Per-app WARP node picker (Settings → GPN removed)** — the Settings → GPN tab
   (VLESS bypass textarea + launcher-bypass domain editor) is gone. Each app's
   WARP route now renders a node picker right next to it: pick any node from the
@@ -61,6 +70,189 @@ All notable changes to AoGPN will be documented in this file.
   `VlessBypassNodeJson` (dual connection).
 
 ### Fixed
+- **Günlük gürültüsü — süreç görüntü yolu artık en az yetkiyle çözülüyor
+  (uncommitted working tree)**: VS'nin "ilk şans istisnası" günlüğündeki iki
+  baskın aile — `Win32Exception: Erişim engellendi.` ve `Win32Exception: Unable to
+  enumerate the process modules.` — aynı API'den geliyordu:
+  `System.Diagnostics.Process.MainModule`, ki `PROCESS_QUERY_INFORMATION |
+  PROCESS_VM_READ` ister ve TAM modül numaralandırması yapar; yükseltilmemiş bir
+  süreçten korumalı süreçlere yapılan her çağrı istisna atar ve VS bunu çağıran
+  yakalasa bile yazar. Ölçüm (canlı 447 süreç): tek bir tam numaralandırma **220
+  istisna atışı** üretiyordu. Artık yol `ProcessPathResolver` üzerinden — önce
+  `PROCESS_QUERY_LIMITED_INFORMATION` + `QueryFullProcessImageName`; limited sorgu
+  "erişim engellendi" derse (`ERROR_ACCESS_DENIED`) MainModule **hiç denenmiyor**
+  (erişim denetimi istenen haklarda monotondur: limited'ı reddeden MainModule'ü
+  de reddeder, denemek yalnızca maliyet + istisna üretir). Aynı ölçümde yeni yol
+  **0 istisna** atıyor ve **daha çok** süreç çözüyor (MainModule 219 / limited
+  259; MainModule'ün reddettiği 40 süreç — devenv, audiodg, anti-cheat korumalı
+  oyunlar — kurtuluyor). `pid <= 0` ("System Idle Process") artık hiç
+  dokunulmadan atlanıyor; "Unable to enumerate…" ailesinin kaynağı buydu. Üç çağrı
+  yeri düzeltildi: süreç listesi kaynağı, bağlantı izleyicisinin PID→uygulama
+  çözümü (netstat satırlarında pid 0 gelir) ve çekirdek süreç temizleyicisi.
+  Kural `ProcessPathResolverTests` ile kilitlendi (15 test).
+- **Bağlantı kararlılığı — tek komut kapısı + deterministik kesme/mod geçişi
+  (uncommitted working tree, ikinci tur)**: önceki turun ardından canlı
+  gözlenen dört kararsızlık daha kapatıldı. (1) **Tıklamalar asla düşmüyor** —
+  yalnızca `ToggleConnectionAsync`'in kuyrukladığı bağlan/kes/mod değişimi
+  komutları artık TEK `ConnectionCommandGate`'ten geçiyor (`gpn_connect`,
+  `set_connection_mode`, `set_split_mode`, `set_transport`, tepsi toggle dahil);
+  kapı meşgulken en yeni niyet saklanıp kapı boşalınca tam bir kez, UI
+  thread'de işleniyor (Task.Run ile yeniden dağıtım WebView2/ViewModel
+  erişimini pool thread'den yapıp COMException ile tıklamayı sessizce
+  düşürüyordu — "tıkladım ama cevap vermiyor"). (2) **Deterministik kesme** —
+  kesme tıklamasında önce "bağlı değil" anında yayınlanıyor (buton hemen
+  tepki verir), `_connectionStarting` geçiş bayrağı teardown BOYUNCA set
+  kalıyor ve 2 sn'lik supervisor çekirdek hâlâ kapanırken "bağlı" yeniden
+  yayınlayamıyor — BAĞLANDI→Bağlan→BAĞLANDI titremesi ve aradaki tıklamaların
+  YENİDEN BAĞLANMA tetiklemesi bitti. (3) **Geçiş ortasında "koptu" yayını
+  yok** — `OnGpnConnectionSnapshotAsync` koordinatör Disconnected'ını geçiş
+  sürerken yayınlamıyor (GPN→VPN geçişinde bağlandı→koptu→bağlandı titremesi),
+  GPN toggle-kesme beklemesi koordinatör durumundan erken dönüyor. (4)
+  **Mod geçişleri tek deterministik yoldan** — `SplitTunnelViewModel.ApplyAsync`
+  mod DEĞİŞTİĞİNDE (`_appliedMode`) kesintisiz soft-routing'i bilerek atlayıp
+  reload zorluyor: GPN↔VPN geçişi çekirdeği istenen modla yeniden üretiyor,
+  GPN'den çıkışta koordinatör Reload akışında yığılıyor (eski yol canlı
+  superset varken modu reload'suz değiştirip GPN markasını/koordinatörünü
+  canlı bırakıyordu — "bazen geçiyor bazen geçmiyor" + "sürekli GPN'e geri
+  dönüyor"). (5) **Oyun otomatik-tetikleyicisi kullanıcı kararına sadık** —
+  `SetModeSilently` artık `_settingModeProgrammatically` set etmiyor; kullanıcı
+  kaynaklı her mod değişimi tetikleyiciyi iptal ediyor (3 sn'lik tarama
+  döngüsü VPN seçimini GPN'e geri dayatamıyor). Renderer tarafında da geçiş
+  (transition) sırasında gelen bayat mod/split yankıları (`setConnectionState`,
+  monitor snapshot) kullanıcının yeni seçtiği hapı ezmiyor — `transitioning`
+  bayrağı eklendi, JS entegrasyon testleriyle kilitlendi.
+- **Bağlantı bölümü kararlılığı (uncommitted working tree)**: dört canlı
+  kararsızlık türü kapatıldı. (1) **Bağlan/Kes butonu sessizce düşmüyor** —
+  `ToggleConnectionAsync` kapısı (`_connectionToggleGate`) meşgulken tıklamayı
+  artık yok saymıyor; en yeni niyeti (`_pendingToggleMode/_pendingToggleTransport`)
+  sıraya alıp kapı boşalınca tam bir kez yeniden dağıtıyor (ardışık tıklamalar
+  birleştirilir, son karar kazanır). (2) **Bağlantı kurulurken ikinci tık = iptal**
+  — süregiden bağlanma akışında gelen yeni toggle ikinci bir bağlanma sıralamak
+  yerine denemeyi iptal edip temiz kesme uyguluyor (üst üste ConnectAsync
+  yarışı, "tıkladım ama olmuyor" hissi). (3) **Modu önce kalıcılaştır** —
+  `PersistConnectionModeAsync` kullanıcının GPN/VPN/Off kararını uygulamadan
+  ÖNCE config'e yazıp yayınlıyor; ApplyCmd doğrulama/izin kapısında düşse bile
+  kalıcı mod bayat "GPN" olarak geri dönmüyor (2 sn'lik poll'un eski mod
+  echoları "sürekli GPN'e geri dönüyor" algısını besliyordu). Kesme kararı da
+  yalnızca çekirdek sağlığına değil, koordinatör anlık görüntüsü + yayınlanan
+  duruma bakıyor (`ReadEffectiveConnectionState`). (4) **Çift auto-apply
+  yarışı kaldırıldı** — `ApplyConnectionModeAsync` modu doğrudan `Mode =`
+  yerine `SetModeSilently` ile eşitliyor; doğrudan atama +800ms debounce'lu
+  İKİNCİ bir auto-apply planlayıp az önce kurulan tüneli yıkan fazladan bir
+  `ReloadRequested` yayınlıyordu (VPN→GPN "bazen geçiyor bazen geçmiyor"un
+  kaynağı). `SetConnectionModeAsync` geçişi çekirdek oturana dek "bağlanıyor"da
+  tutup `WaitForCoreLeavingStartingAsync` + `TryPushConnectionFailureAsync` ile
+  sonuçlandırıyor (başarısızlık sessiz kalmıyor, hata kartı geliyor).
+- **İleri Düzey Gaming DNS + bağlantı-öncesi Wintun süpürmesi (uncommitted
+  working tree)**: GPN mihomo YAML'i artık oyun istemcisi (LoL Client)
+  gecikmelerinin dört kaynağını birden kapatıyor. (1) **Sniffing** — `sniffing:
+  {enable, override-destination}` bloğu (sing-box dest_override http/tls
+  karşılığı): bağlantı hedefi ilk paketten çözülür, domain kuralları
+  gecikmesiz eşleşir; kullanıcının Ayarlar → Core "Sniffing enabled" seçimi
+  `config.Inbound` üzerinden bağlanır. (2) **İki yönlü DNS** — oyun/tünel
+  trafiği uzak DNS'ten (saf IP nameserver'lar tcp://'ye çevrilir — UDP parça
+  kaybı/MTU 1280 parçalanması yok), tünel dışı yerel ağ alan adları
+  (`+.local`, `+.lan`, localhost) `nameserver-policy → system` + `fake-ip-filter`
+  ile sistem çözümleyicisinden. (3) **IPv6 kara deliği** — AAAA yanıtları
+  `dns.ipv6: false` ile filtrelenir (istemci anında IPv4'e düşer, zaman aşımı
+  biter) ve kural listesinin EN BAŞINA `IP-CIDR6,::/0,REJECT,no-resolve`
+  yazılır: TUN'a ulaşan her IPv6 hedefi anında ret alır. (4) **Bağlantı-öncesi
+  süpürme** — `GpnCoreLauncher.LaunchAsync` (WireGuardUDP) çekirdeği
+  başlatmadan ÖNCE `WintunOrphanSweeper.SweepOrphanedAsync` ile sahipsiz
+  Wintun adaptörlerini temizler (koordinatörün Stop→Launch sırası canlı
+  adaptör riskini sıfırlar); DiagLog'a `GPN_LAUNCH pre-start wintun sweep`
+  satırı düşer. Yeni testler: sniffing bloğu açık/kapalı, tcp nameserver
+  çevrimi (şema'lı girdiler korunur), nameserver-policy/fake-ip-filter,
+  blackhole'un ilk kural olması (legacy + superset).
+- **Hayalet Wintun adaptörleri — kapanış kancaları ve sabit ad (uncommitted
+  working tree)**: startup süpürmesi (`WintunOrphanSweeper`) fire-and-forget
+  `Task.Run` ile ateşleniyordu — çekirdekle yarışabiliyordu (bu örnek kendi
+  adaptörünü açarken süpürme aynı adlı CANLI adaptörü silebilirdi) ve
+  "Xray motoru başlatılmadan önce" garantisi yoktu. Artık `App.OnStartup`
+  süpürmeyi çekirdek başlamadan ÖNCE bekleyerek çalıştırıyor. Kapanışta
+  hiçbir temizlik yoktu: `ExitApplicationSafelyAsync` çekirdek durduktan
+  sonra son bir süpürme turu koşturuyor (teardown'ı yarım kalan mihomo/native
+  adaptörleri anında temizlenir); `AppDomain.ProcessExit` kancası, düzenli
+  kancalar çalışmadan süreç biterse senkron best-effort süpürme deniyor —
+  koruma olarak çekirdek hâlâ çalışıyorsa süpürme atlanır (canlı adaptör asla
+  silinmez; bir sonraki açılış yakalar). WPF konsol uygulaması olmadığından
+  `Console.CancelKeyPress` yolu yoktur; oturum kapanışı zaten
+  `Current_SessionEnding`'de ele alınıyor. Sabit adlandırma: mihomo TUN
+  cihaz adı artık kullanıcının Wintun ad ön ekine (`GpnWintunItem.AdapterName`
+  — Ayarlar → GPN → Wintun kartı) bağlı — `CoreConfigHandler.ResolveTunDevice`
+  sanitleştirip hem GPN hem Global VPN YAML'ine (`tun.device`) işliyor; boşsa
+  sabit `AoGPN`. Böylece Windows her oturumda rastgele "Yerel Ağ Bağlantısı N"
+  üretmek yerine aynı adı kullanır ve süpürücünün sahiplik ön ekleri aynı adı
+  yakalayarak birikimi temizler. Yeni testler: `ResolveTunDevice` kuralları ve
+  `tun.device`'ın YAML'e gerçekten işlenmesi.
+- **MTU ayarı gerçekten uygulanmıyordu (uncommitted working tree)**: GPN ve
+  Global VPN yollarında mihomo YAML'ine kullanıcının `TunModeItem.Mtu` değeri
+  hiç işlenmiyordu — TUN bloğu sunucu profilinden türetiliyor, Global VPN
+  yolu her zaman 1360 kullanıyordu; `GpnCoreLauncher` ise oturum içinde
+  kayıtlı ayarı ezip 1360'a çekiyordu (düşük kullanıcı değeri yok sayılıyordu).
+  Artık `CoreConfigHandler.ResolveGpnMtu` kayıtlı ayarı yol sınırına (1360)
+  kırparak iki üreticinin `GpnMihomoOptions.Mtu`'suna işliyor: GPN yolunda TUN
+  bloğu `ResolveTunMtu` (kullanıcı değeri), WG outbound'ları `ResolveMtu`
+  (kullanıcı × sunucu MTU'sunun en korumacısı = küçüğü) kullanıyor; Global VPN
+  kullanıcı değerini olduğu gibi uyguluyor. `GpnCoreLauncher` kalıcı ayara
+  dokunmuyor (yalnızca GPN_MTU teşhis satırı) ve bağlantı sonrası mihomo TUN
+  adaptörünün GERÇEK MTU'sunu okuyup beklenenle karşılaştıran bir doğrulayıcı
+  (`GPN_MTU verify … OK/MISMATCH`) çalıştırıyor — diyagnoz beslemesinden ayarın
+  uygulandığı doğrulanabilir. Yeni testler: kullanıcı MTU'sunun YAML'e işlenmesi,
+  sınır kırpması, sunucu önceliği ve `ResolveGpnMtu` kuralları.
+- **Bağlantı kesme hemen gerçekleşmiyordu (uncommitted working tree)**: GPN
+  superset oturumu canlıyken "Bağlantıyı Kes" (ModeOff) yumuşak uygulayıcı
+  tarafından uygulanıyor (trafik DIRECT'e dönüyor) ama Wintun/TUN adaptörü,
+  failover izleyicisi ve superset oturum yerinde kalıyordu — arayüz "kesildi"
+  derken tünel gizlice ayakta kalıyor, sonraki bağlantılar port/TUN çakışması
+  yaşıyordu. `ApplyConnectionModeAsync` ModeOff'ta artık
+  `StopGpnTunnelIfActiveAsync` ile koordinatörü gerçekten teardown ediyor.
+- **Uygulama kapanışı kararsızdı (uncommitted working tree)**: hiçbir çıkış
+  yolunda (tray çıkışı, pencere kapatma, oturum kapanışı, reboot-as-admin)
+  GPN koordinatörü durdurulmuyordu — failover izleyici görevi, yakalama
+  köprüsü ve superset oturum kaydı arka planda kalıyor, OnExit asılı kalabiliyordu.
+  `ExitApplicationSafelyAsync` ve `Current_SessionEnding` artık çekirdek
+  durdurulmadan önce koordinatörü bekleyerek kapatıyor; `MainWindow_Closed`
+  son çare olarak best-effort teardown ateşliyor. Yeni testler: bağlı/bağlanıyor
+  durumda teardown, kopuk/null koordinatörde no-op.
+- **GPN/VPN seçimi kararsızdı ve VPN bağlanamıyordu (uncommitted working tree)**:
+  `MainWindowViewModel.Reload` GPN akışını KULLANICININ SEÇİMİ yerine seçili
+  profilin türüne göre karar veriyordu — seçili profil WireGuard ise VPN modu
+  sessizce GPN (WireGuard aday ölçümü + failover) akışına dönüşüyor, GPN akışı
+  hata verirse `TryRunGpnConnectAsync` normal akışı da bastırarak bağlantının
+  hiç kurulamamasına yol açıyordu ("VPN seçiminde bağlantı kurulamıyor").
+  Karar artık `ShouldRunGpnFlow` ile kalıcı moddan (Manuel = GPN, Vpn = VPN)
+  türetiliyor: VPN seçimi her koşulda normal tek-profil akışını, GPN seçimi
+  her koşulda WireGuard koordinatör akışını çalıştırır; VPN'e geçişte aktif
+  GPN koordinatörü teardown edilir. `GpnConnectAsync` (belirgin GPN butonu)
+  artık modu config + ViewModel'e sessizce yazar (`SetModeSilently`) — host
+  yayınları ('gpn') ve dashboard pill'leri kullanıcı tercihiyle çelişmiyor,
+  sonraki Reload'lar aynı seçimle GPN akışını sürdürüyor. Dashboard tarafında
+  `setConnectionState` host yankısı yalnızca bağlantı GERÇEKTEN kurulu iken
+  modu çeviriyor; bağlantısızken 2 sn'lik döngünün bayat config modu
+  yankısı kullanıcının pill seçimini ezemiyor. C# karar testi
+  (`ShouldRunGpnFlow_FollowsUserModeNotProfileType`) + JS echo testi eklendi.
+- **Kesintisiz mod değişimi entegrasyon testi (uncommitted working tree)**: yeni
+  `GpnSeamlessModeSwitchTests`, bağlıyken mod değişiminin tüneli KESMEDEN
+  uygulandığını gerçek üretim zinciri üzerinde uçtan uca doğruluyor: yönetilen
+  kurallar → `CoreConfigHandler` superset dalı (GPN-MODE/GPN-CHECK/ao-<i>
+  grupları) → `GpnSoftSession.Begin` → canlı mihomo seçimlerine restart'sız
+  delta PUT (`GpnSoftPolicyApplier`). Manuel → Global VPN → Manuel → Off tam turu
+  boyunca WG tünel teli (GPN-Nodes → wg-de) asla PUT almıyor — bağlantı
+  kesintisiz sürüyor, yalnızca mod/rota seçim grupları değişiyor; oturum kimliği
+  boyunca aynı kalıyor. Yapısal değişiklik (bağlıyken uygulama ekleme) durumunda
+  uygulayıcı canlı uygulamayı reddedip hiçbir kısmi PUT atmıyor — oturum
+  dokunulmadan restart'lı fallback'e düşülüyor.
+- **CYBER skin connection traces did not meet at the core (uncommitted working
+  tree)**: the source fan (boost apps → JACK IN) ended at (645, 400) while the
+  destination traces (JACK IN → route nodes) started at (820, 400) — a visible
+  175 px gap below the button, so incoming and outgoing lines read as two
+  disconnected systems. Both fans now converge at the JACK IN button's exact
+  center (700, 335 in viewBox units, measured from the real layout: the button
+  spans x 580–820 / y 275–395): sources terminate at the center point and the
+  destination traces start there and run horizontally BEHIND the button to its
+  right edge, so data visibly flows in from the left, through the core, out to
+  the right. Verified live in the browser against the real skin.html/skin.js.
 - **Purple frame around the window (uncommitted working tree)**: the reveal
   restored the saved "Normal" placement instead of maximizing whenever a
   previous session had stored one — including the untouched 1200×800 default
@@ -422,6 +614,91 @@ All notable changes to AoGPN will be documented in this file.
 ### Development milestones folded into this release
 
 The milestones below are the development build-up that will ship as this single **1.1.1** release. They were tracked as separate `7.26.x` changelog entries, but none has shipped on its own — together they form the release above them. Listed newest-first (`7.26.77` → `7.26.67`), matching the changelog order.
+
+#### [7.26.80] — Connection Center card ops: confirm-remove ✕, one-click undo, 2 s live refresh, hero icons + drag scroll
+
+##### Added
+- **Confirm-remove (✕) on every card** — each Connection Center app card now
+  carries a ✕ button in its top-right corner. Clicking it asks for
+  confirmation ("Remove \"cs2.exe\" from the routing list?") and, on confirm,
+  deletes the app from the Game Boost routing list through the exact
+  `remove_app` contract the table's delete button uses; the host echo drops
+  the card from the rail immediately. A mis-click can never remove an app
+  silently.
+- **One-click undo for removals, route changes and quick adds** — after every
+  card removal, GPN-switch route change or quick add, a toast appears in the
+  bottom-right corner ("CS2 kaldırıldı · Geri Al"). Undo restores the removed
+  app with its previous route and WARP egress node, reverts a route change to
+  the old route, or removes a quick-added app — then the host re-pushes the
+  authoritative snapshot. The undo slot is single-level: a newer mutation
+  replaces the older one, and other app additions clear it so the toast never
+  offers a stale restore.
+- **2-second live refresh on the Connection Center** — the host's 2 s monitor
+  poll (previously gated to the Performance / Game Boost views) now also
+  pushes while the dashboard view is active, so card latency (telemetry
+  ping), run-state and route badges tick live. Identical ticks skip the DOM
+  rebuild entirely, and real updates preserve the rail's scroll position — a
+  latency change never snaps a scrolled rail back to the start.
+- **Hero icons + drag-to-scroll rail** — card icons grew from 36 px to a
+  56 px hero tile on a soft glow backdrop (icon-first layout, small details
+  around it). The rail now also scrolls by grabbing and dragging the cards
+  with the mouse (grab/grabbing cursor); presses that start on the GPN switch
+  or ✕ stay clickable, and trackpad / touch / wheel scrolling still work.
+- **Suggested & recently-added quick picker lists** — the ＋ Uygulama Ekle
+  panel gained a curated **Suggested apps** grid (CS2, Valorant, LoL, Tarkov,
+  Dota 2, Fortnite, Apex, Minecraft — added by name via the host's
+  KnownAppCatalog route suggestion) and a **Recently added** section that
+  remembers picked and snapshot-seen apps in localStorage for one-click
+  re-add, hiding entries that are already routed.
+
+##### Technical
+- Host: `DashboardMessageDispatcher` records a single-level undo slot
+  (`remove`/`route`/`add`) before each mutation, answers `undo_last_app_op`
+  via `SetDashboardAppRouteAsync` / `RemoveAppCmd`, and pushes
+  `window.setUndoAvailable` (new `IDashboardBridge.PushUndoStateAsync`);
+  `DashboardPushService.PushMonitorSnapshotAsync` now includes the dashboard
+  view in the 2 s poll. Renderer: `features/views.js` owns the toast,
+  hero-card markup, pointer drag and the card change-detection signature
+  (`renderDashboardBoostCards`), `vpn-gpn-dashboard.html` carries the toast
+  markup, and `components.css` the hero/drag styles (embedded CSS
+  regenerated). New i18n keys (`undo.*`, `boost.removeCard`,
+  `boost.removeConfirm`) in en/tr + the embedded offline fallback. Covered by
+  7 new integration tests (✕ confirm/cancel + host echo, undo toast
+  post/dismiss/clear, live-tick skip + scroll preservation, drag scroll +
+  interactive-control exclusion, suggested/recent quick-add); full skin suite
+  268/268 green.
+
+#### [7.26.79] — Connection Center app rail: all apps visible + interactive GPN toggles, quick Add App picker
+
+##### Added
+- **Every routed app on the home screen** — the Connection Center boost card
+  strip no longer caps at 4 apps: every routed APPLICATION in the Game Boost
+  list renders as a fixed-width card in a horizontal rail that scrolls BOTH
+  ways (‹ › buttons, mouse wheel over the rail, or trackpad/drag), so nothing
+  hides behind the old 4-card grid. Each card shows the real app icon, route
+  badge (VPN / Direct / Block / WARP), running state, the real server ping
+  (before → after + delta, with node attribution) and a per-app **GPN switch**
+  that routes the app through the tunnel — or back to Direct — straight from
+  the main page, using the same `set_app_route` contract as the Game Boost
+  table (blacklist direction respected). The summary badge counts running
+  tunneled apps; domain/IP rules stay in the full management view.
+- **Quick Add App picker** — a new **＋ Uygulama Ekle** button sits next to the
+  Manage button in the Application Management Center header. It opens a quick
+  selection panel listing running processes (searchable, real icons, single
+  click adds the app through GPN via the same `add_running_process` flow as
+  the Game Boost picker) plus a **"pick an EXE from disk"** fallback for apps
+  that are not currently running. New i18n keys in en/tr (plus the embedded
+  offline fallback dictionary).
+
+##### Technical
+- `features/views.js` owns the rail (card renderer, arrow enable/disable,
+  wheel-to-horizontal scrolling, delegated GPN-toggle and quick-pick events)
+  and the Connection Center markup in `vpn-gpn-dashboard.html` gained the
+  arrow buttons + quick-add panel. Covered by 5 new integration tests in
+  `Temalar/skins/dashboard.integration.test.js` (no 4-card cap + domain-rule
+  exclusion, toggle → `set_app_route` host echo, empty state + summary badge,
+  quick-add open/list/filter/add, disk-EXE fallback); full skin suite 261/261
+  green.
 
 #### [7.26.78] — Real app icons in the dashboards + Windows-style Game Boost view module
 

@@ -94,6 +94,95 @@ test('dashboard: legacy vpn+proxy / proxy actions render as the merged vpn optio
 });
 
 // ---------------------------------------------------------------------------
+// Removal: apps → remove_app, domain/IP rules → remove_route, group remove-all
+// ---------------------------------------------------------------------------
+
+test('dashboard: domain/IP rule rows delete via remove_route (type + value), apps stay remove_app', async () => {
+  const dash = await boostWithApps([
+    { id: 1, processName: 'cs2', displayName: 'Counter-Strike 2', action: 'vpn', isRunning: true },
+    { id: 2, value: 'discord.gg', displayName: 'Discord rule', action: 'vpn', entryType: 'domain' },
+    { id: 3, value: '1.2.3.4/32', displayName: 'IP rule', action: 'block', entryType: 'ip' }
+  ]);
+  dash.setConfirm(true);
+
+  // Rule rows carry their type + value on the delete button.
+  const domainBtn = dash.document.querySelector('button[data-remove-process="discord.gg"]');
+  assert.ok(domainBtn, 'domain row carries a delete button');
+  assert.equal(domainBtn.dataset.removeEntryType, 'domain');
+  assert.equal(domainBtn.dataset.removeEntryValue, 'discord.gg');
+  domainBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const routes = dash.postsWith('remove_route');
+  assert.equal(routes.length, 1);
+  assert.deepEqual(routes[0], { action: 'remove_route', entryType: 'domain', value: 'discord.gg' });
+
+  // App rows keep the richer remove_app contract.
+  dash.getRemoveBtn('cs2').dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(dash.postsWith('remove_app').length, 1);
+  assert.deepEqual(dash.postsWith('remove_app')[0], { action: 'remove_app', processName: 'cs2' });
+
+  // Cancelled confirm must not post anything for rules either.
+  dash.setConfirm(false);
+  dash.document.querySelector('button[data-remove-process="1.2.3.4/32"]')
+    .dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(dash.postsWith('remove_route').length, 1, 'cancelled rule removal posts nothing');
+  dash.close();
+});
+
+test('dashboard: group header remove-all deletes every entry under the group (apps + rules)', async () => {
+  const dash = await boostWithApps([
+    { id: 1, processName: 'lol.exe', displayName: 'League of Legends', action: 'vpn', isRunning: false },
+    { id: 2, processName: 'lol-helper.exe', displayName: 'League of Legends', action: 'vpn', isRunning: false },
+    { id: 3, value: 'riot.com', displayName: 'League of Legends', action: 'proxy', entryType: 'domain' }
+  ]);
+  dash.setConfirm(true);
+  const btn = dash.document.querySelector('[data-app-group-remove="League of Legends"]');
+  assert.ok(btn, 'group header carries the remove-all button');
+  btn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const appPosts = dash.postsWith('remove_app');
+  const routePosts = dash.postsWith('remove_route');
+  assert.equal(appPosts.length, 2, 'both app rows of the group post remove_app');
+  assert.equal(routePosts.length, 1, 'the domain rule posts remove_route');
+  assert.deepEqual(routePosts[0], { action: 'remove_route', entryType: 'domain', value: 'riot.com' });
+  dash.close();
+});
+
+// ---------------------------------------------------------------------------
+// UDP-bypass notice: proxy capture cannot carry game UDP traffic
+// ---------------------------------------------------------------------------
+
+test('dashboard: UDP-bypass notice shows for running VPN apps under proxy capture, hides under TUN', async () => {
+  const dash = await bootDashboard();
+  dash.openView('boost');
+  const apps = [
+    { id: 1, processName: 'cs2', displayName: 'Counter-Strike 2', action: 'vpn', isRunning: true },
+    { id: 2, processName: 'wow', displayName: 'WoW', action: 'direct', isRunning: true }
+  ];
+  const notice = dash.document.getElementById('boostUdpNotice');
+  assert.ok(notice, 'UDP notice container exists in the boost view');
+
+  // Connected + proxy capture + a running VPN-routed app → notice visible.
+  dash.window.setTransport('proxy');
+  dash.window.setConnectionState(true, 'gpn', false);
+  dash.updateMonitorSnapshot({ apps, mode: 'manual', connected: true });
+  assert.ok(!notice.classList.contains('hidden'), 'notice visible: game UDP exits directly under proxy capture');
+
+  // TUN capture tunnels the app → notice hidden.
+  dash.window.setTransport('tun');
+  dash.updateMonitorSnapshot({ apps, mode: 'manual', connected: true });
+  assert.ok(notice.classList.contains('hidden'), 'notice hidden under TUN capture');
+
+  // Proxy capture but no tunnel-routed RUNNING app → notice hidden.
+  dash.window.setTransport('proxy');
+  dash.updateMonitorSnapshot({
+    apps: [{ id: 1, processName: 'wow', displayName: 'WoW', action: 'direct', isRunning: true }],
+    mode: 'manual',
+    connected: true
+  });
+  assert.ok(notice.classList.contains('hidden'), 'notice hidden when no app is tunnel-routed');
+  dash.close();
+});
+
+// ---------------------------------------------------------------------------
 // Real-ping before/after on the dashboard boost cards
 // ---------------------------------------------------------------------------
 
@@ -141,6 +230,436 @@ test('dashboard: boost card falls back to the before ping when no after measurem
   });
   const text = dash.document.getElementById('dashboardBoostCards').textContent;
   assert.ok(text.includes('55 ms'), 'before ping is the primary latency before a connection');
+  dash.close();
+});
+
+// ---------------------------------------------------------------------------
+// Connection Center app rail — every routed app, scrollable + interactive
+// ---------------------------------------------------------------------------
+
+test('dashboard: boost rail lists EVERY routed app (no 4-card cap) and excludes domain rules', async () => {
+  const dash = await bootDashboard();
+  dash.updateMonitorSnapshot({
+    apps: [
+      { id: 1, processName: 'cs2', displayName: 'Counter-Strike 2', action: 'vpn', isRunning: true },
+      { id: 2, processName: 'valorant.exe', displayName: 'Valorant', action: 'direct', isRunning: true },
+      { id: 3, processName: 'fortnite', displayName: 'Fortnite', action: 'block', isRunning: false },
+      { id: 4, processName: 'wow', displayName: 'WoW', action: 'vpn', isRunning: false },
+      { id: 5, processName: 'wot', displayName: 'World of Tanks', action: 'vpn', isRunning: false },
+      { id: 6, processName: 'dota2', displayName: 'Dota 2', action: 'vpn+proxy', isRunning: false },
+      { id: 7, value: 'discord.gg', displayName: 'Discord rule', action: 'vpn', entryType: 'domain' }
+    ],
+    mode: 'manual',
+    connected: false
+  });
+  const cards = dash.document.querySelectorAll('#dashboardBoostCards article.boost-card');
+  assert.equal(cards.length, 6, 'one card per routed APPLICATION entry, domain rules stay out of the rail');
+  const names = [...cards].map(c => c.dataset.boostPname);
+  assert.ok(names.includes('wow') && names.includes('dota2'), 'apps beyond the old 4-card cap are rendered');
+  assert.ok(!names.includes('discord.gg'), 'domain rules never become rail cards');
+  // The frameless cards are pure status tiles: no route switch on the card —
+  // routing edits belong to the management view and the route select there.
+  assert.equal(cards.length, 6);
+  assert.ok(!dash.document.querySelector('#dashboardBoostCards .boost-gpn-input'), 'cards carry no confusing GPN toggle');
+  dash.close();
+});
+
+test('dashboard: clicking a card icon opens the per-app quick settings (route pills + remove)', async () => {
+  const dash = await bootDashboard();
+  dash.updateMonitorSnapshot({
+    apps: [
+      { id: 1, processName: 'cs2', displayName: 'Counter-Strike 2', action: 'vpn', isRunning: true, latencyText: '131 ms' },
+      { id: 2, processName: 'eft.exe', displayName: 'EFT', action: 'warp', isRunning: false, warpNodeIndexId: '' }
+    ],
+    mode: 'manual',
+    connected: false
+  });
+  const pop = dash.document.getElementById('appQuickSettings');
+  assert.ok(pop, 'quick-settings popover element exists');
+  assert.ok(pop.classList.contains('hidden'), 'popover starts hidden');
+  // Click the icon → popover opens with the app's quick settings.
+  dash.document.querySelector('[data-quick-settings-pname="cs2"]')
+    .dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.ok(!pop.classList.contains('hidden'), 'icon click opens the popover');
+  const text = pop.textContent;
+  assert.ok(text.includes('Counter-Strike 2') && text.includes('cs2'), 'popover names the app');
+  const pills = pop.querySelectorAll('[data-quick-route]');
+  assert.equal(pills.length, 4, 'all four route pills are offered');
+  assert.ok(pop.querySelector('[data-quick-route="vpn"].route-pill-on'), 'vpn is the active pill for a vpn app');
+  assert.ok(!pop.querySelector('[data-route-warp-node]'), 'no WARP node picker for a non-warp route');
+  // Route pill click posts the table contract.
+  pop.querySelector('[data-quick-route="direct"]')
+    .dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const posts = dash.postsWith('set_app_route');
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0], { action: 'set_app_route', processName: 'cs2', displayName: 'Counter-Strike 2', route: 'direct' });
+  // Host echo re-renders the popover with the new route active.
+  dash.updateMonitorSnapshot({
+    apps: [
+      { id: 1, processName: 'cs2', displayName: 'Counter-Strike 2', action: 'direct', isRunning: true, latencyText: '131 ms' },
+      { id: 2, processName: 'eft.exe', displayName: 'EFT', action: 'warp', isRunning: false, warpNodeIndexId: '' }
+    ],
+    mode: 'manual',
+    connected: false
+  });
+  assert.ok(pop.querySelector('[data-quick-route="direct"].route-pill-on'), 'host echo moves the active pill');
+  // Outside click closes the popover.
+  dash.document.body.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.ok(pop.classList.contains('hidden'), 'outside click closes the popover');
+  // Remove action inside the popover posts remove_app (confirmed).
+  dash.document.querySelector('[data-quick-settings-pname="cs2"]')
+    .dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  pop.querySelector('[data-quick-remove]')
+    .dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const removes = dash.postsWith('remove_app');
+  assert.equal(removes.length, 1);
+  assert.deepEqual(removes[0], { action: 'remove_app', processName: 'cs2' });
+  assert.ok(pop.classList.contains('hidden'), 'remove closes the popover');
+  dash.close();
+});
+
+test('dashboard: quick settings offers the WARP egress node picker for warp-routed apps', async () => {
+  const dash = await bootDashboard();
+  dash.updateMonitorSnapshot({
+    apps: [{ id: 1, processName: 'eft.exe', displayName: 'EFT', action: 'warp', isRunning: false, warpNodeIndexId: 'frankfurt' }],
+    mode: 'manual',
+    connected: false
+  });
+  dash.document.querySelector('[data-quick-settings-pname="eft.exe"]')
+    .dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const pop = dash.document.getElementById('appQuickSettings');
+  assert.ok(!pop.classList.contains('hidden'), 'popover opens for the warp app');
+  const nodeSel = pop.querySelector('[data-route-warp-node]');
+  assert.ok(nodeSel, 'warp-routed app shows the node picker');
+  assert.ok(nodeSel.options.length > 1, 'node picker lists the default + available nodes');
+  nodeSel.value = 'istanbul';
+  nodeSel.dispatchEvent(new dash.window.Event('change', { bubbles: true }));
+  const posts = dash.postsWith('set_app_route');
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].action, 'set_app_route');
+  assert.equal(posts[0].processName, 'eft.exe');
+  assert.equal(posts[0].route, 'warp');
+  assert.equal(posts[0].warpNodeIndexId, 'istanbul');
+  assert.ok(posts[0].warpNodeName, 'node picker sends the resolved node name');
+  dash.close();
+});
+
+test('dashboard: quick settings closes on Escape and its icon never starts a drag', async () => {
+  const dash = await bootDashboard();
+  dash.updateMonitorSnapshot({
+    apps: [{ id: 1, processName: 'cs2', displayName: 'CS2', action: 'vpn', isRunning: false }],
+    mode: 'manual',
+    connected: false
+  });
+  const pop = dash.document.getElementById('appQuickSettings');
+  dash.document.querySelector('[data-quick-settings-pname="cs2"]')
+    .dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.ok(!pop.classList.contains('hidden'));
+  dash.document.dispatchEvent(new dash.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.ok(pop.classList.contains('hidden'), 'Escape closes the popover');
+  // A press that starts on the icon button is not a drag handle.
+  const rail = dash.document.getElementById('dashboardBoostCards');
+  const before = rail.scrollLeft;
+  const icon = dash.document.querySelector('[data-quick-settings-pname="cs2"]');
+  const fire = (type, target, x) => {
+    const ev = new dash.window.MouseEvent(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'pointerType', { value: 'mouse' });
+    Object.defineProperty(ev, 'pointerId', { value: 9 });
+    Object.defineProperty(ev, 'clientX', { value: x });
+    target.dispatchEvent(ev);
+  };
+  fire('pointerdown', icon, 100);
+  fire('pointermove', dash.window, 40);
+  fire('pointerup', dash.window, 40);
+  assert.equal(rail.scrollLeft, before, 'icon button is not a drag handle');
+  dash.close();
+});
+
+test('dashboard: boost rail summary badge counts tunneled apps; empty rail renders the empty-state card', async () => {
+  const dash = await bootDashboard();
+  dash.updateMonitorSnapshot({
+    apps: [
+      { id: 1, processName: 'cs2', displayName: 'CS2', action: 'vpn', isRunning: true },
+      { id: 2, processName: 'valorant.exe', displayName: 'Valorant', action: 'direct', isRunning: true }
+    ],
+    mode: 'manual',
+    connected: false
+  });
+  const badge = dash.document.getElementById('boostSummaryBadge');
+  assert.ok(badge.textContent.includes('games boosted'), 'badge reports running boosted apps');
+  dash.updateMonitorSnapshot({ apps: [], mode: 'off', connected: false });
+  const cards = dash.document.getElementById('dashboardBoostCards');
+  assert.ok(cards.textContent.includes('No games assigned'), 'empty rail explains where to add apps');
+  dash.close();
+});
+
+test('dashboard: boost rail follows the 2 s live tick — changed latency re-renders, identical ticks skip the rebuild and keep the scroll position', async () => {
+  const dash = await bootDashboard();
+  const apps5 = [1, 2, 3, 4, 5].map(n => ({
+    id: n,
+    processName: 'game' + n + '.exe',
+    displayName: 'Game ' + n,
+    action: 'vpn',
+    isRunning: n <= 2,
+    latencyText: '131 ms'
+  }));
+  dash.updateMonitorSnapshot({ apps: apps5, mode: 'manual', connected: false });
+  const container = dash.document.getElementById('dashboardBoostCards');
+  assert.equal(container.querySelectorAll('.boost-card').length, 5);
+  // Scroll the rail away from the start, like a user browsing the cards.
+  container.scrollLeft = 120;
+  const cardRef = container.querySelector('.boost-card');
+  // An identical live tick (nothing the cards display changed) must NOT rebuild
+  // the DOM — rebuilding would reset the rail's scroll position every 2 s.
+  dash.updateMonitorSnapshot({ apps: apps5, mode: 'manual', connected: false });
+  assert.equal(container.querySelector('.boost-card'), cardRef, 'unchanged tick keeps the same DOM node');
+  assert.equal(container.scrollLeft, 120, 'skipped tick cannot reset the scroll');
+  // A real live tick (latency changed, e.g. telemetry ping) re-renders the
+  // cards AND preserves the scroll position.
+  const appsTicked = apps5.map(a => ({ ...a, latencyText: a.isRunning ? '144 ms' : '131 ms' }));
+  dash.updateMonitorSnapshot({ apps: appsTicked, mode: 'manual', connected: false });
+  assert.ok(container.textContent.includes('144 ms'), 'changed latency re-renders the card text');
+  assert.equal(container.scrollLeft, 120, 'live rebuild preserves the rail scroll position');
+  dash.close();
+});
+
+test('dashboard: boost rail remove (✕) button posts remove_app on confirm and the host echo drops the card', async () => {
+  const dash = await bootDashboard();
+  dash.updateMonitorSnapshot({
+    apps: [
+      { id: 1, processName: 'cs2', displayName: 'Counter-Strike 2', action: 'vpn', isRunning: true },
+      { id: 2, processName: 'valorant.exe', displayName: 'Valorant', action: 'direct', isRunning: true }
+    ],
+    mode: 'manual',
+    connected: false
+  });
+  const container = dash.document.getElementById('dashboardBoostCards');
+  const removeBtn = container.querySelector('[data-remove-boost-pname="cs2"]');
+  assert.ok(removeBtn, 'each card carries a remove button');
+  assert.equal(container.querySelectorAll('[data-remove-boost-pname]').length, 2, 'every card gets its own ✕');
+  // Confirmed removal posts the SAME contract the Game Boost table delete uses.
+  removeBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const posts = dash.postsWith('remove_app');
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0], { action: 'remove_app', processName: 'cs2' });
+  // Host echo (fresh snapshot without cs2) re-renders the rail without the card.
+  dash.updateMonitorSnapshot({
+    apps: [{ id: 2, processName: 'valorant.exe', displayName: 'Valorant', action: 'direct', isRunning: true }],
+    mode: 'manual',
+    connected: false
+  });
+  assert.ok(!container.querySelector('[data-boost-pname="cs2"]'), 'removed app leaves the rail after the echo');
+  assert.ok(container.querySelector('[data-boost-pname="valorant.exe"]'), 'other apps stay on the rail');
+  dash.close();
+});
+
+test('dashboard: boost rail remove button posts nothing when the user cancels the confirm', async () => {
+  const dash = await bootDashboard();
+  dash.updateMonitorSnapshot({
+    apps: [{ id: 1, processName: 'wow', displayName: 'WoW', action: 'vpn', isRunning: false }],
+    mode: 'manual',
+    connected: false
+  });
+  dash.setConfirm(false);
+  const removeBtn = dash.document.querySelector('[data-remove-boost-pname="wow"]');
+  assert.ok(removeBtn, 'card carries its remove button');
+  removeBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(dash.postsWith('remove_app').length, 0, 'cancelled confirmation must not remove the app');
+  dash.close();
+});
+
+test('dashboard: boost rail drags with the mouse to scroll sideways (interactive controls stay clickable)', async () => {
+  const dash = await bootDashboard();
+  const apps = [1, 2, 3, 4, 5, 6].map(n => ({
+    id: n, processName: 'g' + n + '.exe', displayName: 'Game ' + n, action: 'vpn', isRunning: false
+  }));
+  dash.updateMonitorSnapshot({ apps, mode: 'manual', connected: false });
+  const rail = dash.document.getElementById('dashboardBoostCards');
+  const firePointer = (type, target, x) => {
+    const ev = new dash.window.MouseEvent(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'pointerType', { value: 'mouse' });
+    Object.defineProperty(ev, 'pointerId', { value: 7 });
+    Object.defineProperty(ev, 'clientX', { value: x });
+    target.dispatchEvent(ev);
+    return ev;
+  };
+  assert.equal(rail.scrollLeft, 0);
+  // Grab the card background at x=200 and slide left to x=60 → the rail follows.
+  firePointer('pointerdown', rail, 200);
+  firePointer('pointermove', dash.window, 150);
+  firePointer('pointermove', dash.window, 60);
+  firePointer('pointerup', dash.window, 60);
+  assert.equal(rail.scrollLeft, 140, 'dragging the cards scrolls the rail sideways');
+  assert.ok(!rail.classList.contains('rail-dragging'), 'drag state is released on pointerup');
+  // A press that starts on an interactive control (the ✕ remove button) must
+  // not hijack the gesture.
+  const before = rail.scrollLeft;
+  const removeBtn = rail.querySelector('[data-remove-boost-pname]');
+  assert.ok(removeBtn, 'cards carry their remove buttons');
+  firePointer('pointerdown', removeBtn, 100);
+  firePointer('pointermove', dash.window, 40);
+  firePointer('pointerup', dash.window, 40);
+  assert.equal(rail.scrollLeft, before, 'interactive controls are not drag handles');
+  dash.close();
+});
+
+test('dashboard: undo toast offers one-click undo for the last app removal / route change', async () => {
+  const dash = await bootDashboard();
+  const toast = dash.document.getElementById('undoToast');
+  const text = dash.document.getElementById('undoToastText');
+  assert.ok(toast && text, 'undo toast element exists');
+  assert.ok(toast.classList.contains('hidden'), 'toast starts hidden');
+  // Host push after a removal: labels the app and offers undo.
+  dash.window.setUndoAvailable({ kind: 'remove', processName: 'cs2', displayName: 'Counter-Strike 2' });
+  assert.ok(!toast.classList.contains('hidden'), 'toast appears after an app removal');
+  assert.ok(text.textContent.includes('Counter-Strike 2'), 'toast names the removed app');
+  // Clicking "Undo" posts the host undo command and closes the toast.
+  dash.document.getElementById('undoToastBtn').dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true }));
+  const posts = dash.postsWith('undo_last_app_op');
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0], { action: 'undo_last_app_op' });
+  assert.ok(toast.classList.contains('hidden'), 'toast closes when undo is clicked');
+  // Route-change variant + explicit clear (host consumed/replaced the slot).
+  dash.window.setUndoAvailable({ kind: 'route', processName: 'wow', displayName: 'WoW' });
+  assert.ok(!toast.classList.contains('hidden'), 'route-change push shows the toast');
+  assert.ok(text.textContent.includes('WoW'), 'route change toast names the app');
+  dash.window.setUndoAvailable(null);
+  assert.ok(toast.classList.contains('hidden'), 'cleared undo state hides the toast');
+  // Dismiss button hides without posting anything.
+  dash.window.setUndoAvailable({ kind: 'add', processName: 'bun.exe', displayName: 'Bun' });
+  assert.ok(!toast.classList.contains('hidden'), 'quick-add push shows the toast');
+  dash.document.getElementById('undoToastClose').dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true }));
+  assert.ok(toast.classList.contains('hidden'), 'dismiss hides the toast');
+  assert.equal(dash.postsWith('undo_last_app_op').length, 1, 'dismiss does not post undo');
+  dash.close();
+});
+
+// ---------------------------------------------------------------------------
+// Quick app picker — "＋ Uygulama Ekle" on the Connection Center header
+// ---------------------------------------------------------------------------
+
+test('dashboard: quick-add panel opens over list_running_processes and adds the picked app', async () => {
+  const dash = await bootDashboard();
+  const addBtn = dash.document.getElementById('dashAddAppBtn');
+  const panel = dash.document.getElementById('dashQuickAddPanel');
+  assert.ok(addBtn && panel, 'Connection Center has the Add App button + quick panel');
+  assert.ok(panel.classList.contains('hidden'), 'quick panel starts closed');
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.ok(!panel.classList.contains('hidden'), 'Add App opens the quick picker');
+  assert.equal(addBtn.getAttribute('aria-expanded'), 'true');
+  assert.equal(dash.postsWith('list_running_processes').length, 1, 'opening requests the running-process catalog');
+  // Host answers with the process catalog → rows render with real names.
+  dash.window.updateProcessList([
+    { pid: 4242, processName: 'chrome.exe', displayName: 'Google Chrome', exePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' },
+    { pid: 8128, processName: 'steam.exe', displayName: 'Steam', exePath: 'C:\\Program Files (x86)\\Steam\\steam.exe' }
+  ]);
+  const rows = dash.document.querySelectorAll('#dashQuickAddList [data-process-pid]');
+  assert.equal(rows.length, 2, 'every running process becomes a quick-pick row');
+  // Search narrows the list.
+  const filter = dash.document.getElementById('dashQuickAddFilter');
+  filter.value = 'steam';
+  filter.dispatchEvent(new dash.window.Event('input', { bubbles: true }));
+  assert.equal(dash.document.querySelectorAll('#dashQuickAddList [data-process-pid]').length, 1, 'filter narrows the quick list');
+  // Picking a row routes it through GPN and closes the panel.
+  const steam = dash.document.querySelector('#dashQuickAddList [data-process-pid="8128"]');
+  steam.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const posts = dash.postsWith('add_running_process');
+  assert.deepEqual(posts[0], { action: 'add_running_process', pid: 8128, processName: 'steam.exe', displayName: 'Steam' });
+  assert.ok(panel.classList.contains('hidden'), 'picking an app closes the quick panel');
+  dash.close();
+});
+
+test('dashboard: quick-add disk EXE fallback posts add_app and empty search explains the fallback', async () => {
+  const dash = await bootDashboard();
+  const addBtn = dash.document.getElementById('dashAddAppBtn');
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  // No match → empty state + the disk EXE button remain available.
+  const filter = dash.document.getElementById('dashQuickAddFilter');
+  filter.value = 'zzz-no-match';
+  filter.dispatchEvent(new dash.window.Event('input', { bubbles: true }));
+  const list = dash.document.getElementById('dashQuickAddList');
+  assert.equal(list.querySelectorAll('[data-process-pid]').length, 0);
+  assert.ok(list.textContent.includes('No running apps found'), 'empty search explains the disk fallback');
+  const diskBtn = list.querySelector('#dashQuickAddDiskBtn');
+  assert.ok(diskBtn, 'disk EXE button renders even when no processes match');
+  diskBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(dash.postsWith('add_app').length, 1, 'disk picker posts add_app (native file dialog)');
+  assert.ok(dash.document.getElementById('dashQuickAddPanel').classList.contains('hidden'), 'disk picker closes the quick panel');
+  dash.close();
+});
+
+test('dashboard: quick-add panel suggests curated apps (filtered against the routing list) and adds by name', async () => {
+  const dash = await bootDashboard();
+  const addBtn = dash.document.getElementById('dashAddAppBtn');
+  const panel = dash.document.getElementById('dashQuickAddPanel');
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const list = dash.document.getElementById('dashQuickAddList');
+  const chips = list.querySelectorAll('[data-quick-suggest]');
+  assert.ok(chips.length >= 8, 'suggested apps render when the panel opens');
+  assert.ok(list.textContent.includes('Suggested apps'), 'suggested section is labeled');
+  assert.ok(list.querySelector('[data-quick-suggest="cs2.exe"]'), 'CS2 suggestion is present');
+  // A snapshot seeding the routing list filters the matching suggestion out.
+  dash.updateMonitorSnapshot({
+    apps: [{ id: 1, processName: 'cs2.exe', displayName: 'Counter-Strike 2', action: 'vpn' }],
+    mode: 'manual',
+    connected: false
+  });
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true })); // close
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true })); // reopen
+  assert.ok(!list.querySelector('[data-quick-suggest="cs2.exe"]'), 'already-listed app is not suggested again');
+  // Picking a suggestion posts the by-name add (pid 0 → host KnownAppCatalog route).
+  list.querySelector('[data-quick-suggest="Valorant.exe"]')
+    .dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const posts = dash.postsWith('add_running_process');
+  assert.deepEqual(posts[posts.length - 1], { action: 'add_running_process', pid: 0, processName: 'Valorant.exe', displayName: 'Valorant' });
+  assert.ok(panel.classList.contains('hidden'), 'suggestion pick closes the quick panel');
+  dash.close();
+});
+
+test('dashboard: quick-add recent list remembers picked + newly-snapshotted apps and re-adds by name', async () => {
+  const dash = await bootDashboard();
+  const addBtn = dash.document.getElementById('dashAddAppBtn');
+  const panel = dash.document.getElementById('dashQuickAddPanel');
+  // Seed the recent tracker with an empty first snapshot (mirrors app boot).
+  dash.updateMonitorSnapshot({ apps: [], mode: 'off', connected: false });
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  dash.window.updateProcessList([
+    { pid: 4242, processName: 'chrome.exe', displayName: 'Google Chrome', exePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' }
+  ]);
+  dash.document.querySelector('#dashQuickAddList [data-process-pid="4242"]')
+    .dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  // A NEW app entry arriving via snapshot is remembered too (first snapshot seeds).
+  dash.updateMonitorSnapshot({
+    apps: [{ id: 1, processName: 'rocket.exe', displayName: 'Rocket League', action: 'vpn' }],
+    mode: 'manual',
+    connected: false
+  });
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const list = dash.document.getElementById('dashQuickAddList');
+  // While rocket is listed it is hidden from the quick sections (it is already
+  // managed on the rail) — but the pick + snapshot memory are both persisted.
+  assert.equal(list.querySelectorAll('[data-recent-pname]').length, 1, 'listed app is hidden from recent while routed');
+  assert.ok(list.querySelector('[data-recent-pname="chrome.exe"]'), 'picked app stays offered for re-add');
+  assert.ok(list.textContent.includes('Recently added'), 'recent section is labeled');
+  // Host drops rocket from the routing list → the remembered entry resurfaces.
+  dash.updateMonitorSnapshot({ apps: [], mode: 'manual', connected: false });
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true })); // close
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true })); // reopen
+  assert.equal(list.querySelectorAll('[data-recent-pname]').length, 2, 'picked + snapshotted apps resurface in recently added');
+  assert.ok(list.querySelector('[data-recent-pname="rocket.exe"]'), 'snapshot-remembered app appears in recent after removal');
+  const rocketRow = list.querySelector('[data-recent-pname="rocket.exe"]');
+  rocketRow.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  let posts = dash.postsWith('add_running_process');
+  assert.deepEqual(posts[posts.length - 1], { action: 'add_running_process', pid: 0, processName: 'rocket.exe', displayName: 'Rocket League' });
+  assert.ok(panel.classList.contains('hidden'), 'recent pick closes the quick panel');
+  // chrome is still remembered and re-adds by name too.
+  addBtn.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const chromeRow = list.querySelector('[data-recent-pname="chrome.exe"]');
+  assert.ok(chromeRow, 'app not in the routing list stays offered for one-click re-add');
+  chromeRow.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  posts = dash.postsWith('add_running_process');
+  assert.deepEqual(posts[posts.length - 1], { action: 'add_running_process', pid: 0, processName: 'chrome.exe', displayName: 'Google Chrome' });
+  assert.ok(panel.classList.contains('hidden'), 'recent pick closes the quick panel');
   dash.close();
 });
 
@@ -539,7 +1058,9 @@ function click(dash, el) {
   el.dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
 }
 
-const TOGGLE_DEFAULTS = { action: 'toggle_connection', mode: 'gpn', transport: 'proxy', protocol: 'auto' };
+// `connected` = kullanıcının bastığı anda ekranda gördüğü durum; host bağlan/kes
+// yönünü bu niyetten türetir (canlı çekirdek durumundan değil).
+const TOGGLE_DEFAULTS = { action: 'toggle_connection', mode: 'gpn', transport: 'proxy', protocol: 'auto', connected: false };
 
 test('dashboard: connect button posts toggle_connection with the current mode/transport/protocol', async () => {
   const dash = await bootDashboard();
@@ -620,6 +1141,62 @@ test('dashboard: mode pills post set_connection_mode only while connected', asyn
   dash.close();
 });
 
+test('dashboard: host mode echo never overrides the user choice while disconnected', async () => {
+  const dash = await bootDashboard();
+  const modePill = (m) => dash.document.querySelector('.mode-pill[data-mode="' + m + '"]');
+
+  // Boot default is gpn; the user picks VPN while disconnected.
+  click(dash, modePill('vpn'));
+  assert.ok(modePill('vpn').classList.contains('active'), 'user choice vpn active');
+
+  // A stale/persisted config echo (e.g. 'gpn' from a previous session pushed by
+  // the 2 s lifecycle sync) must NOT flip the pill while the tunnel is down —
+  // the user's explicit choice stays authoritative.
+  dash.window.setConnectionState(false, 'gpn', false);
+  assert.ok(modePill('vpn').classList.contains('active'), 'disconnected echo keeps user choice vpn');
+  assert.ok(!modePill('gpn').classList.contains('active'), 'gpn pill not activated by the echo');
+
+  // Once a real connection completes, the host echo reflects the actual tunnel
+  // and the pill follows it.
+  dash.window.setConnectionState(true, 'gpn', false);
+  assert.ok(modePill('gpn').classList.contains('active'), 'connected echo drives the pill to gpn');
+  dash.close();
+});
+
+test('dashboard: stale host echoes cannot flip the pill back mid-transition ("keeps going back to GPN")', async () => {
+  const dash = await bootDashboard();
+  const modePill = (m) => dash.document.querySelector('.mode-pill[data-mode="' + m + '"]');
+  const splitPill = (m) => dash.document.querySelector('.split-mode-pill[data-split-mode="' + m + '"]');
+
+  // Connected in GPN.
+  dash.window.setConnectionState(true, 'gpn', false);
+  assert.ok(modePill('gpn').classList.contains('active'), 'GPN pill active while connected');
+
+  // User clicks VPN while the host is still applying a transition. The echo
+  // that arrives DURING the transition still carries the OLD mode — it must
+  // not flip the user's just-clicked choice back.
+  click(dash, modePill('vpn'));
+  assert.ok(modePill('vpn').classList.contains('active'), 'local pill click applies immediately');
+  assert.ok(splitPill('vpn').classList.contains('active'), 'local click drives the split pill too');
+  dash.window.setConnectionState(true, 'gpn', true);
+  assert.ok(modePill('vpn').classList.contains('active'), 'stale mode echo during transition does not flip the pill');
+
+  // The 2 s monitor snapshots also carry the old mode during the transition —
+  // they must not flip the mode/split pills either.
+  dash.updateMonitorSnapshot({ apps: [], mode: 'manual', connected: true });
+  assert.ok(modePill('vpn').classList.contains('active'), 'snapshot echo during transition keeps the mode choice');
+  assert.ok(splitPill('vpn').classList.contains('active'), 'snapshot echo during transition keeps the split choice');
+
+  // The transition settles on the new mode: host echo and snapshots become
+  // authoritative again.
+  dash.window.setConnectionState(true, 'vpn', false);
+  assert.ok(modePill('vpn').classList.contains('active'), 'settled echo confirms vpn');
+  dash.updateMonitorSnapshot({ apps: [], mode: 'vpn', connected: true });
+  assert.ok(modePill('vpn').classList.contains('active'), 'settled snapshot confirms vpn');
+  assert.ok(splitPill('vpn').classList.contains('active'), 'settled snapshot keeps the split pill on vpn');
+  dash.close();
+});
+
 test('dashboard: split-mode pills post set_split_mode and sync the active pill', async () => {
   const dash = await bootDashboard();
   const pill = (m) => dash.document.querySelector('.split-mode-pill[data-split-mode="' + m + '"]');
@@ -642,6 +1219,39 @@ test('dashboard: split-mode pills post set_split_mode and sync the active pill',
   dash.close();
 });
 
+test('dashboard: the app boots in the last-used GPN/VPN mode (localStorage), defaulting to GPN', async () => {
+  // Fresh boot without a stored choice → GPN (the default mode).
+  const fresh = await bootDashboard();
+  assert.equal(fresh.window.aogpn.app.getMode(), 'gpn', 'default mode is GPN');
+  assert.ok(fresh.document.querySelector('.mode-pill[data-mode="gpn"]').classList.contains('active'), 'GPN pill is active by default');
+  fresh.close();
+
+  // Boot with 'vpn' stored (the app was closed in Global VPN mode) → restored
+  // BEFORE any host echo arrives.
+  const vpnBoot = await loadDashboard({ seedLocalStorage: { 'aogpn.lastMode.v1': 'vpn' } });
+  assert.equal(vpnBoot.window.aogpn.app.getMode(), 'vpn', 'stored VPN mode is restored at boot');
+  assert.ok(vpnBoot.document.querySelector('.mode-pill[data-mode="vpn"]').classList.contains('active'), 'VPN pill is active at boot');
+  vpnBoot.close();
+});
+
+test('dashboard: mode choices persist to localStorage (pill click + host echo), GPN wins on an off echo', async () => {
+  const dash = await bootDashboard();
+  const modePill = (m) => dash.document.querySelector('.mode-pill[data-mode="' + m + '"]');
+  // Switching the pill persists the choice.
+  modePill('vpn').dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(dash.window.aogpn.app.getMode(), 'vpn');
+  assert.equal(dash.window.localStorage.getItem('aogpn.lastMode.v1'), 'vpn', 'pill click persists the mode choice');
+  // The host echo after a connect (manual → GPN) overwrites and persists too.
+  dash.updateMonitorSnapshot({ apps: [], mode: 'manual', connected: false });
+  assert.equal(dash.window.aogpn.app.getMode(), 'gpn', 'manual echo restores GPN');
+  assert.equal(dash.window.localStorage.getItem('aogpn.lastMode.v1'), 'gpn', 'host snapshot echo persists the authoritative mode');
+  // A disconnected ('off') echo never clobbers the stored GPN/VPN choice.
+  dash.updateMonitorSnapshot({ apps: [], mode: 'off', connected: false });
+  assert.equal(dash.window.aogpn.app.getMode(), 'gpn', 'off echo leaves the last gpn/vpn mode intact');
+  assert.equal(dash.window.localStorage.getItem('aogpn.lastMode.v1'), 'gpn');
+  dash.close();
+});
+
 test('dashboard: mode pill drives splitMode through applySplitMode (vpn -> vpn, gpn -> manual)', async () => {
   const dash = await bootDashboard();
   const modePill = (m) => dash.document.querySelector('.mode-pill[data-mode="' + m + '"]');
@@ -654,10 +1264,10 @@ test('dashboard: mode pill drives splitMode through applySplitMode (vpn -> vpn, 
   click(dash, modePill('vpn'));
   assert.ok(modePill('vpn').classList.contains('active'), 'vpn mode pill becomes active');
   assert.ok(splitPill('vpn').classList.contains('active'),
-    'splitMode follows mode: Global VPN (vpn) mode activates the vpn split pill');
+    'splitMode follows mode: VPN (vpn) mode activates the vpn split pill');
   assert.ok(!splitPill('off').classList.contains('active'), 'off split pill loses active');
   assert.ok(!splitPill('manual').classList.contains('active'), 'manual split pill stays inactive');
-  assert.ok(hint.textContent.includes('Global VPN'), 'hint describes Global VPN routing');
+  assert.ok(hint.textContent.includes('VPN — all traffic'), 'hint describes VPN routing');
   // A mode pill never posts set_split_mode itself — the split state is a local mirror.
   assert.equal(dash.postsWith('set_split_mode').length, 0, 'no set_split_mode posted by a mode pill');
 
@@ -704,7 +1314,11 @@ test('dashboard: applySkin swaps the host to the skin and back (body[data-skin] 
   assert.equal(getComputedStyle(appFrame).display, 'none', 'app frame hidden while the skin is active');
   assert.equal(dash.window.localStorage.getItem('aogpn.skin'), 'cyber', 'active skin persisted');
   assert.ok(document.querySelector('#topSkinRow [data-skin="cyber"]').classList.contains('active'), 'picker button active');
-  assert.equal(document.getElementById('skinBadgeName').textContent, 'CYBER', 'title-bar badge follows');
+  // Title bar shows exactly ONE appearance selector (the theme button): the
+  // skin badge pill was removed as a duplicate — skins stay in the popover's
+  // skin row + the grid-icon skin manager button.
+  assert.equal(document.getElementById('skinBadge'), null, 'skin badge pill removed');
+  assert.ok(document.getElementById('topThemeBtn'), 'theme button remains');
 
   // Back to the classic dashboard.
   dash.window.applySkin('standard');
@@ -713,7 +1327,54 @@ test('dashboard: applySkin swaps the host to the skin and back (body[data-skin] 
   assert.equal(getComputedStyle(appFrame).display, 'flex', 'classic UI back');
   assert.equal(getComputedStyle(skinHost).display, 'none', 'host hidden via CSS');
   assert.equal(dash.window.localStorage.getItem('aogpn.skin'), 'standard', 'standard persisted');
-  assert.equal(document.getElementById('skinBadgeName').textContent, 'Standard');
+  dash.close();
+});
+
+// ---------------------------------------------------------------------------
+// Title-bar theme popover — every theme as a named palette card (single
+// appearance selector; no more anonymous swatches or duplicate buttons)
+// ---------------------------------------------------------------------------
+
+test('dashboard: theme popover lists ALL themes as named palette cards', async () => {
+  const dash = await bootDashboard();
+  const { document } = dash.window;
+  const themeBtn = document.getElementById('topThemeBtn');
+  const popover = document.getElementById('topThemePopover');
+  const grid = document.getElementById('topThemeGrid');
+  assert.ok(themeBtn && popover && grid, 'popover structure exists');
+  assert.equal(document.getElementById('skinBadge'), null, 'no duplicate skin-badge selector');
+
+  // Boot renders the popover grid (renderTopThemePopover runs at startup).
+  const cards = grid.querySelectorAll('[data-theme-id]');
+  const total = dash.window.aogpn.theme.THEMES.length;
+  assert.equal(cards.length, total, 'every registered theme has a card');
+  assert.ok(total >= 20, 'theme registry is complete');
+
+  // Every card is a named palette card: gradient swatch + name + tagline.
+  const first = cards[0];
+  assert.ok(first.querySelector('.dash-theme-swatch'), 'gradient swatch present');
+  assert.ok(first.querySelector('.dash-theme-name').textContent.trim().length > 0, 'theme name shown');
+  assert.ok(first.querySelector('.dash-theme-signal').textContent.trim().length > 0, 'palette tagline shown');
+  const names = Array.from(cards).map(c => c.querySelector('.dash-theme-name').textContent.trim());
+  assert.equal(new Set(names).size, cards.length, 'theme names are unique');
+
+  // The current theme is marked active and clicking a card applies + persists.
+  const current = dash.window.aogpn.theme.getCurrentThemeId();
+  const active = grid.querySelector('.dash-theme-btn.active');
+  assert.ok(active, 'active card marked');
+  assert.equal(active.dataset.themeId, current, 'active card = current theme');
+  const target = cards[0].dataset.themeId === current ? cards[1] : cards[0];
+  target.click();
+  assert.equal(dash.window.aogpn.theme.getCurrentThemeId(), target.dataset.themeId, 'click applies the theme');
+  assert.equal(dash.window.localStorage.getItem('aogpn.theme'), target.dataset.themeId, 'choice persisted');
+  assert.ok(grid.querySelector('.dash-theme-btn.active').dataset.themeId === target.dataset.themeId, 'active card follows');
+  assert.ok(popover.classList.contains('hidden'), 'popover closes after picking');
+
+  // Clicking the theme button re-opens the popover (single toggle, no double).
+  themeBtn.click();
+  assert.ok(!popover.classList.contains('hidden'), 'button re-opens the popover');
+  themeBtn.click();
+  assert.ok(popover.classList.contains('hidden'), 'second click closes it (wired exactly once)');
   dash.close();
 });
 
@@ -1249,7 +1910,7 @@ test('dashboard: Global VPN forces TUN transport; back to GPN frees it', async (
   assert.deepEqual(dash.postsWith('set_connection_mode').at(-1), { action: 'set_connection_mode', mode: 'vpn' });
   click(dash, document.getElementById('connectBtn'));
   assert.deepEqual(dash.postsWith('toggle_connection').at(-1),
-    { action: 'toggle_connection', mode: 'vpn', transport: 'tun', protocol: 'auto' },
+    { action: 'toggle_connection', mode: 'vpn', transport: 'tun', protocol: 'auto', connected: true },
     'CONNECT in Global VPN always uses TUN');
   dash.window.setNexusConnected(false);
 
@@ -1413,7 +2074,7 @@ async function assertConnectMatrixRow(R_mode, R_transport, R_split, rMode, rTran
   clickSel(dash, '#connectBtn');
   const toggle = dash.postsWith('toggle_connection').at(-1);
   assert.deepEqual(toggle,
-    { action: 'toggle_connection', mode: rMode, transport: rTransport, protocol: 'auto' },
+    { action: 'toggle_connection', mode: rMode, transport: rTransport, protocol: 'auto', connected: false },
     '[' + R_mode + '/' + R_transport + '/' + R_split + '] CONNECT carries the resolved state — ' + why);
   assert.ok(!('splitMode' in toggle),
     'splitMode is delivered via set_split_mode, never inside toggle_connection (host contract)');
@@ -1507,8 +2168,9 @@ test('dashboard: setAvailabilityInfo shows measured latency and IP in the Ping c
   await new Promise(res => setImmediate(res));
   dash.window.setAvailabilityInfo({ delayMs: 36, ip: '92.4.220.236', country: 'IT' });
   assert.equal(pingVal.textContent, '36');
-  assert.match(pingSub.textContent, /\(İtalya · IT\)/, 'ping sub shows translated name + code');
-  assert.match(pingSub.textContent, /92\.4\.220\.236/);
+  // Çıkış IP'si açık "çıkış" etiketiyle gösterilir (düğümden ayrı kavram):
+  // "36 ms · çıkış: İtalya (IT) · 92.4.220.236" — köprüleme yanılgısını önler.
+  assert.match(pingSub.textContent, /çıkış: İtalya \(IT\) · 92\.4\.220\.236/, 'ping sub shows the labeled exit IP with translated name + code');
   assert.match(ipCountry.textContent, /^İtalya \(IT\) · 92\.4\.220\.236$/, 'IP card: name (code) · IP');
 
   dash.close();
@@ -1584,16 +2246,12 @@ test('dashboard: connection failure card shows why the connect failed', async ()
   dash.close();
 });
 
-test('dashboard: GPN connect button posts gpn_connect and locks while pending', async () => {
+test('dashboard: standalone GPN Connect card removed — main CONNECT is the single entry point', async () => {
   const dash = await bootDashboard();
   const { document } = dash;
-  const btn = document.getElementById('gpnConnectBtn');
-  assert.ok(btn, 'distinct GPN Connect button exists');
-
-  click(dash, btn);
-  assert.ok(dash.postsWith('gpn_connect').length >= 1, 'button posts gpn_connect to the host');
-  assert.equal(document.getElementById('gpnConnectState').textContent, '…', 'badge enters pending state');
-  assert.equal(btn.disabled, true, 'button locks while pending');
+  assert.equal(document.getElementById('gpnConnectBtn'), null, 'distinct GPN Connect card is gone');
+  assert.equal(document.getElementById('gpnConnectState'), null, 'its state badge is gone too');
+  assert.ok(document.getElementById('connectBtn'), 'the main CONNECT button remains the entry point');
 
   dash.close();
 });
@@ -1606,8 +2264,11 @@ test('dashboard: server management renders gpn_servers and posts CRUD actions', 
   const dash = await bootDashboard();
   const { document } = dash;
 
-  // Open the GPN Servers view: the host list request must be posted.
-  assert.ok(dash.openView('gpnServers'), 'gpnServers nav item must exist');
+  // Open the VPN Routes view: the merged GPN servers panel must exist and the
+  // host list request must be posted.
+  assert.ok(dash.openView('nodes'), 'nodes nav item must exist');
+  assert.ok(document.getElementById('gpnServersPanel'), 'GPN servers panel lives inside the nodes view');
+  assert.ok(document.getElementById('viewGpnServers') === null, 'standalone GPN servers view is gone');
   assert.ok(dash.postsWith('gpn_servers_list').length >= 1, 'opening the view requests the catalog');
 
   // Push catalog metadata (private key never leaves the host).
@@ -1653,7 +2314,7 @@ test('dashboard: server management renders gpn_servers and posts CRUD actions', 
 test('dashboard: server management shows live latency + UDP probes from the host', async () => {
   const dash = await bootDashboard();
   const { document } = dash;
-  assert.ok(dash.openView('gpnServers'), 'opens the GPN Servers view');
+  assert.ok(dash.openView('nodes'), 'opens the VPN Routes view with the merged GPN servers panel');
   assert.ok(dash.postsWith('gpn_servers_probe').length >= 1,
     'opening the view triggers a live probe');
 
@@ -1672,8 +2333,8 @@ test('dashboard: server management shows live latency + UDP probes from the host
   click(dash, document.getElementById('gpnProbeBtn'));
   assert.ok(dash.postsWith('gpn_servers_probe').length >= 2, 'Measure button re-probes');
 
-  // Leaving the view stops the periodic probe loop.
-  assert.ok(dash.openView('nodes'), 'switches to another view');
+  // Leaving the nodes view stops the periodic probe loop.
+  assert.ok(dash.openView('dashboard'), 'switches to another view');
   const before = dash.postsWith('gpn_servers_probe').length;
   await new Promise(r => setTimeout(r, 400));
   assert.equal(dash.postsWith('gpn_servers_probe').length, before,
@@ -1707,7 +2368,7 @@ test('dashboard: server management delete requires confirmation and posts gpn_se
 test('dashboard: embedded defaults status renders and restore posts gpn_defaults_restore', async () => {
   const dash = await bootDashboard();
   const { document } = dash;
-  assert.ok(dash.openView('gpnServers'), 'opens the GPN Servers view');
+  assert.ok(dash.openView('nodes'), 'opens the VPN Routes view with the merged GPN servers panel');
 
   const body = document.getElementById('gpnDefaultsStatus');
   const restoreBtn = document.getElementById('gpnDefaultsRestoreBtn');
@@ -1907,100 +2568,43 @@ test('dashboard: soft node-switch drain progress renders on the status line and 
   dash.close();
 });
 
-test('dashboard: server cluster card renders live Italy/Germany latency, best badge, and measure post', async () => {
+test('dashboard: server cluster card removed; Advanced & Diagnostics moved to Settings → GPN', async () => {
   const dash = await bootDashboard();
   const { document } = dash.window;
-  const list = document.getElementById('gpnClusterList');
-  const ping = document.getElementById('gpnClusterPing');
-  assert.ok(list && ping, 'server cluster card exists in the GPN panel');
-  assert.ok(list.textContent.includes('No active servers'), 'empty placeholder shown before servers arrive');
+  // Sunucu kümesi kartı kaldırıldı — aynı sunucuları/ölçümü Sunucu Yönetimi
+  // (VPN Rotaları → gpnServersPanel) zaten gösteriyor.
+  assert.equal(document.getElementById('gpnClusterList'), null, 'cluster list card removed from the GPN panel');
+  assert.equal(document.getElementById('gpnClusterPing'), null, 'cluster ping badge removed');
+  assert.equal(document.getElementById('gpnClusterProbe'), null, 'cluster measure button removed');
+  assert.equal(document.getElementById('gpnClusterEgressHint'), null, 'cluster egress hint removed');
+  // Gelişmiş & Teşhis toggle'ı da GPN panelinden kalktı; kartları Ayarlar → GPN'de.
+  assert.equal(document.getElementById('gpnAdvancedToggle'), null, 'advanced toggle removed from the connection centre');
+  const gpnPanel = document.getElementById('panelGPN');
+  assert.ok(gpnPanel, 'GPN connection-centre panel still exists');
+  assert.equal(gpnPanel.querySelector('#gpnDiagFeed'), null, 'diag feed no longer lives in the GPN panel');
+  assert.equal(gpnPanel.querySelector('#gpnFailoverToggle'), null, 'failover toggle no longer lives in the GPN panel');
 
-  const panel = document.getElementById('panelGPN');
-  panel.classList.remove('hidden-panel');
-  dash.window.setGpnServers([
-    { serverId: '92.4.220.236:51820', name: 'İtalya', endpointHost: '92.4.220.236', endpointPort: '51820', isEnabled: true },
-    { serverId: '130.61.223.36:51820', name: 'Almanya', endpointHost: '130.61.223.36', endpointPort: '51820', isEnabled: true },
-    { serverId: '69.69.69.69:51820', name: 'Kapalı', endpointHost: '69.69.69.69', endpointPort: '51820', isEnabled: false }
-  ]);
-  // Populating enabled servers on a visible GPN panel fires the one-time auto-probe.
-  assert.ok(dash.postsWith('gpn_cluster_probe').length >= 1, 'initial auto-probe posted on populate');
-
-  dash.window.setGpnServerProbes([
-    { serverId: '92.4.220.236:51820', isSuccess: true, delayMs: 42, lossPercent: 0, udpStatus: 'Open' },
-    { serverId: '130.61.223.36:51820', isSuccess: true, delayMs: 21, lossPercent: 2, udpStatus: 'Open' }
-  ]);
-
-  const rows = list.querySelectorAll('.rounded-lg');
-  assert.equal(rows.length, 2, 'two enabled server rows render (disabled excluded)');
-  const texts = list.textContent;
-  assert.ok(texts.includes('İtalya') && texts.includes('Almanya'), 'both servers named');
-  assert.ok(texts.includes('42 ms') && texts.includes('21 ms'), 'live latency values shown');
-  assert.ok(texts.includes('best'), 'lowest-latency healthy server highlighted as best');
-  assert.ok(texts.includes('2%'), 'loss shown for the lossy server');
-  assert.ok(ping.textContent.includes('2 open'), 'summary counts open servers');
-  assert.ok(ping.textContent.includes('21 ms'), 'summary shows best latency');
-
-  // Manual measure button posts the cluster probe action even while auto-pending.
-  click(dash, document.getElementById('gpnClusterProbe'));
-  assert.deepEqual(dash.postsWith('gpn_cluster_probe').at(-1),
-    { action: 'gpn_cluster_probe' }, 'measure posts gpn_cluster_probe');
+  assert.ok(dash.openView('settings'), 'settings view opens');
+  const tab = document.querySelector('[data-settings-tab="gpn"]');
+  assert.ok(tab, 'GPN settings tab exists');
+  const panel = document.querySelector('[data-settings-panel="gpn"]');
+  assert.ok(panel, 'GPN settings panel exists');
+  assert.ok(panel.classList.contains('hidden'), 'panel hidden until the tab is selected');
+  click(dash, tab);
+  assert.ok(!panel.classList.contains('hidden'), 'panel visible after selecting the tab');
+  assert.ok(panel.querySelector('#gpnDiagFeed'), 'diag feed card lives inside the settings panel');
+  assert.ok(panel.querySelector('#gpnFailoverToggle'), 'failover toggle lives inside the settings panel');
+  assert.ok(panel.querySelector('#gpnCaptureSetQueueLen'), 'WinDivert queue settings live inside the settings panel');
 
   dash.close();
 });
 
-test('dashboard: cluster card shows a physical-NIC hint while the tunnel is active', async () => {
+test('dashboard: opening Settings primes the GPN tab data (capture/wintun/probe)', async () => {
   const dash = await bootDashboard();
-  const { document } = dash.window;
-  const hint = document.getElementById('gpnClusterEgressHint');
-  assert.ok(hint, 'egress hint element exists in the cluster card header');
-  assert.ok(hint.classList.contains('hidden'), 'hint hidden before a tunnel-active measurement');
-
-  dash.window.setGpnServers([
-    { serverId: '92.4.220.236:51820', name: 'İtalya', endpointHost: '92.4.220.236', endpointPort: '51820', isEnabled: true }
-  ]);
-
-  // Tunnel active: host reports the measurement ran over the physical NIC.
-  dash.window.setGpnServerProbes([
-    { serverId: '92.4.220.236:51820', isSuccess: true, delayMs: 42, lossPercent: 0, udpStatus: 'NoResponse', measuredOverPhysicalNic: true }
-  ]);
-  assert.ok(!hint.classList.contains('hidden'), 'hint visible when measured over the physical NIC');
-  assert.ok(hint.textContent.length > 0, 'hint carries a short label');
-  assert.ok(hint.title.length > 0, 'hint carries the explanatory tooltip');
-
-  // No tunnel: the hint disappears.
-  dash.window.setGpnServerProbes([
-    { serverId: '92.4.220.236:51820', isSuccess: true, delayMs: 42, lossPercent: 0, udpStatus: 'Open', measuredOverPhysicalNic: false }
-  ]);
-  assert.ok(hint.classList.contains('hidden'), 'hint hidden again when measured normally (ICMP)');
-
-  dash.close();
-});
-
-test('dashboard: cluster card falls back to the Open UDP probe RTT when ping is unavailable', async () => {
-  const dash = await bootDashboard();
-  const { document } = dash.window;
-  const list = document.getElementById('gpnClusterList');
-
-  dash.window.setGpnServers([
-    { serverId: '92.4.220.236:51820', name: 'İtalya', endpointHost: '92.4.220.236', endpointPort: '51820', isEnabled: true }
-  ]);
-
-  // Ping failed (tunnel active, ICMP skipped, handshake timeout) but the UDP probe
-  // is Open with a measured round-trip — the card shows the UDP RTT as the latency.
-  dash.window.setGpnServerProbes([{
-    serverId: '92.4.220.236:51820', isSuccess: false, delayMs: -1, lossPercent: 100,
-    udpStatus: 'Open', udpRoundTripMs: 42, measuredOverPhysicalNic: true
-  }]);
-  assert.ok(list.textContent.includes('42 ms'), 'UDP RTT shown as latency when ping unavailable');
-  assert.ok(!list.textContent.includes('100%'), 'ping loss not shown with the UDP-RTT fallback');
-
-  // UDP not Open — no fallback, latency stays em-dash.
-  dash.window.setGpnServerProbes([{
-    serverId: '92.4.220.236:51820', isSuccess: false, delayMs: -1, lossPercent: 100,
-    udpStatus: 'NoResponse', udpRoundTripMs: -1, measuredOverPhysicalNic: true
-  }]);
-  assert.ok(list.textContent.includes('—'), 'no latency when the UDP probe is not Open');
-
+  assert.ok(dash.openView('settings'), 'settings view opens');
+  assert.ok(dash.postsWith('get_gpn_capture_settings').length >= 1, 'capture settings requested on settings open');
+  assert.ok(dash.postsWith('get_gpn_wintun_settings').length >= 1, 'wintun settings requested on settings open');
+  assert.ok(dash.postsWith('gpn_servers_probe').length >= 1, 'live server probe refreshed on settings open');
   dash.close();
 });
 
@@ -2589,5 +3193,61 @@ test('dashboard: Appearance tab renders the theme deck and applies a theme on cl
   const post = dash.postsWith('set_theme').at(-1);
   assert.equal(post && post.theme, 'matrix', 'theme change is posted to the host');
   assert.ok(matrix.classList.contains('active'), 'applied card carries the active state');
+  dash.close();
+});
+
+test('dashboard: monitor groups same-app connections under an expandable header', async () => {
+  const dash = await perfWithSnapshot([
+    { id: 1, processName: 'Discord.exe', displayName: 'Discord', pid: 100, protocol: 'TCP', state: 'Established', remoteAddress: '1.1.1.1:443' },
+    { id: 2, processName: 'Discord.exe', displayName: 'Discord', pid: 100, protocol: 'TCP', state: 'Established', remoteAddress: '2.2.2.2:443' },
+    { id: 3, processName: 'Spotify.exe', displayName: 'Spotify', pid: 200, protocol: 'TCP', state: 'Established', remoteAddress: '3.3.3.3:443' }
+  ]);
+  const d = dash.document;
+  const body = d.getElementById('monitorConnectionsBody');
+
+  // Discord (2 connections) gets a group header; the single Spotify row stays flat.
+  const headers = body.querySelectorAll('.route-app-group');
+  assert.equal(headers.length, 1, 'only multi-connection apps become groups');
+  assert.ok(headers[0].textContent.includes('Discord'), 'group header carries the app name');
+  assert.ok(body.querySelectorAll('tr[data-app-group="Discord"]').length === 2, 'both Discord connections are members');
+  assert.ok(body.querySelectorAll('tr[data-app-group="Spotify"]').length === 1, 'single-app connection is a plain row');
+  assert.ok(!body.querySelector('tr[data-app-group="Spotify"]').classList.contains('hidden'), 'single rows are visible');
+  const memberRows = body.querySelectorAll('tr[data-app-group="Discord"]');
+  assert.ok(memberRows[0].classList.contains('hidden'), 'group starts collapsed');
+
+  // Clicking the header expands the group so the rows can be edited.
+  headers[0].querySelector('.route-app-group-btn').dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const after = body.querySelectorAll('tr[data-app-group="Discord"]');
+  assert.ok(!after[0].classList.contains('hidden'), 'header click expands the group');
+  assert.ok(!after[1].classList.contains('hidden'), 'all member rows expand together');
+  dash.close();
+});
+
+test('dashboard: boost groups same-game executables under an expandable header', async () => {
+  const dash = await boostWithApps([
+    { id: 1, processName: 'LeagueClientUx.exe', displayName: 'League of Legends', action: 'vpn' },
+    { id: 2, processName: 'LeagueClient.exe', displayName: 'League of Legends', action: 'vpn' },
+    { id: 3, processName: 'Discord.exe', displayName: 'Discord', action: 'vpn' }
+  ]);
+  const d = dash.document;
+  const body = d.getElementById('splitAppsBody');
+
+  const headers = body.querySelectorAll('.route-app-group');
+  assert.equal(headers.length, 1, 'League entries collapse under one group');
+  assert.ok(headers[0].textContent.includes('League of Legends'), 'group header carries the game name');
+  assert.equal(dash.rows().length, 3, 'all three rule rows are still present');
+  const leagueRows = body.querySelectorAll('tr[data-process-name^="League"]');
+  assert.equal(leagueRows.length, 2, 'both League executables are group members');
+  assert.ok(leagueRows[0].classList.contains('hidden'), 'game group starts collapsed');
+  const discordRow = body.querySelector('tr[data-process-name="Discord.exe"]');
+  assert.ok(discordRow && !discordRow.classList.contains('hidden'), 'single-app rows stay visible');
+
+  // Expand and edit a member row — the route select is live inside the group.
+  headers[0].querySelector('.route-app-group-btn').dispatchEvent(new dash.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.ok(!body.querySelector('tr[data-process-name="LeagueClient.exe"]').classList.contains('hidden'), 'header click expands the game group');
+  const select = dash.getRouteSelect('LeagueClient.exe');
+  select.value = 'direct';
+  select.dispatchEvent(new dash.window.Event('change', { bubbles: true }));
+  assert.ok(dash.postsWith('set_app_route').some(p => p.processName === 'LeagueClient.exe' && p.route === 'direct'), 'editing inside an expanded group posts the route');
   dash.close();
 });

@@ -19,8 +19,14 @@ public class MainWindowViewModelGpnTeardownTests
     {
         public int DisconnectCount;
         public int ConnectCount;
+        private readonly GpnConnectionSnapshot _snapshot;
 
-        public GpnConnectionSnapshot Snapshot => GpnConnectionSnapshot.Idle();
+        public FakeGpnCoordinator(GpnConnectionSnapshot? snapshot = null)
+        {
+            _snapshot = snapshot ?? GpnConnectionSnapshot.Idle();
+        }
+
+        public GpnConnectionSnapshot Snapshot => _snapshot;
 
         public IObservable<GpnConnectionSnapshot> Snapshots =>
             Observable.Never<GpnConnectionSnapshot>();
@@ -81,5 +87,59 @@ public class MainWindowViewModelGpnTeardownTests
         await MainWindowViewModel.StopGpnCoordinatorWhenNotConnectedAsync(
             gpnConnected: false,
             coordinator: null);
+    }
+
+    // ── Aktif tünel teardown'u (StopGpnTunnelIfActiveAsync) ──
+
+    [Fact]
+    public async Task StopGpnTunnel_WhenCoordinatorConnected_Disconnects()
+    {
+        var coordinator = new FakeGpnCoordinator(new GpnConnectionSnapshot(
+            GpnConnectionState.Connected, ConnectionMode.WireGuardUDP, null, "WireGuard", DateTimeOffset.UtcNow));
+
+        await MainWindowViewModel.StopGpnTunnelIfActiveAsync(coordinator);
+
+        coordinator.DisconnectCount.Should().Be(1, "bağlı tünel kesmede durdurulur");
+    }
+
+    [Fact]
+    public async Task StopGpnTunnel_WhenCoordinatorConnecting_Disconnects()
+    {
+        var coordinator = new FakeGpnCoordinator(new GpnConnectionSnapshot(
+            GpnConnectionState.Connecting, ConnectionMode.WireGuardUDP, null, "ölçülüyor", DateTimeOffset.UtcNow));
+
+        await MainWindowViewModel.StopGpnTunnelIfActiveAsync(coordinator);
+
+        coordinator.DisconnectCount.Should().Be(1, "bağlanıyor durumundaki tünel de durdurulur");
+    }
+
+    [Fact]
+    public async Task StopGpnTunnel_WhenCoordinatorIdle_IsNoOp()
+    {
+        var coordinator = new FakeGpnCoordinator(); // Disconnected (Idle)
+
+        await MainWindowViewModel.StopGpnTunnelIfActiveAsync(coordinator);
+
+        coordinator.DisconnectCount.Should().Be(0, "kopuk koordinatörde teardown gerekmez");
+    }
+
+    [Fact]
+    public async Task StopGpnTunnel_WhenCoordinatorNull_IsNoOp()
+    {
+        await MainWindowViewModel.StopGpnTunnelIfActiveAsync(coordinator: null);
+    }
+
+    // ── GPN akış kararı (ShouldRunGpnFlow) — kullanıcı seçimi yetkilidir ──
+
+    [Theory]
+    [InlineData(SplitTunnelViewModel.ModeManual, true, true, "GPN modu + TUN → GPN akışı")]
+    [InlineData(SplitTunnelViewModel.ModeManual, false, false, "GPN modu ama TUN kapalı → normal akış (TUN GPN tüneli için zorunlu)")]
+    [InlineData(SplitTunnelViewModel.ModeVpn, true, false, "VPN modu + TUN → NORMAL akış — WireGuard profili seçili olsa bile VPN seçimi GPN akışını çalıştırmaz")]
+    [InlineData(SplitTunnelViewModel.ModeVpn, false, false, "VPN modu + TUN kapalı → normal akış")]
+    [InlineData(SplitTunnelViewModel.ModeOff, true, false, "Mod kapalı → GPN akışı yok")]
+    public void ShouldRunGpnFlow_FollowsUserModeNotProfileType(int userMode, bool tunEnabled, bool expected, string reason)
+    {
+        MainWindowViewModel.ShouldRunGpnFlow(userMode, tunEnabled)
+            .Should().Be(expected, reason);
     }
 }

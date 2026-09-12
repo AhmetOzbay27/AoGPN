@@ -29,6 +29,28 @@ public sealed class DashboardMessageDispatcher
     // logged, so a dead renderer→host channel is visible in the diag log.
     private bool _firstRendererMessageLogged;
 
+    // ---- Single-level undo for app removals / route changes ----
+    // The dashboard keeps ONE undo slot: every remove_app, set_app_route (route
+    // change or quick-add by name) replaces it; other app mutations clear it so
+    // the toast never offers a stale restore. Undo is consumed by
+    // undo_last_app_op and re-pushes the authoritative snapshot.
+    private enum AppUndoKind { Remove, Route, Add }
+
+    private sealed record AppUndoRecord(
+        AppUndoKind Kind,
+        string ProcessName,
+        string? DisplayName,
+        string Action,
+        string? WarpNodeIndexId,
+        string? WarpNodeName);
+
+    private AppUndoRecord? _lastAppUndo;
+
+    private static readonly JsonSerializerOptions UndoJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
     // The bridge accepts only small, strict JSON objects from the WebView2 renderer.
     private static readonly JsonDocumentOptions WebMessageJsonOptions = new()
     {
@@ -109,7 +131,14 @@ public sealed class DashboardMessageDispatcher
                     {
                         requestedTransport = requestedTransportValue;
                     }
-                    await ToggleConnectionAsync(requestedMode, requestedTransport);
+                    // Kullanıcının EKRANDA GÖRDÜĞÜ durum (varsa) istekle birlikte taşınır:
+                    // yön bu niyetten türetilir, canlı çekirdek durumundan değil. Aksi
+                    // halde arka planda kurulan bir tünel arayüzde hâlâ "Bağlan"
+                    // görünürken gelen tıklama "kes"e dönüşüp taze tüneli yıkıyordu.
+                    bool? displayedConnected = TryGetBooleanProperty(root, "connected", out var displayedConnectedValue)
+                        ? displayedConnectedValue
+                        : null;
+                    await ToggleConnectionAsync(requestedMode, requestedTransport, displayedConnected);
                     break;
 
                 case "gpn_connect":
@@ -516,8 +545,28 @@ public sealed class DashboardMessageDispatcher
                     TryGetStringProperty(root, "warpNodeName", out var routeWarpNodeName);
                     if (ViewModel?.ConnectionViewModel is { } routeViewModel)
                     {
+                        // Pre-op state snapshot for the undo slot: an existing entry
+                        // records its previous route (incl. WARP egress node); a new
+                        // entry (quick-add by name) records that it was added.
+                        var existingRoute = routeViewModel.Apps.FirstOrDefault(a => a.EntryType == "app"
+                            && a.Value.Equals(routeProcess, StringComparison.OrdinalIgnoreCase));
                         var applied = await routeViewModel.SetDashboardAppRouteAsync(
                             routeProcess, routeDisplayName, routeAction, routeWarpNode, routeWarpNodeName);
+                        if (applied)
+                        {
+                            var effectiveWarp = routeAction == "warp" ? (routeWarpNode ?? string.Empty).Trim() : string.Empty;
+                            var changed = existingRoute is null
+                                || existingRoute.Action != routeAction
+                                || !string.Equals(existingRoute.WarpNodeIndexId ?? string.Empty, effectiveWarp, StringComparison.OrdinalIgnoreCase);
+                            if (changed)
+                            {
+                                _lastAppUndo = existingRoute is null
+                                    ? new AppUndoRecord(AppUndoKind.Add, routeProcess, routeDisplayName, routeAction, routeWarpNode, routeWarpNodeName)
+                                    : new AppUndoRecord(AppUndoKind.Route, existingRoute.Value, existingRoute.DisplayName,
+                                        existingRoute.Action, existingRoute.WarpNodeIndexId, null);
+                                await PushUndoStateAsync();
+                            }
+                        }
                         await PushMonitorSnapshotAsync(force: true);
                         await NotifyNodesOpAsync(applied ? "Application route saved" : "Application route was rejected");
                     }
@@ -566,6 +615,8 @@ public sealed class DashboardMessageDispatcher
                     if (ViewModel?.ConnectionViewModel is { } addAppViewModel
                         && UI.OpenFileDialog(out var appPath, "Applications|*.exe|All files|*.*") == true)
                     {
+                        // New app mutations replace (not stack) the undo slot.
+                        await ClearAppUndoAsync();
                         await addAppViewModel.AddDashboardAppAsync(appPath);
                         await PushMonitorSnapshotAsync(force: true);
                     }
@@ -580,6 +631,8 @@ public sealed class DashboardMessageDispatcher
                         if (_bridge.TryResolveExecutablePath(pid, out var runningPath)
                             && !IsProtectedProcessPath(runningPath))
                         {
+                            // New app mutations replace (not stack) the undo slot.
+                            await ClearAppUndoAsync();
                             await runningAppViewModel.AddDashboardAppAsync(runningPath);
                             await PushMonitorSnapshotAsync(force: true);
                             await NotifyNodesOpAsync("Running application added");
@@ -617,13 +670,53 @@ public sealed class DashboardMessageDispatcher
                         var target = removeAppViewModel.Apps
                             .FirstOrDefault(a => a.EntryType == "app" &&
                                 a.Value.Equals(removeProcessName, StringComparison.OrdinalIgnoreCase));
+                        // Eski render'larda domain/IP satırları da remove_app gönderiyordu
+                        // (silme butonu sessizce çalışmıyordu). App eşleşmesi yoksa rule
+                        // girişlerinde de ara — hiçbir satırın silme butonu no-op kalmasın.
+                        if (target is null)
+                        {
+                            TryGetStringProperty(root, "entryType", out var removeEntryType);
+                            target = removeEntryType is "domain" or "ip"
+                                ? removeAppViewModel.Apps.FirstOrDefault(a =>
+                                    a.EntryType == removeEntryType &&
+                                    a.Value.Equals(removeProcessName, StringComparison.OrdinalIgnoreCase))
+                                : removeAppViewModel.Apps.FirstOrDefault(a => a.EntryType != "app" &&
+                                    a.Value.Equals(removeProcessName, StringComparison.OrdinalIgnoreCase));
+                        }
                         if (target is not null)
                         {
+                            // Record the removed entry (value + route + WARP egress)
+                            // so undo can re-add it exactly as it was.
+                            _lastAppUndo = new AppUndoRecord(AppUndoKind.Remove, target.Value, target.DisplayName,
+                                target.Action, target.WarpNodeIndexId, null);
+                            await PushUndoStateAsync();
                             removeAppViewModel.SelectedApp = target;
                             removeAppViewModel.RemoveAppCmd.Execute().Subscribe();
                             await PushMonitorSnapshotAsync(force: true);
                         }
                     }
+                    break;
+
+                case "remove_route":
+                    // Rule (domain/IP) removal from Game Boost: identifies the entry
+                    // by type + value, exactly like move_route. Apps keep the richer
+                    // remove_app path (undo slot); rules are removed directly and
+                    // cleanly through the same collection-change pipeline.
+                    if (TryGetStringProperty(root, "entryType", out var removeRouteType)
+                        && TryGetStringProperty(root, "value", out var removeRouteValue)
+                        && removeRouteValue.IsNotEmpty()
+                        && ViewModel?.ConnectionViewModel is { } removeRouteViewModel)
+                    {
+                        var removed = removeRouteViewModel.RemoveManualRoute(removeRouteType, removeRouteValue);
+                        await PushMonitorSnapshotAsync(force: true);
+                        await NotifyNodesOpAsync(removed
+                            ? "Route removed"
+                            : "Route could not be removed");
+                    }
+                    break;
+
+                case "undo_last_app_op":
+                    await UndoLastAppOpAsync();
                     break;
 
                 case "add_files":
@@ -638,6 +731,8 @@ public sealed class DashboardMessageDispatcher
                             .ToArray();
                         if (fileNames.Length > 0)
                         {
+                            // New app mutations replace (not stack) the undo slot.
+                            await ClearAppUndoAsync();
                             var resolved = await ResolveDropFilePathsAsync(fileNames);
                             if (resolved.Length > 0)
                             {
@@ -1156,8 +1251,8 @@ public sealed class DashboardMessageDispatcher
 
     private void HandleAppControl(string command) => _bridge.HandleAppControl(command);
 
-    private Task ToggleConnectionAsync(string requestedMode, string transport)
-        => _bridge.ToggleConnectionAsync(requestedMode, transport);
+    private Task ToggleConnectionAsync(string requestedMode, string transport, bool? displayedConnected)
+        => _bridge.ToggleConnectionAsync(requestedMode, transport, displayedConnected);
 
     private Task RunGpnConnectAsync()
         => _bridge.RunGpnConnectAsync();
@@ -1325,6 +1420,76 @@ public sealed class DashboardMessageDispatcher
 
     private Task PushMonitorSnapshotAsync(bool force = false)
         => _bridge.PushMonitorSnapshotAsync(force);
+
+    /// <summary>
+    /// Geri alma push'u: son kaldırma/rota değişikliği varsa toast için
+    /// window.setUndoAvailable({ kind, processName, displayName }) gönderir,
+    /// yoksa null (toast gizlenir).
+    /// </summary>
+    private Task PushUndoStateAsync()
+    {
+        var payload = _lastAppUndo is { } undo
+            ? JsonSerializer.Serialize(new
+            {
+                kind = undo.Kind.ToString().ToLowerInvariant(),
+                processName = undo.ProcessName,
+                displayName = undo.DisplayName ?? undo.ProcessName,
+            }, UndoJsonOptions)
+            : "null";
+        return _bridge.PushUndoStateAsync($"window.setUndoAvailable?.({payload});");
+    }
+
+    /// <summary>Undo slot'u temizler (yeni bir uygulama ekleme kaydı eski işlemi geçersiz kılar).</summary>
+    private Task ClearAppUndoAsync()
+    {
+        _lastAppUndo = null;
+        return PushUndoStateAsync();
+    }
+
+    /// <summary>
+    /// Son uygulama işlemini geri alır (tek seviye): kaldırılan uygulama eski
+    /// rotası/egress düğümüyle yeniden eklenir, rota değişikliği eski rotaya döner,
+    /// hızlı eklenen uygulama listeden çıkarılır. Ardından otoritatif snapshot
+    /// yeniden itilir ve undo slotu boşaltılır.
+    /// </summary>
+    private async Task UndoLastAppOpAsync()
+    {
+        if (ViewModel?.ConnectionViewModel is not { } undoViewModel || _lastAppUndo is not { } undo)
+        {
+            await NotifyNodesOpAsync("Nothing to undo");
+            return;
+        }
+
+        var applied = false;
+        switch (undo.Kind)
+        {
+            case AppUndoKind.Remove:
+            case AppUndoKind.Route:
+                // Geri almak = uygulamayı (kayıtlı rota + WARP egress düğümüyle)
+                // yeniden ekle ya da eski rotaya döndür — ikisi de dashboard'un
+                // tek giriş noktasından (SetDashboardAppRouteAsync) geçer.
+                applied = await undoViewModel.SetDashboardAppRouteAsync(
+                    undo.ProcessName, undo.DisplayName, undo.Action,
+                    undo.WarpNodeIndexId, undo.WarpNodeName);
+                break;
+
+            case AppUndoKind.Add:
+                var addedApp = undoViewModel.Apps.FirstOrDefault(a => a.EntryType == "app"
+                    && a.Value.Equals(undo.ProcessName, StringComparison.OrdinalIgnoreCase));
+                if (addedApp is not null)
+                {
+                    undoViewModel.SelectedApp = addedApp;
+                    undoViewModel.RemoveAppCmd.Execute().Subscribe();
+                    applied = true;
+                }
+                break;
+        }
+
+        _lastAppUndo = null;
+        await PushMonitorSnapshotAsync(force: true);
+        await PushUndoStateAsync();
+        await NotifyNodesOpAsync(applied ? "Last change undone" : "Nothing to undo");
+    }
 
     private Task PushProcessCatalogAsync()
         => _bridge.PushProcessCatalogAsync();

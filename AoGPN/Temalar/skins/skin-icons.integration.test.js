@@ -271,3 +271,60 @@ test('INFRA: app rows render the real exe icons', () => {
   assert.ok(cs2Row.querySelector('span'), 'app name still renders next to the icon');
   skin.close();
 });
+
+// ---------------------------------------------------------------------------
+// Real host bridge — skinBridge.appIcons must expose the LIVE cache
+// ---------------------------------------------------------------------------
+// The tests above hand the skins a bridge stub, so they can never catch a
+// broken REAL getter. Boot the real dashboard (real app.js + real views.js),
+// push a monitor snapshot and icons through the same window.setAppIcons path
+// the WPF host uses, and assert the getter the skins read at render time
+// returns the resolved icons instead of throwing.
+
+test('REAL bridge: skinBridge.appIcons returns the live icon cache after setAppIcons', async () => {
+  const { loadDashboard } = require('./skin-sandbox.js');
+  const dash = await loadDashboard({});
+  const w = dash.window;
+
+  w.updateMonitorSnapshot({
+    connected: false,
+    mode: 'manual',
+    apps: APPS.map(a => ({ ...a })),
+    connections: [],
+    activeConnectionCount: 0
+  });
+  w.setAppIcons({ icons: { ...ICONS } });
+
+  // The getter must not throw (it regressed to a ReferenceError when the icon
+  // cache moved into the views module) and must expose every resolved icon.
+  let icons;
+  assert.doesNotThrow(() => { icons = w.skinBridge.appIcons; }, 'skinBridge.appIcons must not throw');
+  assert.ok(icons, 'getter returns the cache');
+  assert.equal(icons['c:\\games\\cs2\\cs2.exe'], ICONS['c:\\games\\cs2\\cs2.exe'], 'resolved icon is reachable');
+  assert.equal(icons['c:\\program files\\google\\chrome\\application\\chrome.exe'], ICONS['c:\\program files\\google\\chrome\\application\\chrome.exe'], 'second resolved icon is reachable');
+  dash.close();
+});
+
+test('REAL bridge: skins swap the letter placeholder for the real icon on the same cache', async () => {
+  const { loadDashboard } = require('./skin-sandbox.js');
+  const dash = await loadDashboard({});
+  const w = dash.window;
+
+  w.updateMonitorSnapshot({
+    connected: false,
+    mode: 'manual',
+    apps: APPS.map(a => ({ ...a })),
+    connections: [],
+    activeConnectionCount: 0
+  });
+  w.setAppIcons({ icons: { ...ICONS } });
+
+  // The main tables render the real icon for cs2 and keep the placeholder for
+  // fortnite (unresolved) — same cache the skins read through the bridge.
+  const cs2Row = [...dash.document.querySelectorAll('#splitAppsBody tr[data-process-name="cs2"]')][0];
+  assert.ok(cs2Row && cs2Row.querySelector('img.app-icon'), 'boost table row uses the real icon');
+  assert.equal(cs2Row.querySelector('img.app-icon').getAttribute('src'), ICONS['c:\\games\\cs2\\cs2.exe']);
+  const fortniteRow = [...dash.document.querySelectorAll('#splitAppsBody tr[data-process-name="fortnite"]')][0];
+  assert.ok(fortniteRow && fortniteRow.querySelector('span.app-icon'), 'unresolved app keeps the letter placeholder');
+  dash.close();
+});

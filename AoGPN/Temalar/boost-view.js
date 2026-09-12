@@ -272,6 +272,10 @@
     const processName = item.processName || item.value || '';
     const display = item.displayName || item.processName || item.value || 'Unknown';
     const iconCls = size === 'large' ? 'w-14 h-14' : size === 'medium' ? 'w-10 h-10' : 'w-8 h-8';
+    // Rule rows (domain/IP) need their type + value so the delete control can
+    // address them exactly (remove_route) — remove_app silently ignored them.
+    const entryType = item.entryType || 'app';
+    const entryValue = item.value || processName;
     const eff = effectiveRoute(item.action);
     const options = [
       ['', L('route.assign', 'Assign route…')],
@@ -289,7 +293,7 @@
       <div class="boost-view-tile-route">${routeBadge(eff, routeLabel(eff))}</div>
       <div class="boost-view-tile-actions">
         <select data-route-process="${esc(processName)}" data-route-display="${esc(display)}" title="${esc(L('route.assign', 'Assign route…'))}">${options}</select>
-        <button type="button" class="boost-view-tile-del" data-remove-process="${esc(processName)}" title="${esc(L('boost.view.del', 'Remove') + ' ' + display)}" aria-label="${esc(L('boost.view.del', 'Remove'))} ${esc(display)}">×</button>
+        <button type="button" class="boost-view-tile-del" data-remove-process="${esc(processName)}" data-remove-entry-type="${esc(entryType)}" data-remove-entry-value="${esc(entryValue)}" title="${esc(L('boost.view.del', 'Remove') + ' ' + display)}" aria-label="${esc(L('boost.view.del', 'Remove'))} ${esc(display)}">×</button>
       </div>
     </div>`;
   }
@@ -349,8 +353,14 @@
     if (del) {
       const processName = del.dataset.removeProcess;
       if (!processName) return;
+      const entryType = del.dataset.removeEntryType || 'app';
+      const entryValue = del.dataset.removeEntryValue || processName;
       if (!window.confirm(`Remove "${processName}" from the routing list?`)) return;
-      postToHost({ action: 'remove_app', processName });
+      if (entryType === 'app') {
+        postToHost({ action: 'remove_app', processName });
+      } else {
+        postToHost({ action: 'remove_route', entryType, value: entryValue });
+      }
     }
   });
 

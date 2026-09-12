@@ -88,7 +88,7 @@ sonra eklendi ve `AoGPN/docs/gpn-mihomo-integration.md` satır 38'de
   exe yolu doğrulanır. 7.26.42'de tam da yabancı istemcileri öldürmemek için
   düzeltildi. **Kalır.**
 - `ProcessService.StopAsync`/`Dispose` — AoGPN'nin kendi çocuk süreçleri.
-- `AmazTool/UpgradeApp.cs` — güncelleme sırasında AoGPN'nin kendisi.
+- `AoGPN.Updater/Program.cs` — güncelleme sırasında AoGPN'nin kendisi (AmazTool/UpgradeApp.cs bu yola birleştirilip silindi).
 - `MainWindow` 2955, `SplitTunnelViewModel` 559, `ConnectionMonitorViewModel` 546,
   `ProcessCatalogService` 154, `WindowsJobService` 60 — salt-okunur süreç aramaları.
 - `AoGPN/tmp-mihomo/*.ps1` — derlemeye girmeyen geliştirme kabuk scriptleri.

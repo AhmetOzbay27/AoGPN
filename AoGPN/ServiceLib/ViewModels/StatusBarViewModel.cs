@@ -469,14 +469,9 @@ public class StatusBarViewModel : MyReactiveObject
 
         if (blChange)
         {
-            try
-            {
-                await DispatcherRefreshIconInteraction.Handle(Unit.Default);
-            }
-            catch (UnhandledInteractionException<Unit, Unit>)
-            {
-                // Ignore
-            }
+            // Bildirim: StatusBarView yalnızca görünür legacy yüzeyde aktive olur;
+            // WebView2 yerleşiminde dinleyici yoktur ve çağrı hiç yapılmaz.
+            await DispatcherRefreshIconInteraction.TryHandleAsync(Unit.Default);
         }
     }
 
@@ -512,17 +507,10 @@ public class StatusBarViewModel : MyReactiveObject
         {
             NoticeManager.Instance.SendMessageEx(ResUI.TipChangeRouting);
             ReloadRequested.Publish();
-            try
-            {
-                await DispatcherRefreshIconInteraction.Handle(Unit.Default);
-            }
-            catch (UnhandledInteractionException<Unit, Unit>)
-            {
-                // StatusBarView yalnızca görünür legacy yüzeyde aktive olur;
-                // WebView2 yerleşiminde görünüm hiç yüklenmeyebilir ve handler
-                // kayıtlı olmayabilir — tepsi ikonu zaten kendi güncellemesini
-                // ctor'da alır (bkz. ChangeSystemProxyAsync'teki aynı koruma).
-            }
+            // Bildirim: WebView2 yerleşiminde StatusBarView hiç yüklenmeyebilir ve
+            // dinleyici kayıtlı olmayabilir — tepsi ikonu zaten kendi güncellemesini
+            // ctor'da alır (bkz. ChangeSystemProxyAsync'teki aynı koruma).
+            await DispatcherRefreshIconInteraction.TryHandleAsync(Unit.Default);
         }
     }
 
@@ -559,18 +547,10 @@ public class StatusBarViewModel : MyReactiveObject
             }
             else
             {
-                string? password;
-                try
-                {
-                    password = await PasswordInputInteraction.Handle(Unit.Default);
-                }
-                catch (UnhandledInteractionException<Unit, string?>)
-                {
-                    // Linux/macOS şifre istemi hiçbir görünüme kayıtlı değil
-                    // (WebView2 yerleşiminde StatusBarView aktive olmuyor) —
-                    // istem yoksa geçişi iptal et.
-                    password = null;
-                }
+                // Linux/macOS şifre istemi hiçbir görünüme kayıtlı değil (WebView2
+                // yerleşiminde StatusBarView aktive olmuyor) — istem yoksa geçişi
+                // iptal et. TryHandleResultAsync bu durumda istisna atmaz.
+                var (_, password) = await PasswordInputInteraction.TryHandleResultAsync(Unit.Default);
                 if (password.IsNullOrEmpty())
                 {
                     _config.TunModeItem.EnableTun = false;

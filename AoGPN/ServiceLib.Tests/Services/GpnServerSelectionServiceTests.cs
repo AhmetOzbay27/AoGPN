@@ -1795,6 +1795,30 @@ public class GpnServerSelectionServiceTests
         results[0].LossPercent.Should().Be(100);
     }
 
+    [Fact]
+    public async Task ProbeAllAsync_UnspecifiedEndpoint_ReportsFailure_NotThrows()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // 0.0.0.0 belirsiz adres ping hedefi olamaz — SendPingAsync ArgumentException
+        // fırlatırdı; guard ölçülemedi sonucu verir ve fırlatma oluşmaz.
+        var bogus = Server("bogus", "Yok") with { EndpointHost = "0.0.0.0" };
+
+        var results = await new GpnServerSelectionService().ProbeAllAsync(
+            [bogus],
+            new GpnProbeOptions
+            {
+                Samples = 1,
+                PerSampleTimeoutMs = 400,
+                Mode = GpnProbeMode.Icmp,
+            },
+            ct);
+
+        results.Should().HaveCount(1);
+        results[0].IsSuccess.Should().BeFalse();
+        results[0].DelayMs.Should().Be(-1);
+        results[0].LossPercent.Should().Be(100);
+    }
+
     // ── Yerel test sunucuları ─────────────────────────────────────────────
 
     private static async Task<UdpClient> StartEchoServerAsync(CancellationToken ct)

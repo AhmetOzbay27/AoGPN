@@ -518,10 +518,12 @@ internal sealed class DashboardPushService
             return;
         }
 
-        // The connection/split tables only exist on the Performance and Game Boost
-        // views. The 2 s poll skips serialization and DOM re-rendering while the user
-        // is elsewhere; entering those views requests a snapshot explicitly.
-        if (!force && _getActiveView() is not ("perf" or "boost"))
+        // The connection/split tables live on the Performance and Game Boost views
+        // and the Connection Center (dashboard) boost cards render from the same
+        // snapshot — all three need the 2 s poll so latency/route/run-state stay
+        // live. The poll skips serialization and DOM re-rendering while the user is
+        // elsewhere; entering these views requests a snapshot explicitly.
+        if (!force && _getActiveView() is not ("perf" or "boost" or "dashboard"))
         {
             return;
         }

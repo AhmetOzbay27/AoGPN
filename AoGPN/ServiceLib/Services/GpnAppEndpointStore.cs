@@ -399,6 +399,13 @@ public sealed class GpnAppEndpointStore : IDisposable
     /// </summary>
     private static async Task<int> IcmpDelayMsAsync(IPAddress address, CancellationToken ct)
     {
+        // 0.0.0.0/:: belirsiz adresler ping hedefi olamaz (SendPingAsync
+        // ArgumentException fırlatır) — kayıtlı uç nokta bozuksa ölçülemedi.
+        if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any))
+        {
+            return -1;
+        }
+
         try
         {
             using var ping = new Ping();

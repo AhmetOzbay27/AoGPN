@@ -30,6 +30,8 @@
     set connected(v) { aogpn.app.setConnectedRaw(v); },
     get connecting() { return aogpn.app.getConnecting(); },
     set connecting(v) { aogpn.app.setConnectingRaw(v); },
+    get transitioning() { return aogpn.app.getTransitioning(); },
+    set transitioning(v) { aogpn.app.setTransitioningRaw(v); },
     get mode() { return aogpn.app.getMode(); },
     set mode(v) { aogpn.app.setMode(v); },
     get transport() { return aogpn.app.getTransport(); },
@@ -67,6 +69,13 @@
   function setConnected(next, nextConnecting) {
     const wasConnected = st.connected;
     st.connected = next;
+    // The host's transition flag is independent of the connected bit: during a
+    // GPN<->VPN mode switch the tunnel stays connected (next === true) while a
+    // transition is in flight. Guards that must not let stale echoes override
+    // the user's choice read `transitioning` (e.g. applySplitMode / snapshot
+    // mode sync); `connecting` remains the "spinner while the tunnel is down"
+    // signal for the button.
+    st.transitioning = nextConnecting === true;
     st.connecting = nextConnecting === true && !st.connected;
     body.classList.toggle('connected', st.connected);
     // The CONNECT ring only animates during a connection attempt (see
@@ -177,7 +186,7 @@
     if (!connectionStatusLine) {
       return;
     }
-    const routeLabel = st.mode === 'gpn' ? 'GPN Game Tunnel' : 'Global VPN';
+    const routeLabel = st.mode === 'gpn' ? 'GPN Game Tunnel' : 'VPN';
     const captureLabel = st.transport === 'tun' ? 'TUN' : 'Proxy';
     if (st.connected) {
       connectionStatusLine.className = 'text-xs text-emerald-300 leading-relaxed mt-4';
@@ -439,8 +448,20 @@
 
 
   window.setConnectionState = (next, backendMode, backendConnecting) => {
-    // Keep the st.mode pill truthful when a real AoGPN st.mode change completes.
-    if (backendMode === 'vpn' || backendMode === 'gpn') {
+    // Keep the st.mode pill truthful when a REAL AoGPN connection completes:
+    // the host's mode echo is only authoritative while the tunnel is actually
+    // up. While DISCONNECTED the user's own choice (the last pill they clicked,
+    // persisted in localStorage) must win — otherwise a stale/persisted config
+    // mode (e.g. 'vpn' from a previous session) gets re-pushed by the 2 s
+    // lifecycle sync and flips the pill away from what the user just selected.
+    //
+    // While a transition is IN FLIGHT (backendConnecting) the echo still
+    // carries the OLD persisted mode — applying it would flip the pill back to
+    // the previous mode right after the user clicked a new one (the "keeps
+    // going back to GPN" flip). The host echoes the settled mode only once the
+    // transition finishes (connected=true, connecting=false); until then the
+    // user's local pill choice stays authoritative.
+    if ((backendMode === 'vpn' || backendMode === 'gpn') && next === true && backendConnecting !== true) {
       st.mode = backendMode;
       applyMode();
     }
@@ -476,9 +497,8 @@
         break;
       case 'ModeDecision':
         text = 'GPN · ' + (evt.toMode === 'V2rayTCP' ? 'V2rayTCP' : 'WireGuard') + ' se\u00e7ildi';
-        // The distinctive GPN Connect button badge mirrors the chosen st.mode so the
-        // user sees Italy/Germany auto-selection landed even when the selected
-        // profile wasn't WireGuard.
+        // Son mod kararını bağlantı durumu kaydına yaz — standalone skin'lerin
+        // GPN Connect kartı skinBridge.gpnConnectState üzerinden aynı değeri görür.
         if (typeof aogpn.gpn.setGpnConnectState === 'function') {
           aogpn.gpn.setGpnConnectState(evt.toMode === 'V2rayTCP' ? 'V2rayTCP' : 'WG');
         }
@@ -525,10 +545,9 @@
     connectionStatusLine.className = cls;
     connectionStatusLine.textContent = text;
   };
-  // "GPN Bağlan" butonu durum rozeti: host (GpnResilience st.mode kararlarıyla)
-  // veya yerel tıklama sonrası durumu günceller.
-  // Son GPN Bağlan durumu (label + pending) — standalone skin'lerin GPN Connect
-  // kartı skinBridge.gpnConnectState üzerinden aynı değeri görür.
+  // GPN bağlantı durumu kaydı (label + pending) — host (GpnResilience mode
+  // kararlarıyla) günceller; standalone skin'lerin GPN Connect kartı
+  // skinBridge.gpnConnectState üzerinden aynı değeri görür.
   window.setGpnConnectionInfo = (info) => {
     if (!info) return;
     // GPN seçim kararı yeni, yetkili bir kaynaktır — hız testi bekleme penceresini
@@ -550,6 +569,10 @@
     if (pingSub && server) {
       const modeTxt = connMode ? (' · ' + connMode) : '';
       pingSub.textContent = server + ' · ' + (delay != null ? delay + ' ms' : 'ölçüm bekleniyor') + modeTxt;
+      // Ölçüm tünel İÇİNDEN HTTP gidiş-dönüşüdür (hız testi URL'si) — WireGuard
+      // el sıkışma gecikmesi değil; kullanıcı 11 ms gibi düşük değerleri okuyup
+      // yanlış anlamasın diye ipucu olarak açıklanır.
+      pingSub.title = t('telemetry.pingTip');
     }
 
     const sessionNode = document.getElementById('sessionNode');
@@ -588,15 +611,18 @@
       const parts = [];
       if (server) parts.push(server);
       if (delay != null) parts.push(delay + ' ms');
-      // Ülke kodu her zaman görünür; ad (yerelleştirilmiş ülke adı) yalnızca
-      // sunucu adı zaten önde değilse eklenir: "(IT) ip" veya "(İtalya · IT) ip".
+      // Çıkış IP'si düğümden AYRI bir kavramdır: "Almanya(130***36:51820) · 11 ms
+      // · çıkış: İtalya (IT) · 92.4.220.236" okunur. Açık "çıkış" etiketi,
+      // düğüm uç noktasının Almanya'da ama egress'in İtalya'da göründüğü durumda
+      // "uygulama Almanya'dan İtalya'ya köprüleme yapıyor" yanılgısını önler.
       let ipPart = '';
       if (ip) {
-        const cLabel = (!server && countryName) ? countryName + ' · ' + country : country;
-        ipPart = (country ? '(' + cLabel + ') ' : '') + ip;
+        const label = countryName ? countryName + ' (' + country + ')' : (country || '');
+        ipPart = t('telemetry.exitLabel', { country: label, ip });
       }
       if (ipPart) parts.push(ipPart);
       pingSub.textContent = parts.length ? parts.join(' · ') : t('telemetry.measuring');
+      pingSub.title = t('telemetry.pingTip');
     }
 
     // IP doğrulama kartına hız testinin ölçtüğü ülkeyi/sunucuyu + IP'yi yansıt
@@ -719,7 +745,22 @@
       } else if (isTunneled) {
         if (ipVerifyText) ipVerifyText.innerHTML = t('status.tunneled');
         if (ipVerifyText) ipVerifyText.className = 'text-sm font-semibold truncate mt-1 text-emerald-300';
-        if (ipVerifyDetail) ipVerifyDetail.textContent = data.transport === 'tun' ? t('ip.detail.tunActive') : t('ip.detail.socksVerified');
+        if (ipVerifyDetail) {
+          // Düğüm ülkesi ile çıkış ülkesi farklıysa (örn. düğüm Almanya, egress
+          // İtalya) amber uyarı — köprüleme değil; sunucunun çıkış ağı farklı
+          // ülkede görünüyor. Bu, "Almanya rotası seçtim ama CS2 Almanya
+          // sunucusu göstermiyor" beklentisinin kaynağını da açıklar.
+          if (data.exitMismatch) {
+            ipVerifyDetail.className = 'text-[11px] text-amber-300 truncate';
+            ipVerifyDetail.textContent = t('ip.exitMismatch', {
+              node: countryDisplayName(data.nodeCountry) || data.nodeCountry || '',
+              exit: countryDisplayName(data.tunnelCountry) || data.tunnelCountry || ''
+            });
+          } else {
+            ipVerifyDetail.className = 'text-[11px] text-[#8A94A6] truncate';
+            ipVerifyDetail.textContent = data.transport === 'tun' ? t('ip.detail.tunActive') : t('ip.detail.socksVerified');
+          }
+        }
       } else if (isConnected && !hasTunnelIp && !ispCached) {
         // ISP baseline not yet cached — first probe still pending.
         if (ipVerifyText) ipVerifyText.innerHTML = '<span class="theme-spinner theme-spinner-sm"></span> ' + t('status.probing');
@@ -764,9 +805,17 @@
         gs.innerHTML='<p class="text-sm font-semibold text-amber-300">' + t('global.probing') + '</p><p class="text-[11px] text-[#64748B] mt-1">' + t('global.probingDesc') + '</p>';
       }
     }
-    // Show verification success banner.
+    // Show verification success banner. The sentence is translated via the
+    // ip.okBanner key ({tunnel}/{isp} placeholders); the IP values keep their
+    // mono styling through inline spans so a language switch never clobbers them.
     if (ipOkBanner) {
       ipOkBanner.classList.toggle('hidden', !isTunneled);
+      if (isTunneled && ipOkText) {
+        const escIp = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const tunnelIp = escIp(data.tunnelIp || '');
+        const ispIp = escIp(data.ispIp || data.directIp || '');
+        ipOkText.innerHTML = t('ip.okBanner', { tunnel: '<span class="font-mono">' + tunnelIp + '</span>', isp: '<span class="font-mono">' + ispIp + '</span>' });
+      }
       if (isTunneled && ipOkTunnelIp) {
         ipOkTunnelIp.textContent = data.tunnelIp || '';
       }
@@ -816,15 +865,25 @@
     ipVerifyDetail.textContent = _ipVerifyBaseDetail + suffix;
   }
 
-  // Bağlıyken panel kendini yeniden ölçer: C# tarafının ~30 sn'lik döngüsüne
-  // rağmen bayat ölçümden kaynaklı yanlış "sızıntı" uyarısı en geç 25 sn'de
-  // düzeltilir (host `check_ip` ile ölçümü yeniler).
+  // Bağlıyken panel kendini yeniden ölçer: bayat ölçümden kaynaklı yanlış
+  // "sızıntı" uyarısı bu döngü sayesinde düzeltilir (host `check_ip` ile ölçümü
+  // yeniler).
+  //
+  // Aralık BİLEREK 25 sn → 90 sn'ye çıkarıldı: her `check_ip` tünelin İÇİNDEN
+  // ip.sb ailesine bir HTTPS isteği açar, yani canlı oyun trafiğiyle yarışan ek
+  // oturumlar üretir. C# tarafında (ConnectionLifecycleSupervisor) zaten kendi IP
+  // tazeleme döngüsü var; bu döngü yalnızca arayüzdeki yaş göstergesini tazeler.
+  // Pencere gizliyken (tepsiye küçültülmüş) hiç ölçüm yapılmaz — görünmeyen bir
+  // paneli güncel tutmanın karşılığı yok.
+  const IP_RECHECK_INTERVAL_MS = 90000;
   let _ipRecheckTimer = null;
   function startIpRecheckLoop() {
     stopIpRecheckLoop();
     _ipRecheckTimer = setInterval(() => {
-      if (st.connected) postToHost({ action: 'check_ip' });
-    }, 25000);
+      if (!st.connected) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      postToHost({ action: 'check_ip' });
+    }, IP_RECHECK_INTERVAL_MS);
   }
   function stopIpRecheckLoop() {
     if (_ipRecheckTimer) { clearInterval(_ipRecheckTimer); _ipRecheckTimer = null; }
@@ -837,6 +896,9 @@
     setConnected, updateConnectTooltip, updateStatusLine, applyMode, applyTransport,
     updateTransportLock, applyProtocolPreference, isProxyModeEnabled, syncQuickControls,
     applySystemProxyState, showConnectionError, applyRealIpState, applyIpFreshness,
+    // Tünelin bağlı olup olmadığı — GPN panelinin otomatik ölçüm aralığını
+    // seyreltmek için (bağlıyken ölçüm tünel trafiğiyle yarışır).
+    isConnected: () => st.connected === true,
     getConnectionError: () => _connectionError || null
   };
 })();

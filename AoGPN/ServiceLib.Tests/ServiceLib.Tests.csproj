@@ -18,6 +18,17 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
+    <!--
+      Yan güncelleyiciyi de DERLE (çıktısını referans alma). Uçtan uca güncelleme
+      testi (AppUpdaterEndToEndTests) taklit etmez: gerçek AoGPN.Updater.exe'yi
+      ayrı bir süreç olarak çalıştırır, bu yüzden derlenmiş olması gerekir.
+      ReferenceOutputAssembly=false: güncelleyici bir exe'dir ve derleme
+      bağımlılığı olsaydı test çıktısına kendi dosyalarını taşırdı.
+    -->
+    <ProjectReference Include="..\AoGPN.Updater\AoGPN.Updater.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <Private>false</Private>
+    </ProjectReference>
   </ItemGroup>
 
 </Project>

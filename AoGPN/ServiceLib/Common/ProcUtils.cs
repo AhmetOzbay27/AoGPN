@@ -46,6 +46,32 @@ public static class ProcUtils
         return null;
     }
 
+    /// <summary>
+    /// Uygulamayı aynı yetkiyle yeniden başlatır (yükseltme istemez). Windows
+    /// dışındaki platformlarda yapılandırma geri yükleme sonrası yeniden başlatma
+    /// için kullanılır; yönetici yükseltmesi gereken Windows yolu
+    /// <see cref="RebootAsAdmin"/> üzerinden yürür.
+    /// </summary>
+    /// <returns>Başlatıldıysa true.</returns>
+    public static bool RestartApplication()
+    {
+        try
+        {
+            ProcessStartInfo startInfo = new()
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Utils.StartupPath(),
+                FileName = Utils.GetExePath().AppendQuotes(),
+            };
+            return Process.Start(startInfo) != null;
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return false;
+        }
+    }
+
     public static bool RebootAsAdmin(bool blAdmin = true)
     {
         try

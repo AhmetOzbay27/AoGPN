@@ -42,7 +42,15 @@ public static class AoGpnDashboardServiceCollectionExtensions
         Func<CancellationToken> getWebViewToken,
         Func<GpnBypassEgressController?> getBypassEgressController,
         SystemProxyOnlyService proxyOnlyService,
-        Func<MainWindowViewModel?> getViewModel)
+        Func<MainWindowViewModel?> getViewModel,
+        Func<Func<Task>, Task> runOnUiThread,
+        Func<bool> readConnected,
+        Func<bool> readLastTunnelVerified,
+        Func<Task> synchronizeConnectionState,
+        Func<Task> checkIp,
+        Func<Task> suggestRealityCoreFallback,
+        Func<Task> updateTrayStatusAsync,
+        Func<Task> synchronizeWindowState)
     {
         ArgumentNullException.ThrowIfNull(services);
 
@@ -94,6 +102,31 @@ public static class AoGpnDashboardServiceCollectionExtensions
             getActiveView,
             getWebViewToken,
             getBypassEgressController));
+
+        // ConnectionLifecycleSupervisor — 2 sn'lik bağlantı-yaşam döngüsü poll'u
+        // (W4-A). Fan-out hedeflerinin dördü bu koleksiyonda kayıtlı dashboard
+        // servislerine gider; kalan çıktılar ctor delege parametreleridir. Karar
+        // kuralları (drift/IP tik sayacı) servisin kendi ctor parametreleriyle
+        // test edilir (ServiceLib.Tests).
+        services.AddSingleton(sp =>
+        {
+            var push = sp.GetRequiredService<DashboardPushService>();
+            var node = sp.GetRequiredService<DashboardNodeService>();
+            var settings = sp.GetRequiredService<DashboardSettingsService>();
+            return new ConnectionLifecycleSupervisor(
+                runOnUiThread,
+                readConnected,
+                readLastTunnelVerified,
+                synchronizeConnectionState,
+                () => push.PushRuleDriftAsync(),
+                checkIp,
+                suggestRealityCoreFallback,
+                updateTrayStatusAsync,
+                () => settings.PushSystemProxyStateAsync(),
+                () => push.PushMonitorSnapshotAsync(),
+                () => node.PushNodeInfoAsync(),
+                synchronizeWindowState);
+        });
 
         return services;
     }

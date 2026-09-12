@@ -155,6 +155,16 @@
   .dash-theme-btn.active .dash-theme-signal { color: rgba(var(--cyan-rgb),.9); }
   @media (max-width: 560px) { .theme-deck-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .theme-deck-current { display: none; } }
 
+  /* Compact variant of the same deck cards for the title-bar theme popover.
+     The popover grid reuses .dash-theme-btn so both pickers stay in sync, but
+     sized down; the grid itself scrolls invisibly when the theme list is taller
+     than the window (25 themes). */
+  #topThemePopover .dash-theme-btn { min-height: 44px; padding: 6px 8px; }
+  #topThemePopover .dash-theme-swatch { height: 3px; }
+  #topThemePopover .dash-theme-name { font-size: 10.5px; }
+  .theme-popover-grid { scrollbar-width: none; }
+  .theme-popover-grid::-webkit-scrollbar { display: none; }
+
   .theme-card {
     position: relative;
     overflow: hidden;

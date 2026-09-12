@@ -201,6 +201,25 @@ public sealed record GpnProbeOptions(
     /// bırakır — tünel yokken zaten fiziksel yoldan ölçülür, ICMP gösterimi korunur.
     /// </summary>
     public bool EscapeTunnelForProbes { get; init; } = false;
+
+    /// <summary>
+    /// Kısa ömürlü ölçüm önbelleğini kullan (<see cref="GpnProbeCache"/>).
+    ///
+    /// VARSAYILAN KAPALI ve bu bilinçlidir: yalnızca "aynı soruya aynı cevap"
+    /// beklenen çağrılar açar. Bağlanma yolu (kullanıcı kes→bağlan yaptığında
+    /// saniyeler içinde aynı ölçümü tekrarlamak anlamsızdır) açar; dashboard'ın
+    /// ⚡ Test düğmesi ve failover izleyicisi AÇMAZ — ikisi de her zaman taze
+    /// ölçüm ister (ölü bir sunucuyu önbellekten diri göstermek failover'ı
+    /// körleştirirdi).
+    /// </summary>
+    public bool UseCache { get; init; } = false;
+
+    /// <summary>
+    /// Bağlanma aşamalarının süre ölçümü (Faz 0 — tanı). Verilmezse ölçüm yapılmaz;
+    /// verilirse alt katmanlar (seçim, ölçüm, çekirdek başlatma) kendi aşamalarını
+    /// işaretler ve tek bir <c>GPN_TIMING</c> satırı üretilir.
+    /// </summary>
+    public GpnConnectTimeline? Timeline { get; init; }
 }
 
 /// <summary>
@@ -250,6 +269,16 @@ public interface IGpnServerSelectionService
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<GpnServerProbeResult>> ProbeAllAsync(
+        IReadOnlyList<GpnServerProfile> servers,
+        GpnProbeOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Ölçüm önbelleğini ÖNCEDEN ısıtır (açılış ön yüklemesi). Bağlanma yolundaki
+    /// aynı ölçümler kullanıcı beklemediği bir anda, paralel olarak yapılır; sonraki
+    /// "Bağlan" ölçümü büyük ölçüde önbellekten karşılanır. Hata fırlatmaz.
+    /// </summary>
+    Task WarmProbeCacheAsync(
         IReadOnlyList<GpnServerProfile> servers,
         GpnProbeOptions? options = null,
         CancellationToken cancellationToken = default);
@@ -328,6 +357,42 @@ public sealed class GpnServerSelectionService : IGpnServerSelectionService
     }
 
     /// <summary>
+    /// Adım 1 — paralel ICMP ping (mevcut <see cref="NodePingCoordinator"/> altyapısı).
+    /// Adım 2 (UDP sağlık testi) ile PARALEL koştuğu için ayrı bir fonksiyondur;
+    /// <see cref="GpnProbeOptions.UseCache"/> açıkken ölçümler kısa ömürlü
+    /// önbellekten karşılanır (bkz. <see cref="GpnServerProber.ProbeServerAsync"/>).
+    /// </summary>
+    private async Task<List<GpnServerProbeResult>> ProbePingPhaseAsync(
+        IReadOnlyList<GpnServerProfile> enabled,
+        GpnProbeOptions options,
+        CancellationToken cancellationToken)
+    {
+        var requests = enabled
+            .Select(s => new NodePingRequest(s.ServerId, token => _prober.ProbeDelayMsAsync(s, options, token)))
+            .ToArray();
+        var timeout = TimeSpan.FromMilliseconds(options.Samples * options.PerSampleTimeoutMs + 500);
+        var coordinator = new NodePingCoordinator(options.MaxConcurrency);
+        var pingResults = await coordinator.RunAsync(requests, timeout, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        var results = new List<GpnServerProbeResult>(enabled.Count);
+        foreach (var s in enabled)
+        {
+            var hit = pingResults.FirstOrDefault(r => r.Id == s.ServerId);
+            results.Add(new GpnServerProbeResult(
+                s.ServerId,
+                hit?.Delay ?? -1,
+                hit?.Delay ?? -1,
+                hit?.Delay ?? -1,
+                hit is { IsSuccess: true } ? 0 : 100,
+                hit is { IsSuccess: true }));
+        }
+
+        options.Timeline?.Mark("icmp-end");
+        return results;
+    }
+
+    /// <summary>
     /// "Bağlan" akışının girişi — Akıllı Düşüş (Smart Fallback) karar mekanizması:
     ///
     /// 1. İtalya ve Almanya'ya paralel ICMP ping atılır.
@@ -401,26 +466,20 @@ public sealed class GpnServerSelectionService : IGpnServerSelectionService
         // için el sıkışma/ICMP süresini bloklamaz). Sonuç aday sıralamasından önce beklenir.
         var ownIpTask = _hairpin.ResolveOwnPublicIpAsync(cancellationToken);
 
-        // ── Adım 1: Paralel ICMP ping (mevcut NodePingCoordinator altyapısı) ──
-        var requests = enabled
-            .Select(s => new NodePingRequest(s.ServerId, token => _prober.ProbeDelayMsAsync(s, options, token)))
-            .ToArray();
-        var timeout = TimeSpan.FromMilliseconds(options.Samples * options.PerSampleTimeoutMs + 500);
-        var coordinator = new NodePingCoordinator(options.MaxConcurrency);
-        var pingResults = await coordinator.RunAsync(requests, timeout, cancellationToken: cancellationToken);
+        // ── Adım 1 ve 2 PARALEL: ICMP ping ile UDP sağlık testi ─────────────
+        //
+        // İki faz BİRBİRİNDEN BAĞIMSIZDIR (ayrı soketler, ayrı sonuçlar) ve karar
+        // zaten ikisinin birleşiminden üretilir. Eskiden art arda beklenirlerdi:
+        // toplam bağlanma süresi ≈ ICMP fazı + UDP fazı. Artık ikisi birlikte
+        // koşar (≈ en yavaş faz) — bağlanma süresindeki en büyük tek kazanç budur.
+        //
+        // Her iki görev de burada BAŞLATILIR; ping sonucu aşağıda hemen, UDP
+        // sonucu karar anında await edilir. Yani UDP zaten arka planda ölçülürken
+        // ping sonuçları üzerinde CPU işi (sıralama) yapılır.
+        var pingTask = ProbePingPhaseAsync(enabled, options, cancellationToken);
+        var udpTask = _prober.ProbeUdpAllAsync(enabled, options, cancellationToken);
 
-        var results = new List<GpnServerProbeResult>(enabled.Length);
-        foreach (var s in enabled)
-        {
-            var hit = pingResults.FirstOrDefault(r => r.Id == s.ServerId);
-            results.Add(new GpnServerProbeResult(
-                s.ServerId,
-                hit?.Delay ?? -1,
-                hit?.Delay ?? -1,
-                hit?.Delay ?? -1,
-                hit is { IsSuccess: true } ? 0 : 100,
-                hit is { IsSuccess: true }));
-        }
+        var results = await pingTask.ConfigureAwait(false);
 
         var bestPing = results.Where(r => r.IsSuccess).OrderBy(r => r.DelayMs).FirstOrDefault();
 
@@ -433,8 +492,9 @@ public sealed class GpnServerSelectionService : IGpnServerSelectionService
         // sıkışması AÇIKKEN İtalya'nınki başarısızdı ve seçici V2rayTCP'ye düştü.
         // Artık tüm adayların UDP yolu ölçülür ve ping sırasına göre İLK
         // WireGuardUDP-uygun aday seçilir.
-        var udpAll = await _prober.ProbeUdpAllAsync(enabled, options, cancellationToken);
+        var udpAll = await udpTask.ConfigureAwait(false);
         var udpByServer = udpAll.ToDictionary(r => r.ServerId);
+        options.Timeline?.Mark("select-done");
 
         GpnServerProfile? candidate = null;
         UdpProbeResult? udpProbe = null;
@@ -894,11 +954,61 @@ public sealed class GpnServerSelectionService : IGpnServerSelectionService
         CancellationToken cancellationToken)
         => _prober.ProbeUdpAllAsync(servers, options, cancellationToken);
 
+    /// <summary>
+    /// Ölçüm önbelleğini önceden ısıtır. Ölçüm hataları yutulur: ön yükleme
+    /// başarısız olsa da bağlanma yolu her zaman kendi taze ölçümünü yapar.
+    /// </summary>
+    public async Task WarmProbeCacheAsync(
+        IReadOnlyList<GpnServerProfile> servers,
+        GpnProbeOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Ölçümler ve kendi genel IP çözümlemesi (hairpin teşhisi için) PARALEL
+            // ısıtılır: bağlanma yolunda ikisi de gerekir, açılışta ikisi de
+            // kullanıcı beklemiyorken yapılabilir.
+            await Task.WhenAll(
+                _prober.WarmCacheAsync(servers, options ?? new GpnProbeOptions(), cancellationToken),
+                WarmOwnPublicIpAsync(cancellationToken)).ConfigureAwait(false);
+            DiagLog.Write($"GPN_PREFLIGHT probe-cache warmed servers={servers.Count} cached={_prober.CachedProbeCount}");
+        }
+        catch (OperationCanceledException)
+        {
+            // Kapanış/açılış iptali — sessizce çık.
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog($"[{Tag}] Ölçüm önbelleği ısıtılamadı", ex);
+        }
+    }
+
     internal Task<UdpProbeResult> ProbeUdpAsync(
         GpnServerProfile server,
         GpnProbeOptions options,
         CancellationToken cancellationToken)
         => _prober.ProbeUdpAsync(server, options, cancellationToken);
+
+    /// <summary>
+    /// Kendi genel IP'sini (hairpin/öz-erişim teşhisi) önceden çözer. Zaten
+    /// önbellekli bir HTTP çözücüdür; bu çağrı yalnızca ilk turu açılışa taşır.
+    /// Hata yutulur — ön yükleme bağlanmayı asla engellemez.
+    /// </summary>
+    private async Task WarmOwnPublicIpAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var ownIp = await _hairpin.ResolveOwnPublicIpAsync(cancellationToken).ConfigureAwait(false);
+            DiagLog.Write($"GPN_PREFLIGHT own-ip resolved={(ownIp.IsNullOrEmpty() ? "no" : "yes")}");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog($"[{Tag}] Kendi genel IP ön çözümlemesi başarısız", ex);
+        }
+    }
 
     internal Task<IReadOnlySet<string>> ResolveHairpinServerIdsAsync(
         IReadOnlyList<GpnServerProfile> candidates,

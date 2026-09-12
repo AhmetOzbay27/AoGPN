@@ -948,12 +948,6 @@ public class Utils
 
     #region Miscellaneous
 
-    public static bool UpgradeAppExists(out string upgradeFileName)
-    {
-        upgradeFileName = Path.Combine(GetBaseDirectory(), GetExeName("AmazTool"));
-        return File.Exists(upgradeFileName);
-    }
-
     /// <summary>
     /// Get version
     /// </summary>

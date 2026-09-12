@@ -44,13 +44,28 @@ public class ProbeEgressNicTests
     [Fact]
     public void GetSnapshot_DoesNotThrow_AndIsCachedWithinTtl()
     {
-        // Gerçek ağ durumu ne olursa olsun snapshot üretilir; aynı TTL penceresi
-        // içindeki ikinci çağrı önbellekten AYNI örneği döndürür (her probe'da
-        // NIC numaralandırması yapılmaz).
+        // Gerçek ağ durumu ne olursa olsun snapshot üretilir; TTL penceresi
+        // İÇİNDEKİ ikinci çağrı önbellekten AYNI örneği döndürür (her probe'da NIC
+        // numaralandırması yapılmaz).
+        //
+        // Pencere DIŞINA çıkan ikinci çağrı ise haklı olarak taze numaralandırır.
+        // Bu, yüklü bir paralel koşuda (25 adaptörlü makinelerde BuildSnapshot
+        // saniyeler sürebilir) gerçekten oluyordu ve eski hâliyle test, ölçmediği
+        // bir zamanlama varsayımına dayandığı için kararsızca kırılıyordu.
+        // İddia artık pencerenin HER İKİ tarafını da doğrular.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var first = ProbeEgressNic.GetSnapshot();
         var second = ProbeEgressNic.GetSnapshot();
+        sw.Stop();
 
-        second.Should().BeSameAs(first);
+        if (sw.Elapsed < ProbeEgressNic.CacheTtl)
+        {
+            second.Should().BeSameAs(first, "TTL içindeki ikinci çağrı önbellekten döner");
+        }
+        else
+        {
+            second.Should().NotBeSameAs(first, "TTL dolduğunda taze numaralandırma beklenir");
+        }
     }
 
     [Fact]

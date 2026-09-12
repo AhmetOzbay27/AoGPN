@@ -59,6 +59,10 @@ public static class MihomoGlobalConfigService
                 ["auto-route"] = options.AutoRoute,
                 ["auto-detect-interface"] = false,
                 ["mtu"] = options.Mtu is > 0 ? options.Mtu.Value : Global.GpnRecommendedMtu,
+                // Loopback TUN'a ASLA düşmesin: auto-route /1 rotaları 127.0.0.0/8'i
+                // de yakalar; uygulamanın kendi SOCKS'una (127.0.0.1:10808) bağlantısı
+                // o zaman tünel içine girip döngü yapar (i/o timeout / SSL EOF).
+                ["route-exclude-address"] = new List<string> { "127.0.0.0/8" },
             };
 
             // TUN içinden geçen DNS sorgularını yakala (hijack) — fake-ip ile

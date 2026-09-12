@@ -73,14 +73,15 @@ public sealed class GpnCoreLauncher : IGpnConnectionLauncher
 
             // GPN tüneli için MTU iyileştirmesi (canlı ölçüm, Ağu 2026): yol ~1400
             // bayta kadar DF paketi taşıyor; 1420 MTU'lu dış paketler parçalanıyor ve
-            // kayıplı hatta çift parça kaybı yaşanıyor. TUN ve WireGuard MTU'sunu
-            // Global.GpnRecommendedMtu (1360) ile hizala — mevcut kayıtlı değerler
-            // eski varsayılan (1420) olsa bile uygulanır. Yalnızca oturum içi;
-            // kalıcı ayarlara dokunulmaz.
-            if (mode == ConnectionMode.WireGuardUDP && _config.TunModeItem.Mtu != Global.GpnRecommendedMtu)
+            // kayıplı hatta çift parça kaybı yaşanıyor. Kullanıcının KAYITLI TUN MTU
+            // ayarına dokunulmaz (kalıcı tercih korunur); etkin değer YAML üretiminde
+            // (CoreConfigHandler.ResolveGpnMtu) 1360'a kırpılır ve TUN + WG outbound
+            // aynı değeri kullanır. Burada yalnızca teşhis: kayıtlı değer yol sınırını
+            // aşıyorsa uygulanacak kırpma GPN_MTU satırıyla diyagnoz beslemesine düşer.
+            if (mode == ConnectionMode.WireGuardUDP
+                && _config.TunModeItem.Mtu > Global.GpnRecommendedMtu)
             {
                 DiagLog.Write($"GPN_MTU TUN {_config.TunModeItem.Mtu} → {Global.GpnRecommendedMtu} (yol sınırı ~1400; parçalanmayı önle)");
-                _config.TunModeItem.Mtu = Global.GpnRecommendedMtu;
             }
 
             var allResult = await CoreConfigContextBuilder.BuildAll(_config, node).ConfigureAwait(false);
@@ -163,7 +164,44 @@ public sealed class GpnCoreLauncher : IGpnConnectionLauncher
                 DetectForeignTunnelsBeforeStart();
             }
 
+            // Wintun hayalet adaptör süpürmesi — tünel açılmadan HEMEN ÖNCE:
+            // önceki (ölü) oturumlardan kalan adaptörler aynı adla yeni adaptör
+            // yaratmayı engelleyebilir ve "Yerel Ağ Bağlantısı N" birikmesine yol
+            // açar. Tek örnekli uygulama + koordinatörün Stop→Launch sırası (bkz.
+            // GpnConnectionCoordinator: her Launch'tan önce StopAsync koşar)
+            // garantisi: burada ön ekimize uyan HER adaptör ölü bir oturumdan
+            // kalmadır, güvenle silinebilir. Best-effort — başarısızlık bağlantıyı
+            // engellemez (startup süpürmesiyle aynı sözleşme).
+            if (mode == ConnectionMode.WireGuardUDP)
+            {
+                try
+                {
+                    var sweep = await WintunOrphanSweeper.SweepOrphanedAsync(_config.GpnWintunItem, ct)
+                        .ConfigureAwait(false);
+                    if (sweep.Removed > 0 || sweep.Skipped > 0 || sweep.AbortReason is not null)
+                    {
+                        DiagLog.Write($"GPN_LAUNCH pre-start wintun sweep removed={sweep.Removed} "
+                            + $"skipped={sweep.Skipped} abort={sweep.AbortReason ?? "-"}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logging.SaveLog("AoGPN GPN pre-launch Wintun sweep failed", ex);
+                }
+            }
+
             await _engineHost.StartAsync(mainContext, allResult.PreSocksResult?.Context, ct).ConfigureAwait(false);
+
+            // MTU doğrulaması (best-effort, bağlantıyı asla engellemez): çekirdek
+            // başladıktan sonra mihomo TUN adaptörünün GERÇEK MTU'sunu oku ve
+            // beklenen değerle karşılaştır. Sonuç GPN_MTU verify satırıyla diyagnoz
+            // beslemesine düşer — ayarın gerçekten uygulandığı gözle doğrulanabilir
+            // (Wintun adaptörü istenen değeri almazsa MISMATCH uyarısı görünür).
+            if (mode == ConnectionMode.WireGuardUDP && runCore == ECoreType.mihomo)
+            {
+                var expectedMtu = CoreConfigHandler.ResolveGpnMtu(_config);
+                _ = Task.Run(() => VerifyTunMtuAsync(expectedMtu, ct), ct);
+            }
 
             // Faz 2b/2c — yalnızca eski sing-box yolunda: yakalama tünel köprüsünü
             // canlıya al (WinDivert recv-only → WireGuardTunnelService → Wintun
@@ -179,6 +217,145 @@ public sealed class GpnCoreLauncher : IGpnConnectionLauncher
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// mihomo TUN adaptörünün (adı <see cref="Global.MihomoTunInterfaceName"/>) gerçek
+    /// MTU'sunu okur ve beklenen değerle karşılaştırır. Adaptör çekirdek başladıktan
+    /// sonra görünür — kısa bir süre yoklanır; sonuç DiagLog'a yazılır. Yalnızca
+    /// teşhistir: uyuşmazlık bağlantıyı etkilemez, GPN_MTU verify MISMATCH satırıyla
+    /// dashboard diyagnoz beslemesinde görünür.
+    /// </summary>
+    private static async Task VerifyTunMtuAsync(int expectedMtu, CancellationToken ct)
+    {
+        try
+        {
+            // Adaptör yeni yaratıldığında mihomo MTU'yu hemen uygulamayabilir;
+            // ilk okuma bayat olabilir (canlı gözlenen: 65535 → 1280 yarışı).
+            // Yanlış MISMATCH alarmı vermemek için karar, 500 ms arayla 2 KARARLI
+            // okuma ister; uyuşmayan değer başlangıç penceresi (3 sn) boyunca
+            // yeniden okunmaya devam eder (yoklama sürerken adaptör ayarlanabilir).
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(8);
+            var started = DateTime.UtcNow;
+            var lastMtu = -1;
+            var stableReads = 0;
+            while (DateTime.UtcNow < deadline)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var adapter = NetworkInterface.GetAllNetworkInterfaces()
+                        .FirstOrDefault(ni =>
+                            string.Equals(ni.Name, Global.MihomoTunInterfaceName, StringComparison.OrdinalIgnoreCase)
+                            && ni.OperationalStatus == OperationalStatus.Up);
+                    if (adapter is not null)
+                    {
+                        var mtu = adapter.GetIPProperties().GetIPv4Properties()?.Mtu ?? 0;
+                        if (mtu == lastMtu)
+                        {
+                            stableReads++;
+                        }
+                        else
+                        {
+                            lastMtu = mtu;
+                            stableReads = 1;
+                        }
+                        var elapsed = DateTime.UtcNow - started;
+                        var mismatchSettled = stableReads >= 2 && elapsed >= TimeSpan.FromSeconds(3);
+                        if (stableReads >= 2 && (mtu == expectedMtu || mismatchSettled))
+                        {
+                            if (mtu == expectedMtu)
+                            {
+                                DiagLog.Write($"GPN_MTU verify adapter={adapter.Name} mtu={mtu} expected={expectedMtu} OK");
+                            }
+                            else
+                            {
+                                DiagLog.Write($"GPN_MTU verify adapter={adapter.Name} mtu={mtu} expected={expectedMtu} MISMATCH (2 stable reads)");
+                                // İyileştirici adım (Faz 5): uyuşmazlık KARARLIYSA ve
+                                // değer Wintun'un "hiç uygulanmadı" varsayılanıysa
+                                // (65535) adaptöre beklenen MTU'yu biz yazıyoruz.
+                                // Sebep: Wintun adaptörü istenen MTU'yu almazsa Windows
+                                // tünele 65535 bayta kadar paket verir; WG dış paketleri
+                                // parçalanır ve kayıplı hatta çift parça kaybı (oyunda
+                                // jitter/kayıp) yaşanır. 65535 bir geçiş değeri değil,
+                                // "uygulanmadı" demektir — bu yüzden mihomo'nun kendi
+                                // değeriyle yarışmayız. Best-effort: başarısızlık
+                                // bağlantıyı asla etkilemez.
+                                if (mtu is 65535 or 0)
+                                {
+                                    await TryApplyTunMtuAsync(adapter.Name, expectedMtu, ct).ConfigureAwait(false);
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // GetIPv4Properties bazı platformlarda fırlatabilir — yoklama sürer.
+                    DiagLog.Write($"GPN_MTU verify read failed (retry): {ex.Message}");
+                }
+                await Task.Delay(500, ct).ConfigureAwait(false);
+            }
+            DiagLog.Write($"GPN_MTU verify timeout — {Global.MihomoTunInterfaceName} adaptörü 8 sn içinde bulunamadı");
+        }
+        catch (OperationCanceledException)
+        {
+            // Bağlantı kesildi — doğrulama yarıda bırakılır (normal).
+        }
+    }
+
+    /// <summary>
+    /// TUN adaptörüne beklenen MTU'yu yazar (yalnızca doğrulanmış uyuşmazlıkta, yani
+    /// adaptör değeri "hiç uygulanmadı" varsayılanında kaldığında çağrılır).
+    ///
+    /// `netsh` kullanılır: Wintun adaptörünün MTU'su Win32 IP yardımcı API'siyle
+    /// ayarlanır ve `netsh interface ipv4 set subinterface` tam olarak bunu yapar;
+    /// kendi P/Invoke sarmalayıcımızı yazmak yüzeyi büyütürdü. Komut yönetici
+    /// gerektirir — GPN TUN yolu zaten yönetici ister. Best-effort: hata yutulur ve
+    /// günlüğe yazılır, bağlantı etkilenmez.
+    /// </summary>
+    private static async Task TryApplyTunMtuAsync(string adapterName, int mtu, CancellationToken ct)
+    {
+        try
+        {
+            var arguments = $"interface ipv4 set subinterface \"{adapterName}\" mtu={mtu} store=active";
+            var psi = new ProcessStartInfo
+            {
+                FileName = "netsh",
+                Arguments = arguments,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+
+            using var process = Process.Start(psi);
+            if (process is null)
+            {
+                DiagLog.Write($"GPN_MTU apply skipped — netsh başlatılamadı ({adapterName} → {mtu})");
+                return;
+            }
+
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (process.ExitCode == 0)
+            {
+                DiagLog.Write($"GPN_MTU apply adapter={adapterName} → {mtu} OK (netsh)");
+            }
+            else
+            {
+                var error = (await process.StandardError.ReadToEndAsync(ct).ConfigureAwait(false)).Trim();
+                DiagLog.Write($"GPN_MTU apply adapter={adapterName} → {mtu} FAILED exit={process.ExitCode} {error}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Bağlantı kesildi — düzeltme yarıda bırakılır (normal).
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write($"GPN_MTU apply adapter={adapterName} → {mtu} hata: {ex.Message}");
         }
     }
 
@@ -213,8 +390,10 @@ public sealed class GpnCoreLauncher : IGpnConnectionLauncher
     /// ProfileItem olarak taşınır (üretici kendi adında proxy outbound'una çevirir).
     /// Silinmiş, devre dışı ya da desteklenmeyen tipler atlanır — ilgili satır
     /// varsayılan WARP egress'e düşer ve kural geçersiz outbound'a işaret etmez.
+    /// internal: RoutingDriftHealthCheck aynı çözücüyü kullanır — beklenen superset
+    /// config'in kural sırası canlı config'le birebir aynı üretilsin.
     /// </summary>
-    private static async Task<IReadOnlyDictionary<string, WarpNodeProfile>> ResolveWarpNodesAsync(
+    internal static async Task<IReadOnlyDictionary<string, WarpNodeProfile>> ResolveWarpNodesAsync(
         GpnSoftRoutingPolicy? policy,
         CancellationToken ct)
     {

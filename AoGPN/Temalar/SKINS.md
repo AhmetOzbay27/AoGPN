@@ -56,6 +56,20 @@ iframe.
    The picker button and the persisted-skin logic pick it up automatically; no
    HTML or `app.js` changes are needed.
 
+## Keyboard shortcuts (shared across all skins)
+
+Every skin binds the same global shortcut set (document-level keydown; typing in
+an input/select/textarea never triggers them):
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Enter` | Connect / disconnect — same `toggle_connection` contract as the skin's main power button |
+| `Alt+1..n` | Switch view / console tab (NEXUS: 8 sidebar views in order; CYBER/INFRA: 5 console tabs) |
+| `R` | Cycle the **focused** boost app's route: vpn → direct → block → warp → vpn (same `set_app_route` contract as the switch) |
+
+`R` reuses the shared pure decision logic in `route-keys.js` (`routeCycle`, unit
+tested in `route-keys.test.js`) so all three skins cycle identically.
+
 ## Rules
 
 - Never touch the main document from a skin — use the bridge. `document` in
@@ -66,3 +80,34 @@ iframe.
 - Build artifacts: the `Temalar\**` Content glob in `AoGPN/AoGPN.csproj`
   already ships `skins.json` and the whole `skins/` folder, so a new skin is
   picked up by the WPF app with no csproj change.
+
+## Feature parity matrix
+
+Every skin covers the same dashboard modules — each in its own design
+language. The integration tests (`skins/*.integration.test.js`) lock the host
+contracts below, so a skin can never drift from the dashboard:
+
+| Module | Standard | NEXUS | CYBER | INFRA |
+|---|---|---|---|---|
+| Connect / toggle_connection | ✅ | ✅ GPN panel | ✅ JACK IN | ✅ CONNECT |
+| Mode / transport / split / direction pills | ✅ | ✅ settings | ✅ | ✅ |
+| Auto-reconnect | ✅ | ✅ | ✅ | ✅ |
+| System proxy toggle + mode + protocol | ✅ | ✅ settings | ✅ | ✅ |
+| TUN stack select (`set_tun_stack`) | ✅ | ✅ settings | ✅ | ✅ |
+| Effects tier select (`set_effects_tier`) | ✅ | ✅ settings | ✅ | ✅ |
+| Auto-game connect (`set_auto_game_connect`) | ✅ | ✅ | ✅ | ✅ |
+| GPN recovery watch (`set_gpn_recovery_watch`) | ✅ | ✅ | ✅ | ✅ |
+| GPN failover (`set_gpn_failover`) | ✅ | ✅ | ✅ | ✅ |
+| System-proxy test (`test_proxy` + result) | ✅ | ✅ | ✅ | ✅ |
+| Boost apps with per-app route switches | ✅ | ✅ | ✅ | ✅ |
+| Route nodes (select / switch) | ✅ | ✅ servers | ✅ destinations + NODES tab | ✅ left panel + NODES tab |
+| Node pool subscription links | ✅ | ✅ servers | — | — |
+| Server sort (ping/name/… ) | ✅ | ✅ servers | — | — |
+| GPN servers + live probes | ✅ | ✅ servers view | ✅ GPN tab | ✅ GPN tab |
+| GPN failover telemetry (switch/death/fallback/recover/select + reset) | ✅ | ✅ Advanced & Diagnostics | ✅ GPN tab | ✅ GPN tab |
+| GPN resilience log (last-50 decisions, refresh/clear, mirror path) | ✅ | ✅ Advanced & Diagnostics | ✅ GPN tab | ✅ GPN tab |
+| Connection Monitor (filter, hide listeners, per-row route) | ✅ | ✅ analytics | ✅ MONITOR tab | ✅ MONITOR tab |
+| Connection Monitor group-by (route/protocol/state/country/app, collapsible) | ✅ | ✅ analytics | ✅ MONITOR tab | ✅ MONITOR tab |
+| Undo toast (`undo_last_app_op`) | ✅ | ✅ | — | — |
+| Game profiles / domains (`add_domain_route`) | ✅ | ✅ games | — | — |
+| About / version info | ✅ | ✅ about | ✅ ABOUT tab | ✅ ABOUT tab |

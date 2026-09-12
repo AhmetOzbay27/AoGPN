@@ -314,19 +314,55 @@ public sealed class WarpDialHealthMonitor : IDisposable
         TailFile(Path.Combine(logDir, $"ao_mihomo_{day}.log"), ct);
     }
 
+    /// <summary>
+    /// Kuyruk dosyasını okuma modunda açar. Çekirdek hiç başlamamışsa (log
+    /// dosyası hiç oluşturulmamış) FileNotFoundException fırlatmak yerine
+    /// sessizce false döner — aksi halde her poll döngüsünde VS debugger'a ve
+    /// hata kanalına gereksiz özel durum basılır (dosya eksikliği normal bir
+    /// durumdur: GPN core yalnızca oturum sırasında yazar).
+    /// </summary>
+    internal static bool TryOpenTailFile(string path, out FileStream? stream)
+    {
+        stream = null;
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            return true;
+        }
+        catch (IOException)
+        {
+            // Dosya şu an yazılıyor/kilitli veya tam açılırken silindi; sonraki poll dener.
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Kuyruk okunamıyorsa sessizce atla — diag logu zaten NLog'a düşer.
+            return false;
+        }
+    }
+
     private void TailFile(string path, CancellationToken ct)
     {
         lock (_sync)
         {
             try
             {
-                using var stream = new FileStream(
-                    path,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
+                if (!TryOpenTailFile(path, out var stream) || stream is null)
+                {
+                    return;
+                }
 
-                var length = stream.Length;
+                using var fileStream = stream;
+                var length = fileStream.Length;
                 if (!_tracked.TryGetValue(path, out var state))
                 {
                     // İlk bağlanışta tarihsel hataları yineleme — kuyruğun ucuna git.
@@ -338,28 +374,28 @@ public sealed class WarpDialHealthMonitor : IDisposable
                 if (length < state.Position)
                 {
                     // Dosya küçüldü (truncate/rollover) — baştan okuma yerine ucuna hizala.
-                    stream.Seek(0, SeekOrigin.End);
-                    _tracked[path] = (stream.Position, true);
+                    fileStream.Seek(0, SeekOrigin.End);
+                    _tracked[path] = (fileStream.Position, true);
                     return;
                 }
 
-                stream.Seek(state.Position, SeekOrigin.Begin);
+                fileStream.Seek(state.Position, SeekOrigin.Begin);
                 if (length - state.Position <= 0)
                 {
                     return;
                 }
 
-                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 8192, leaveOpen: true);
+                using var reader = new StreamReader(fileStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 8192, leaveOpen: true);
                 string? line;
                 while (!ct.IsCancellationRequested && (line = reader.ReadLine()) is not null)
                 {
                     _ = ProcessLine(line);
                 }
-                _tracked[path] = (stream.Position, true);
+                _tracked[path] = (fileStream.Position, true);
             }
             catch (IOException)
             {
-                // Dosya şu an yazılıyor/kilitli olabilir; sonraki poll dener.
+                // Okuma sırasında dosya kilitli/silinmiş olabilir; sonraki poll dener.
             }
             catch (UnauthorizedAccessException)
             {

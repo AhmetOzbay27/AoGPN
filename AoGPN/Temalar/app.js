@@ -60,13 +60,34 @@
           initCanvasEffects, playThemeSound, fireConfetti, getCurrentThemeId } = aogpn.theme;
   const { loadReleaseNotesFromDisk } = aogpn.releaseNotes;
   const { resetTelemetry, updateTelemetry, flashGpnTelemetry } = aogpn.telemetry;
-  const { startGpnClusterLoop, setGpnConnectState, setGpnRecoveryWatchUI,
+  const { setGpnConnectState, setGpnRecoveryWatchUI,
           setGpnFailoverUI, bindGpnServersControls } = aogpn.gpn;
   const { fillSettingsOptions, setSettingsField, FALLBACK_OPTIONS } = aogpn.settings;
 
   let connected = false;
   let connecting = false;
-  let mode = 'gpn'; // GPN Game Tunnel is the primary mode; Global VPN stays secondary.
+  // True whenever the host reports a connection transition IN FLIGHT (a connect,
+  // disconnect or GPN<->VPN mode switch that is still being applied). Unlike
+  // `connecting` this stays true even while the tunnel remains connected during
+  // a mode switch — guards that must not let stale host echoes override the
+  // user's just-clicked choice check this flag.
+  let transitioning = false;
+  // Last-used routing mode survives restarts: the dashboard reopens in the mode
+  // it was closed with (GPN Game Tunnel or Global VPN), defaulting to GPN. The
+  // choice is persisted to localStorage on every gpn/vpn write; the host stays
+  // authoritative while connected (manual/vpn snapshot echoes overwrite it).
+  const MODE_STORAGE_KEY = 'aogpn.lastMode.v1';
+  function persistModeChoice(next) {
+    if (next === 'gpn' || next === 'vpn') {
+      try { localStorage.setItem(MODE_STORAGE_KEY, next); } catch (e) { /* storage unavailable */ }
+    }
+  }
+  function readLastModeChoice() {
+    try { return localStorage.getItem(MODE_STORAGE_KEY) === 'vpn' ? 'vpn' : 'gpn'; }
+    catch (e) { return 'gpn'; }
+  }
+
+  let mode = readLastModeChoice(); // GPN Game Tunnel is the primary/default mode.
   let transport = 'proxy';
   let protocolPreference = 'auto';
   let autoReconnect = true;
@@ -207,7 +228,7 @@
     if (data.platform && data.platform.isWindows && data.platform.isAdmin === false) {
       const hint = document.getElementById('st_tunAdminHint');
       if (hint) {
-        hint.textContent = 'TUN, trafiği ağ katmanında yakalar ve yönetici ayrıcalıkları gerektirir. Mevcut oturum yükseltilmemiş, bu yüzden TUN etkinleştirilemez.';
+        hint.textContent = t('settings.tunAdminHintNonAdmin');
       }
     }
   };
@@ -420,6 +441,7 @@
 
   document.querySelectorAll('.mode-pill').forEach(p => p.addEventListener('click', () => {
     mode = p.dataset.mode === 'gpn' ? 'gpn' : 'vpn';
+    persistModeChoice(mode);
     aogpn.connection.applyMode();
     splitMode = mode === 'gpn' ? 'manual' : 'vpn';
     aogpn.views.applySplitMode();
@@ -573,37 +595,20 @@
       btn.style.background = active ? 'rgba(var(--cyan-rgb),.12)' : 'transparent';
     });
     aogpn.events.emit('skin-changed');
-    // Keep the active-skin badge in the title bar in sync whenever the skin changes.
-    if (typeof renderSkinBadge === 'function') renderSkinBadge();
   }
   window.applySkin = applySkin;
 
   // ---- Skin manager modal ----
   // A gallery of every registered skin (plus the built-in Standard dashboard)
-  // with live thumbnail previews, opened from #skinManagerBtn in the title bar.
+  // with live thumbnail previews. The title bar carries a single theme button;
+  // this gallery is opened from the skin-manager entry inside that theme
+  // popover (#skinManagerBtn) or the Alt+Shift+D shortcut.
   const STANDARD_SKIN = { id: 'standard', name: 'Standard', tagline: 'The classic AO GPN dashboard', accent: 'var(--cyan, #22d3ee)' };
   const skinManagerEl = document.getElementById('skinManager');
   const skinManagerGrid = document.getElementById('skinManagerGrid');
   const skinManagerBtn = document.getElementById('skinManagerBtn');
 
   function currentSkinId() { return document.body.getAttribute('data-skin') || 'standard'; }
-
-  // Active-skin badge in the title bar: shows the current skin name with an
-  // accent-colored dot; clicking it opens the skin manager.
-  function renderSkinBadge() {
-    const nameEl = document.getElementById('skinBadgeName');
-    const dotEl = document.getElementById('skinBadgeDot');
-    const current = currentSkinId();
-    const entry = STANDARD_SKIN.id === current ? STANDARD_SKIN : (_skinRegistry || []).find(s => s.id === current);
-    if (nameEl) nameEl.textContent = entry ? entry.name : (current === 'standard' ? 'Standard' : current);
-    if (dotEl) {
-      const acc = (entry && entry.accent && !String(entry.accent).startsWith('var(')) ? entry.accent : 'var(--cyan)';
-      dotEl.style.background = acc;
-      dotEl.style.boxShadow = '0 0 6px ' + acc;
-    }
-    const badge = document.getElementById('skinBadge');
-    if (badge) badge.title = (entry ? entry.name : current) + ' — open skin manager (Alt+Shift+D)';
-  }
 
   // A lightweight, always-fast static preview for a skin card. Uses the skin's
   // accent color to draw a mini schematic (title bar, sidebar, hero ring, stat
@@ -667,17 +672,20 @@
     if (skinManagerEl && skinManagerEl.hidden) openSkinManager(); else closeSkinManager();
   }
 
-  if (skinManagerBtn) skinManagerBtn.addEventListener('click', toggleSkinManager);
+  if (skinManagerBtn) {
+    skinManagerBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // The manager is launched from inside the theme popover, so close the
+      // popover first — otherwise it would stay open beneath the modal.
+      const popover = document.getElementById('topThemePopover');
+      if (popover) popover.classList.add('hidden');
+      openSkinManager();
+    });
+  }
   const smClose = document.getElementById('skinManagerClose');
   if (smClose) smClose.addEventListener('click', closeSkinManager);
   const smBackdrop = document.getElementById('skinManagerBackdrop');
   if (smBackdrop) smBackdrop.addEventListener('click', closeSkinManager);
-  // Clicking the active-skin badge also opens the manager.
-  const skinBadgeEl = document.getElementById('skinBadge');
-  if (skinBadgeEl) {
-    skinBadgeEl.addEventListener('click', toggleSkinManager);
-    skinBadgeEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSkinManager(); } });
-  }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && skinManagerEl && !skinManagerEl.hidden) closeSkinManager();
     // Alt+Shift+D toggles the skin manager from anywhere in the shell.
@@ -686,7 +694,6 @@
       toggleSkinManager();
     }
   });
-  renderSkinBadge();
   window.openSkinManager = openSkinManager;
   window.closeSkinManager = closeSkinManager;
   window.toggleSkinManager = toggleSkinManager;
@@ -713,10 +720,13 @@
     get selectedNode() { return aogpn.nodes.getSelectedNode(); },
     get monitorSnapshot() { return monitorSnapshot; },
     get processCatalog() { return processCatalog || []; },
+    get nodePool() { return aogpn.nodes.getNodePoolLinks(); },
+    get undoAvailable() { return aogpn.views.getUndoAvailable(); },
     // Live shell-icon cache (exe path -> data URI): the skins render the same
-    // real app icons as the main tables. The object is mutated in place, so
-    // the getter always returns the current map; skins read it at render time.
-    get appIcons() { return appIconCache; },
+    // real app icons as the main tables. The cache lives in the views module
+    // (features/views.js) and is reached through its registry; the fallback
+    // keeps the getter safe if that module ever fails to load.
+    get appIcons() { return (aogpn.views && aogpn.views.getAppIconCache) ? aogpn.views.getAppIconCache() : {}; },
     get routeLabels() { return aogpn.views.getRouteLabels(); },
     get language() { return aogpn.i18n.getLang(); },
     get gpnServers() { return aogpn.gpn.getServers(); },
@@ -754,7 +764,7 @@
     get isAdmin() { return isAdmin; },
     set connected(v) { connected = !!v; },
     set connecting(v) { connecting = !!v; },
-    set mode(v) { mode = v; },
+    set mode(v) { mode = v; persistModeChoice(v); },
     set transport(v) { transport = v; },
     set selectedNode(v) { aogpn.nodes.setSelectedNode(v); },
     set splitMode(v) { splitMode = v; },
@@ -820,7 +830,7 @@
     applyRealIpState: (data) => aogpn.connection.applyRealIpState(data),
     updateStatusLine: () => aogpn.connection.updateStatusLine(),
     applyIpFreshness: () => aogpn.connection.applyIpFreshness(),
-    renderDashboardBoostCards: () => aogpn.views.renderDashboardBoostCards(),
+    renderDashboardBoostCards: (force) => aogpn.views.renderDashboardBoostCards(force),
     updateGlobalPanel: () => aogpn.views.updateGlobalPanel(),
     renderSplitApps: () => aogpn.views.renderSplitApps(),
     getProtocolPreference: () => protocolPreference,
@@ -840,7 +850,7 @@
     setInvertManual: (v) => { invertManual = v; },
     getSplitMode: () => splitMode,
     setSplitMode: (v) => { splitMode = v; },
-    setMode: (v) => { mode = v; },
+    setMode: (v) => { mode = v; persistModeChoice(v); },
     getMonitorSnapshot: () => monitorSnapshot,
     setMonitorSnapshot: (m) => { monitorSnapshot = m; },
     getProcessCatalog: () => processCatalog,
@@ -854,6 +864,7 @@
     getNodes: () => aogpn.nodes.getNodes(),
     getSystemProxyMode: () => systemProxyMode,
     getConnecting: () => connecting,
+    getTransitioning: () => transitioning,
     getAutoReconnect: () => autoReconnect,
     getEffectiveSystemProxyMode: () => effectiveSystemProxyMode,
     getSystemProxyConnectionOwned: () => systemProxyConnectionOwned,
@@ -862,6 +873,7 @@
     getIsAdmin: () => isAdmin,
     getLastIpMeasuredAt: () => _lastIpMeasuredAt,
     setConnectingRaw: (v) => { connecting = v; },
+    setTransitioningRaw: (v) => { transitioning = v; },
     setAutoReconnectRaw: (v) => { autoReconnect = v; },
     setSystemProxyModeRaw: (v) => { systemProxyMode = v; },
     setEffectiveSystemProxyModeRaw: (v) => { effectiveSystemProxyMode = v; },
@@ -905,16 +917,13 @@
   resetTelemetry();
   aogpn.views.applyDirection();
 
-  // GPN panel "Gelişmiş & Teşhis" (Advanced & Diagnostics): the rarely-used
-  // server tuning, failover, capture/Wintun internals, telemetry and diagnostics
-  // cards live in a collapsible group so the main GPN flow stays clean. The host
-  // keeps feeding the cards inside; state is remembered between launches.
+  // GPN panel "Gelişmiş & Teşhis" (Advanced & Diagnostics) kartları Ayarlar →
+  // GPN sekmesine taşındı; verileri host 2 sn'lik poll ile canlı besler, kuyruk/
+  // Wintun ayarları görünüm açılışında istenir (views.js showView).
   // Prime the node pool panel and its links as soon as the page is ready; the
   // host re-pushes after every add/remove/fetch.
   postToHost({ action: 'get_node_pool' });
   aogpn.nodes.renderNodePool();
-  // GPN panel "sunucu kümesi" kartını besle: sunucu listesini iste ve canlı
-  // gecikme ölçümü döngüsünü başlat (panel görünürken 15 sn'de bir ölçer).
+  // Sunucu yönetimi panelini besle (VPN Rotaları → gpnServersPanel).
   postToHost({ action: 'gpn_servers_list' });
-  startGpnClusterLoop();
 })();

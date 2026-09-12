@@ -408,15 +408,20 @@
     if (!grid) return;
     // Keep the layout buttons in sync with the applied layout (e.g. host push).
     applyLayout(_currentLayout);
+    // Same named palette cards as the Appearance deck (dash-theme-btn): every
+    // theme shows its gradient swatch + name + tagline, so the popover exposes
+    // the full theme registry instead of anonymous colour squares.
     grid.innerHTML = THEMES.map(theme => {
       const active = theme.id === _currentThemeId;
       const name = themeName(theme);
       const tagline = themeTagline(theme);
       const tip = tagline ? name + ' — ' + tagline : name;
-      return `<button type="button" data-theme-id="${theme.id}" title="${escHtml(tip)}" aria-label="${escHtml('Theme: ' + name)}${active ? ' (active)' : ''}" aria-pressed="${active}"
-        class="w-9 h-9 rounded-lg border ${active ? 'border-cyan-400/80 ring-1 ring-cyan-400/40' : 'border-white/10 hover:border-cyan-400/50'} transition-colors flex items-center justify-center"
-        style="background:linear-gradient(135deg, ${theme.a}, ${theme.b})">
-        ${active ? '<span class="w-2 h-2 rounded-full bg-white/90 shadow-[0_0_6px_rgba(255,255,255,.9)]"></span>' : ''}
+      return `<button type="button" data-theme-id="${theme.id}" aria-pressed="${active}"
+        title="${escHtml(tip)}" aria-label="${escHtml('Theme: ' + name)}${active ? ' (active)' : ''}"
+        class="dash-theme-btn${active ? ' active' : ''}">
+        <span class="dash-theme-swatch" style="background:linear-gradient(90deg,${theme.a},${theme.b});color:${theme.a}"></span>
+        <span class="dash-theme-name">${escHtml(name)}</span>
+        <span class="dash-theme-signal">${escHtml(tagline)}</span>
       </button>`;
     }).join('');
     grid.querySelectorAll('[data-theme-id]').forEach(btn => btn.addEventListener('click', () => {

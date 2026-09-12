@@ -23,13 +23,28 @@ internal sealed class GpnServerProber
     private readonly IUdpHealthChecker _udpHealthChecker;
     private readonly IWireGuardHandshakeProbe _wireGuardProbe;
 
+    /// <summary>
+    /// Kısa ömürlü ölçüm önbelleği (Faz 2). Yalnızca
+    /// <see cref="GpnProbeOptions.UseCache"/> açıkken okunur/yazılır — varsayılan
+    /// yollarda davranış birebir eskisi gibidir.
+    /// </summary>
+    private readonly GpnProbeCache _cache;
+
     public GpnServerProber(
         IUdpHealthChecker? udpHealthChecker = null,
-        IWireGuardHandshakeProbe? wireGuardProbe = null)
+        IWireGuardHandshakeProbe? wireGuardProbe = null,
+        GpnProbeCache? cache = null)
     {
         _udpHealthChecker = udpHealthChecker ?? new UdpHealthChecker();
         _wireGuardProbe = wireGuardProbe ?? new WireGuardHandshakeProbe();
+        _cache = cache ?? new GpnProbeCache();
     }
+
+    /// <summary>Önbellekteki geçerli ölçüm sayısı (tanı/dashboard).</summary>
+    internal int CachedProbeCount => _cache.Count;
+
+    /// <summary>Testlerin önbellek durumunu doğrudan incelemesi için.</summary>
+    internal GpnProbeCache Cache => _cache;
 
     /// <summary>
     /// Tüm sunucuları tam istatistikle (min/avg/max/kayıp) ölç. Dashboard
@@ -68,6 +83,7 @@ internal sealed class GpnServerProber
         }
 
         await Task.WhenAll(servers.Select(ProbeOneAsync)).ConfigureAwait(false);
+        options.Timeline?.Mark("icmp-end");
         return results;
     }
 
@@ -97,6 +113,7 @@ internal sealed class GpnServerProber
         }
 
         await Task.WhenAll(servers.Select(ProbeOneAsync)).ConfigureAwait(false);
+        options.Timeline?.Mark("udp-end");
         return results;
     }
 
@@ -115,6 +132,53 @@ internal sealed class GpnServerProber
     ///  * El sıkışma kapalı/anahtar yok → yalnızca junk probe
     /// </summary>
     internal async Task<UdpProbeResult> ProbeUdpAsync(
+        GpnServerProfile server,
+        GpnProbeOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.UseCache)
+        {
+            return await ProbeUdpUncachedAsync(server, options, cancellationToken).ConfigureAwait(false);
+        }
+
+        var key = GpnProbeCache.BuildKey("udp", server.ServerId, options, ProbeEgressNic.IsTunnelActive());
+        if (_cache.TryGet(key, out UdpProbeResult? cached) && cached is not null)
+        {
+            DiagLog.Write($"GPN_PROBE cache-hit udp server={server.ServerId} status={cached.Status}");
+            return cached;
+        }
+
+        var measured = await ProbeUdpUncachedAsync(server, options, cancellationToken).ConfigureAwait(false);
+        _cache.Set(key, measured);
+        return measured;
+    }
+
+    /// <summary>
+    /// Ölçüm önbelleğini ısıtır (açılış ön yüklemesi / Faz 3). Bağlanma yolundaki
+    /// AYNI iş paralel koşar, ama kullanıcı beklemediği bir anda; sonraki "Bağlan"
+    /// ölçümü büyük ölçüde önbellekten karşılanır.
+    /// </summary>
+    internal async Task WarmCacheAsync(
+        IReadOnlyList<GpnServerProfile> servers,
+        GpnProbeOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (servers.Count == 0)
+        {
+            return;
+        }
+
+        var warm = options with { UseCache = true };
+        await Task.WhenAll(
+            ProbeAllAsync(servers, warm, cancellationToken),
+            ProbeUdpAllAsync(servers, warm, cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Önbelleği baypas eden gerçek UDP ölçümü. "Uncached" son eki BİLİNÇLİDİR:
+    /// çağıranlar ölçümün her zaman taze olduğunu varsayabilmelidir.
+    /// </summary>
+    private async Task<UdpProbeResult> ProbeUdpUncachedAsync(
         GpnServerProfile server,
         GpnProbeOptions options,
         CancellationToken cancellationToken)
@@ -170,8 +234,35 @@ internal sealed class GpnServerProber
         return result.DelayMs;
     }
 
-    /// <summary>Tek sunucu için tam ölçüm: N örnek, min/avg/max, kayıp oranı.</summary>
+    /// <summary>
+    /// Tek sunucu için tam ölçüm: N örnek, min/avg/max, kayıp oranı.
+    /// <see cref="GpnProbeOptions.UseCache"/> açıkken kısa ömürlü önbellek kullanılır;
+    /// kapalıyken (varsayılan) davranış birebir eskisidir.
+    /// </summary>
     internal async Task<GpnServerProbeResult> ProbeServerAsync(
+        GpnServerProfile server,
+        GpnProbeOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.UseCache)
+        {
+            return await ProbeServerUncachedAsync(server, options, cancellationToken).ConfigureAwait(false);
+        }
+
+        var key = GpnProbeCache.BuildKey("ping", server.ServerId, options, ProbeEgressNic.IsTunnelActive());
+        if (_cache.TryGet(key, out GpnServerProbeResult? cached) && cached is not null)
+        {
+            DiagLog.Write($"GPN_PROBE cache-hit ping server={server.ServerId} delay={cached.DelayMs}ms loss={cached.LossPercent}%");
+            return cached;
+        }
+
+        var measured = await ProbeServerUncachedAsync(server, options, cancellationToken).ConfigureAwait(false);
+        _cache.Set(key, measured);
+        return measured;
+    }
+
+    /// <summary>Önbelleği baypas eden gerçek gecikme ölçümü.</summary>
+    private async Task<GpnServerProbeResult> ProbeServerUncachedAsync(
         GpnServerProfile server,
         GpnProbeOptions options,
         CancellationToken cancellationToken)
@@ -319,20 +410,41 @@ internal sealed class GpnServerProber
             return -1;
         }
 
-        if (!IPAddress.TryParse(server.EndpointHost, out var address))
+        if (!IPAddress.TryParse(server.EndpointHost, out var address)
+            || address.Equals(IPAddress.Any)
+            || address.Equals(IPAddress.IPv6Any))
         {
+            // 0.0.0.0/:: gibi belirsiz adresler Ping hedefi olamaz — SendPingAsync
+            // ArgumentException fırlatır; ölçülemedi olarak işaretle (fırlatma yok).
             return -1;
         }
 
-        using var ping = new Ping();
-        var buffer = Encoding.ASCII.GetBytes("aogpn-gpn-probe-0123456789ab");
-        var pingOptions = new PingOptions(64, true); // TTL 64, DontFragment
-        var timeout = options.PerSampleTimeoutMs;
+        try
+        {
+            using var ping = new Ping();
+            var buffer = Encoding.ASCII.GetBytes("aogpn-gpn-probe-0123456789ab");
+            var pingOptions = new PingOptions(64, true); // TTL 64, DontFragment
+            var timeout = options.PerSampleTimeoutMs;
 
-        var reply = await ping.SendPingAsync(
-            address, timeout, buffer, pingOptions).ConfigureAwait(false);
+            var reply = await ping.SendPingAsync(
+                address, timeout, buffer, pingOptions).ConfigureAwait(false);
 
-        return reply.Status == IPStatus.Success ? (int)reply.RoundtripTime : -1;
+            return reply.Status == IPStatus.Success ? (int)reply.RoundtripTime : -1;
+        }
+        catch (OperationCanceledException)
+        {
+            throw; // dış iptal — sonuç değil, yukarı taşınır
+        }
+        catch
+        {
+            // TUN etkinken Ping arayüz bağlayamaz (NetworkInformationException:
+            // "protokol yapılandırılmamış"), hedef IPv6'sız sistemde IPv6 olabilir
+            // veya ağ yığını geçici olarak bozuktur. Hepsi "ölçülemedi" demektir
+            // (-1 örnek, kayıp sayılır) — probe döngüsünü ve logları spam'lemek
+            // yerine sessizce işaretle. Beklenmedik hatalar yine de
+            // ProbeServerAsync'in çevresindeki tek seferlik yakalayıcıya düşer.
+            return -1;
+        }
     }
 
     /// <summary>

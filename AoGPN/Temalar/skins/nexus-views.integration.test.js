@@ -24,6 +24,9 @@ const path = require('node:path');
 const { loadSkin } = require('./skin-sandbox.js');
 
 const NEXUS_CSS = fs.readFileSync(path.join(__dirname, 'nexus', 'skin.css'), 'utf8');
+// skin.html loads core/flags.js, but jsdom never fetches external <script src>
+// files — eval the module so the flag SVGs exist in the sandbox too.
+const FLAGS_SRC = fs.readFileSync(path.join(__dirname, '..', 'core', 'flags.js'), 'utf8');
 
 // Boot nexus and inject the real stylesheet so getComputedStyle resolves the
 // class sizes (the <link rel="stylesheet"> in skin.html is not fetched by
@@ -158,6 +161,53 @@ test('NEXUS: the active sub-view is actually visible (computed display, real CSS
   clickNav(skin, 'about');
   assert.notEqual(css(about).display, 'none', 'about visible after nav');
   assert.equal(css(settings).display, 'none', 'settings hidden on about');
+  skin.close();
+});
+
+test('NEXUS: header language picker renders the bridge list and is visible outside SETTINGS', () => {
+  const skin = bootNexus({
+    LANGUAGES: [
+      { code: 'en', name: 'English' },
+      { code: 'tr', name: 'Türkçe' },
+      { code: 'ru', name: 'Русский' }
+    ],
+    language: 'tr'
+  });
+  const d = skin.document;
+  const sel = d.getElementById('nxHeaderLang');
+  assert.ok(sel, 'header LANGUAGE select exists in .nx-utils');
+  assert.equal(sel.options.length, 3, 'options come from the bridge LANGUAGES array');
+  assert.equal(sel.options[0].value, 'en');
+  assert.equal(sel.options[1].value, 'tr');
+  assert.equal(sel.value, 'tr', 'current app language is selected');
+  const wrap = sel.closest('.nx-langWrap');
+  assert.ok(wrap, 'selector sits in a labeled pill');
+  assert.ok(d.querySelector('.nx-utils').contains(wrap), 'pickup lives in the header utils, not the settings view');
+  // Visible on the dashboard without navigating: the header is outside the
+  // view sections and the dashboard grid is the active view at boot.
+  assert.equal(d.querySelector('[data-nx-view="dashboard"]').style.display !== 'none', true, 'dashboard is the active view');
+  assert.equal(sel.closest('header.nx-top') !== null, true, 'picker is in the header, reachable from every view');
+  skin.close();
+});
+
+test('NEXUS: header LANGUAGE change calls bridge setLanguage (whole-app switch) and mirrors the selection', () => {
+  const calls = [];
+  const skin = bootNexus({
+    LANGUAGES: [{ code: 'en', name: 'English' }, { code: 'tr', name: 'Türkçe' }],
+    setLanguage(lang) { calls.push(lang); }
+  });
+  const d = skin.document;
+  const sel = d.getElementById('nxHeaderLang');
+  assert.equal(sel.value, 'en', 'boots with the bridge language');
+
+  sel.value = 'tr';
+  sel.dispatchEvent(new skin.dom.window.Event('change', { bubbles: true }));
+  assert.deepEqual(calls, ['tr'], 'change calls bridge setLanguage (same channel as settings)');
+  assert.equal(sel.value, 'tr', 'selection mirrored');
+
+  sel.value = 'en';
+  sel.dispatchEvent(new skin.dom.window.Event('change', { bubbles: true }));
+  assert.deepEqual(calls, ['tr', 'en'], 'switching back posts again');
   skin.close();
 });
 
@@ -570,5 +620,204 @@ test('NEXUS: BSG API quick button and manual domain row post add_domain_route', 
     action: 'add_domain_route', value: 'prod.example.com', route: 'warp', displayName: 'prod.example.com'
   });
   assert.equal(d.querySelector('[data-nx-domainvalue]'), null, 'domain row closes after submit');
+  skin.close();
+});
+
+test('NEXUS: servers list groups nodes by country with SVG flags + localized names', () => {
+  const realNodes = [
+    { indexId: 'it-01', name: 'Italy · IT-01', country: 'IT', address: '92.4.220.236', port: 51820, delay: 18, fav: true },
+    { indexId: 'it-02', name: 'Italy · IT-02', country: 'IT', address: '92.4.220.237', port: 51820, delay: 22 },
+    { indexId: 'de-01', name: 'Germany · DE-01', country: 'DE', address: '5.161.91.19', port: 51820, delay: 41 },
+    { indexId: 'x-01', name: 'Custom · X-01', country: '', sub: 'VPN', delay: 66 }
+  ];
+  const skin = bootNexus({ useRealNodes: true, nodes: realNodes, activeRealNodeId: 'it-01' });
+  skin.window.eval(FLAGS_SRC);
+  const d = skin.document;
+
+  clickNav(skin, 'servers');
+  const srv = d.getElementById('nxServers');
+  const heads = srv.querySelectorAll('.nx-srvGroupHead');
+  assert.equal(heads.length, 3, 'IT + DE + unknown country groups render');
+  assert.ok(heads[0].textContent.includes('Italy'), 'group name is the localized region name (en)');
+  assert.ok(heads[0].querySelector('.nx-flagHead svg'), 'group header draws the real SVG flag');
+  assert.ok(heads[0].textContent.includes('2'), 'group header counts its rows');
+  assert.ok(heads[2].querySelector('.nx-srvGroupGlobe'), 'missing country falls back to a globe header');
+
+  const rows = srv.querySelectorAll('.nx-srv');
+  assert.equal(rows.length, 4, 'all rows still render under the group headers');
+  assert.ok(rows[0].querySelectorAll('.nx-srvFlag svg').length === 1, 'row tile shows an SVG flag instead of letters');
+  assert.ok(rows[0].classList.contains('active'), 'active row highlight survives grouping');
+  assert.ok(rows[0].querySelector('[data-nx-fav]'), 'favourite button survives grouping');
+  skin.close();
+});
+
+test('NEXUS: servers group names follow the active UI language', () => {
+  const realNodes = [
+    { indexId: 'it-01', name: 'Italy · IT-01', country: 'IT', address: '92.4.220.236', port: 51820, delay: 18 }
+  ];
+  const skin = bootNexus({ useRealNodes: true, nodes: realNodes, language: 'tr' });
+  skin.window.eval(FLAGS_SRC);
+  const d = skin.document;
+  clickNav(skin, 'servers');
+  const head = d.querySelector('#nxServers .nx-srvGroupHead');
+  assert.ok(head && head.textContent.includes('İtalya'), 'group name localizes via Intl.DisplayNames (tr)');
+  skin.close();
+});
+
+// ---------------------------------------------------------------------------
+// Parity features: node pool + sort (Nodes view), Connection Monitor
+// (Perf view), undo toast (Boost view)
+// ---------------------------------------------------------------------------
+
+const MON_CONNECTIONS = [
+  { processName: 'chrome.exe', displayName: 'Google Chrome', pid: 42, exePath: 'C:\Program Files\Google\Chrome\Application\chrome.exe', protocol: 'TCP', state: 'Established', remoteAddress: '142.250.74.14:443', countryText: 'United States', asnText: 'AS15169', routeTag: 'vpn', routeText: 'VPN', action: 'vpn' },
+  { processName: 'sshd.exe', displayName: 'OpenSSH', pid: 77, protocol: 'TCP', state: 'Listen', remoteAddress: '0.0.0.0:22', countryText: '', routeTag: '', action: '' },
+  { processName: 'discord.exe', displayName: 'Discord', pid: 88, protocol: 'UDP', state: 'Established', remoteAddress: '162.159.128.233:443', countryText: 'United States', routeTag: 'direct', routeText: 'Direct', action: 'direct' }
+];
+
+test('NEXUS: servers view renders the sort select and re-orders the list', () => {
+  const realNodes = [
+    { indexId: 'de-01', name: 'Germany · DE-01', country: 'DE', delay: 41 },
+    { indexId: 'it-01', name: 'Italy · IT-01', country: 'IT', delay: 18, fav: true },
+    { indexId: 'it-02', name: 'Italy · IT-02', country: 'IT', delay: 9 }
+  ];
+  const skin = bootNexus({ useRealNodes: true, nodes: realNodes, activeRealNodeId: 'it-01' });
+  const d = skin.document;
+  clickNav(skin, 'servers');
+  const sel = d.querySelector('#nxServers [data-nx-sort]');
+  assert.ok(sel, 'sort select renders in the servers view');
+  assert.equal(sel.value, 'default', 'sort defaults to the host order');
+  // Switch to ping asc: the fastest measured node (IT-02, 9 ms) moves first.
+  sel.value = 'ping';
+  sel.dispatchEvent(new skin.window.Event('change', { bubbles: true }));
+  const names = [...d.querySelectorAll('#nxServers .nx-srvName')].map(n => n.textContent);
+  assert.ok(names[0].includes('IT-02'), 'ping sort puts the fastest node first: ' + names.join(', '));
+  skin.close();
+});
+
+test('NEXUS: servers view node pool panel adds/removes links through the host', () => {
+  const skin = bootNexus({ useRealNodes: true, nodes: [{ indexId: 'it-01', name: 'Italy · IT-01', country: 'IT' }], nodePool: ['https://github.com/a/list.txt'] });
+  const d = skin.document;
+  clickNav(skin, 'servers');
+  const pool = d.getElementById('nxPool');
+  assert.ok(pool && pool.querySelector('.nx-poolRow'), 'pool row renders the pooled link');
+  const posted = [];
+  skin.bridge.postToHost = (m) => posted.push(m);
+  const input = pool.querySelector('[data-nx-poolurl]');
+  input.value = 'https://github.com/b/new.txt';
+  pool.querySelector('[data-nx-pooladd]').dispatchEvent(new skin.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  // JSON round-trip: the skin runs inside jsdom, so its message objects carry a
+  // different realm's prototype — deepStrictEqual needs a normalized literal.
+  assert.deepEqual(JSON.parse(JSON.stringify(posted.pop())), { action: 'add_node_pool_link', url: 'https://github.com/b/new.txt' }, 'add posts the same host action as the dashboard');
+  pool.querySelector('[data-nx-poolremove]').dispatchEvent(new skin.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.deepEqual(JSON.parse(JSON.stringify(posted.pop())), { action: 'remove_node_pool_link', url: 'https://github.com/a/list.txt' }, 'remove posts the pool link');
+  skin.close();
+});
+
+test('NEXUS: analytics Connection Monitor renders rows, filter and group-by', () => {
+  const skin = bootNexus({ connected: true, monitorSnapshot: { connections: MON_CONNECTIONS, apps: [] } });
+  const d = skin.document;
+  clickNav(skin, 'analytics');
+  const mon = d.getElementById('nxMonitor');
+  assert.ok(mon, 'monitor card renders inside analytics');
+  assert.equal(mon.querySelectorAll('.nx-mrow').length, 2, 'all connections render as rows');
+  // Hide listeners (default on) drops the TCP/Listen row entirely — the same
+  // contract as the dashboard Performance → Connection Monitor.
+  assert.equal(mon.querySelectorAll('.nx-mrow:not(.hidden)').length, 2, 'listener row is filtered out, not just hidden');
+  // Filter narrows the list.
+  const filter = mon.querySelector('[data-nx-monfilter]');
+  filter.value = 'discord';
+  filter.dispatchEvent(new skin.window.Event('input', { bubbles: true }));
+  assert.equal(mon.querySelectorAll('.nx-mrow').length, 1, 'filter keeps only the match');
+  assert.ok(mon.querySelector('.nx-mrow').textContent.includes('Discord'), 'matching row is Discord');
+  // Group by country renders collapsible headers (both remaining rows are US).
+  const gsel = mon.querySelector('[data-nx-mongroup-sel]');
+  gsel.value = 'country';
+  gsel.dispatchEvent(new skin.window.Event('change', { bubbles: true }));
+  assert.equal(mon.querySelectorAll('.nx-mgroup').length, 1, 'country group header renders');
+  assert.ok(mon.querySelector('.nx-mgroup').textContent.includes('United States'), 'group names the country');
+  // Route select posts the same set_app_route contract as the dashboard.
+  // Clear the discord filter first so the visible row set is the full list.
+  filter.value = '';
+  filter.dispatchEvent(new skin.window.Event('input', { bubbles: true }));
+  const posted = [];
+  skin.bridge.postToHost = (m) => posted.push(m);
+  const routeSel = mon.querySelector('[data-nx-monroute]');
+  routeSel.value = 'block';
+  routeSel.dispatchEvent(new skin.window.Event('change', { bubbles: true }));
+  assert.deepEqual(JSON.parse(JSON.stringify(posted.pop())), { action: 'set_app_route', processName: 'chrome.exe', displayName: 'Google Chrome', route: 'block' }, 'monitor route select posts set_app_route');
+  skin.close();
+});
+
+test('NEXUS: undo toast mirrors the host undo slot and posts undo_last_app_op', () => {
+  const skin = bootNexus({ monitorSnapshot: { apps: [] } });
+  const d = skin.document;
+  skin.bridge.undoAvailable = { kind: 'remove', processName: 'cs2.exe', displayName: 'Counter-Strike 2' };
+  skin.push();
+  const toast = d.getElementById('nxToast');
+  assert.ok(toast.classList.contains('show'), 'undo toast becomes visible');
+  assert.ok(toast.textContent.includes('Counter-Strike 2'), 'toast names the removed app');
+  const undoBtn = toast.querySelector('[data-nx-undo]');
+  assert.ok(undoBtn, 'toast carries a real Undo button');
+  const posted = [];
+  skin.bridge.postToHost = (m) => posted.push(m);
+  undoBtn.dispatchEvent(new skin.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.deepEqual(JSON.parse(JSON.stringify(posted.pop())), { action: 'undo_last_app_op' }, 'Undo posts the shared single-level undo contract');
+  assert.ok(!toast.classList.contains('show'), 'toast hides after undo');
+  skin.close();
+});
+
+// ---- global keyboard shortcuts (shared across all skins) ----
+function nxKey(skin, key, opts) {
+  const target = opts && opts.target ? opts.target : skin.document.body;
+  target.dispatchEvent(new skin.window.KeyboardEvent('keydown', Object.assign({ key, bubbles: true, cancelable: true }, opts || {})));
+}
+
+test('NEXUS: Ctrl+Enter toggles the connection through the shared toggle_connection contract', () => {
+  const skin = bootNexus({});
+  nxKey(skin, 'Enter', { ctrlKey: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(skin.bridge._posts.at(-1))),
+    { action: 'toggle_connection', mode: 'gpn', transport: 'proxy', protocol: 'auto', connected: false },
+    'Ctrl+Enter posts the same toggle_connection contract as the GPN Connect button');
+  skin.close();
+});
+
+test('NEXUS: Alt+digit switches views in sidebar order', () => {
+  const skin = bootNexus({});
+  const d = skin.document;
+  const view = (name) => d.querySelector('.nx-view[data-nx-view="' + name + '"]');
+  const navActive = (name) => d.querySelector('.nx-nav button[data-nx-view="' + name + '"]').classList.contains('active');
+  const dashboardGrid = d.querySelector('.nx-grid[data-nx-view="dashboard"]');
+  nxKey(skin, '3', { altKey: true });
+  assert.equal(view('servers').classList.contains('nx-view-hidden'), false, 'Alt+3 opens the Servers view');
+  assert.equal(dashboardGrid.classList.contains('nx-view-hidden'), true, 'dashboard grid hides');
+  assert.ok(navActive('servers'), 'Servers nav is active');
+  nxKey(skin, '7', { altKey: true });
+  assert.equal(view('settings').classList.contains('nx-view-hidden'), false, 'Alt+7 opens Settings');
+  assert.ok(navActive('settings'), 'Settings nav is active');
+  nxKey(skin, '1', { altKey: true });
+  assert.equal(dashboardGrid.classList.contains('nx-view-hidden'), false, 'Alt+1 returns to the dashboard');
+  skin.close();
+});
+
+test('NEXUS: R on a focused game switch cycles its route through the host', () => {
+  const skin = bootNexus({ monitorSnapshot: { apps: [{ processName: 'cs2.exe', displayName: 'Counter-Strike 2', action: 'vpn' }], autoConnectOnGameStart: true } });
+  const d = skin.document;
+  clickNav(skin, 'games');
+  const sw = d.querySelector('.nx-switch[data-nx-pname="cs2.exe"]');
+  assert.ok(sw, 'game switch renders');
+  sw.focus();
+  nxKey(skin, 'r', { target: sw });
+  assert.deepEqual(JSON.parse(JSON.stringify(skin.bridge._posts.at(-1))),
+    { action: 'set_app_route', processName: 'cs2.exe', displayName: 'Counter-Strike 2', route: 'direct' },
+    'R cycles vpn -> direct');
+  // The view re-renders after each change — re-query the fresh switch.
+  const sw2 = d.querySelector('.nx-switch[data-nx-pname="cs2.exe"]');
+  assert.ok(sw2, 'switch re-renders after the route change');
+  sw2.focus();
+  nxKey(skin, 'r', { target: sw2 });
+  assert.deepEqual(JSON.parse(JSON.stringify(skin.bridge._posts.at(-1))),
+    { action: 'set_app_route', processName: 'cs2.exe', displayName: 'Counter-Strike 2', route: 'block' },
+    'R cycles direct -> block');
   skin.close();
 });

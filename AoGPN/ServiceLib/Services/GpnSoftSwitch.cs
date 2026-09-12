@@ -55,7 +55,10 @@ public static class GpnSoftSwitch
             var targetName = GpnMihomoConfigService.WireGuardProxyName(target);
 
             // 1) Canlı config çoklu-düğüm biçiminde mi + hedef grupta üye mi?
-            var snapshot = await api.GetClashProxiesAsync().ConfigureAwait(false);
+            // forceAttempt: bu okuma bir RESTART'ı önlemek için yapılıyor; bayat bir
+            // geri çekilme penceresi boş okumayı "grup yok" sanıp durdur/başlat
+            // fallback'ini tetiklememeli (bkz. ClashApiManager.GetClashProxiesAsync).
+            var snapshot = await api.GetClashProxiesAsync(forceAttempt: true).ConfigureAwait(false);
             var proxies = snapshot?.Item1?.proxies;
             if (proxies is null
                 || !proxies.TryGetValue(GpnMihomoConfigService.NodesGroupName, out var group)
@@ -77,7 +80,7 @@ public static class GpnSoftSwitch
 
             // 3) Doğrula: ClashApiManager PUT'un HTTP durumunu raporlamaz, seçim
             //    gerçekten döndü mü ikinci okumayla teyit et.
-            var verifySnap = (await api.GetClashProxiesAsync().ConfigureAwait(false))?.Item1?.proxies;
+            var verifySnap = (await api.GetClashProxiesAsync(forceAttempt: true).ConfigureAwait(false))?.Item1?.proxies;
             var now = verifySnap is not null
                 && verifySnap.TryGetValue(GpnMihomoConfigService.NodesGroupName, out var after)
                     ? after?.now
