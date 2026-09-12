@@ -58,7 +58,7 @@ jobs:
     # package.json first. The quoted glob is passed straight to node so every
     # *.test.js under Temalar/skins runs — no manifest to keep in sync.
     - name: Setup Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v7
       with:
         node-version: '22'
 
