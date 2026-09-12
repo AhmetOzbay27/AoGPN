@@ -41,7 +41,7 @@ jobs:
     # derleme NETSDK1045 ile düşer ve aşağıdaki sözleşme testleri hiç koşmaz.
     # Diğer iş akışları da aynı bandı kullanır.
     - name: Setup .NET
-      uses: actions/setup-dotnet@v6.0.0
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: '10.0.1xx'
 
@@ -84,7 +84,7 @@ jobs:
         fetch-depth: '0'
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v6.0.0
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: '10.0.1xx'
 
